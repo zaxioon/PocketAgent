@@ -88,6 +88,10 @@ export { A2uiModel } from './src/main/ets/a2ui/A2uiModel';
 export { A2uiAgentRunner, A2uiLineListener, A2uiErrorListener, UiLayoutPlanner } from './src/main/ets/a2ui/A2uiAgentRunner';
 export { mergeA2uiLayout } from './src/main/ets/a2ui/A2uiLayoutMerger';
 export { OpenAiA2uiModel } from './src/main/ets/a2ui/OpenAiA2uiModel';
+export {
+  AIPHONE_COMPONENT_CATALOG_JSON,
+  UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+} from './src/main/ets/aiphone/runtime/A2uiComponentCatalogConst';
 export { createA2uiModelInfo, A2uiModelInfo } from './src/main/ets/a2ui/A2uiModelFactory';
 export { aiphoneErrorJsonl, aiphoneInfoJsonl, splitJsonl } from './src/main/ets/aiphone/AiphoneA2ui';
 export { runAiphoneTool } from './src/main/ets/aiphone/AiphoneToolExecutor';

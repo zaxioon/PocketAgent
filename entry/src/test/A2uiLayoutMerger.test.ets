@@ -1,5 +1,9 @@
 import { describe, expect, it } from '@ohos/hypium';
-import { ActionOffer, mergeA2uiLayout } from '@loop/agent-core';
+import {
+  ActionOffer,
+  mergeA2uiLayout,
+  UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+} from '@loop/agent-core';
 
 const SURFACE_ID: string = 'surface-layout-test';
 const BASELINE: string =
@@ -18,6 +22,27 @@ const VALID_CANDIDATE: string =
   '{"id":"results","component":"GenericToolResults","dataPath":"/genericToolResults"},' +
   '{"id":"actions","component":"ActionBar","actions":[{"offerId":"detail:1"}]}' +
   ']}}';
+
+const LAB_CANDIDATE: string =
+  '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+  '{"id":"root","component":"SurfaceRoot","child":"lab-grid"},' +
+  '{"id":"lab-grid","component":"MasonryGrid","dataPath":"/genericToolResults"}' +
+  ']}}';
+
+const BENTO_CANDIDATE: string =
+  '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+  '{"id":"root","component":"SurfaceRoot","child":"lab-grid"},' +
+  '{"id":"lab-grid","component":"BentoGrid","dataPath":"/genericToolResults"}' +
+  ']}}';
+
+interface ComponentCatalogEntry {
+  name: string;
+}
+
+const LAB_COMPONENT_NAMES: string[] = [
+  'SurfaceRoot', 'Column', 'Row', 'Text', 'InfoRows', 'ActionBar', 'ErrorNotice', 'ThinkingStream',
+  'ThinkingCard', 'ScheduleStack', 'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs', 'MasonryGrid'
+];
 
 interface HotelIdArg {
   hotelId: number;
@@ -48,6 +73,51 @@ export default function a2uiLayoutMergerTest() {
       expect(mergedLines[1].includes('"id":"hotel.detail"')).assertTrue();
       expect(mergedLines[1].includes('"offerId"')).assertFalse();
       expect(mergedLines[1].includes('"hotelId":1')).assertTrue();
+    });
+
+    it('keeps the business catalog as the default', 0, () => {
+      const merged: string = mergeA2uiLayout(BASELINE, VALID_CANDIDATE, SURFACE_ID, offers());
+      expect(merged === BASELINE).assertFalse();
+      expect(merged.includes('"component":"GenericToolResults"')).assertTrue();
+    });
+
+    it('accepts UI Lab components only when the UI Lab catalog is selected', 0, () => {
+      const merged: string = mergeA2uiLayout(
+        BASELINE,
+        LAB_CANDIDATE,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(merged === BASELINE).assertFalse();
+      expect(merged.includes('"component":"MasonryGrid"')).assertTrue();
+      expect(mergeA2uiLayout(BASELINE, LAB_CANDIDATE, SURFACE_ID, [])).assertEqual(BASELINE);
+    });
+
+    it('keeps the UI Lab allowlist fixed at fifteen components without BentoGrid', 0, () => {
+      const catalog = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as ComponentCatalogEntry[];
+      expect(catalog.length).assertEqual(15);
+      for (let index = 0; index < LAB_COMPONENT_NAMES.length; index++) {
+        expect(catalog[index].name).assertEqual(LAB_COMPONENT_NAMES[index]);
+      }
+      expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes('"name":"BentoGrid"')).assertFalse();
+      expect(mergeA2uiLayout(
+        BASELINE,
+        BENTO_CANDIDATE,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(BASELINE);
+    });
+
+    it('rejects business components when the UI Lab catalog is selected', 0, () => {
+      expect(mergeA2uiLayout(
+        BASELINE,
+        VALID_CANDIDATE,
+        SURFACE_ID,
+        offers(),
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(BASELINE);
     });
 
     it('falls back exactly for wrong surface or extra envelopes', 0, () => {

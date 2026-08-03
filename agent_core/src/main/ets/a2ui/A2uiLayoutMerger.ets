@@ -101,10 +101,10 @@ function baselineOf(lines: string[], surfaceId: string): LayoutBaseline | null {
   };
 }
 
-function catalogNames(): Set<string> {
+function catalogNames(componentCatalogJson: string): Set<string> {
   const names: Set<string> = new Set<string>();
   try {
-    const items = JSON.parse(AIPHONE_COMPONENT_CATALOG_JSON) as Object[];
+    const items = JSON.parse(componentCatalogJson) as Object[];
     for (let index = 0; index < items.length; index++) {
       const record = objectRecord(items[index]);
       if (record !== null && typeof record['name'] === 'string') {
@@ -228,7 +228,8 @@ function candidateComponents(
   value: JsonValue,
   rootId: string,
   baselinePaths: string[],
-  offers: ActionOffer[]
+  offers: ActionOffer[],
+  componentCatalogJson: string
 ): A2uiComponent[] | null {
   if (!Array.isArray(value)) {
     return null;
@@ -237,7 +238,7 @@ function candidateComponents(
   if (rawComponents.length === 0 || rawComponents.length > MAX_LAYOUT_COMPONENTS) {
     return null;
   }
-  const catalog = catalogNames();
+  const catalog = catalogNames(componentCatalogJson);
   const availableOffers = offerMap(offers);
   if (catalog.size === 0 || availableOffers === null) {
     return null;
@@ -330,7 +331,8 @@ function candidateEnvelope(
   candidateJsonl: string,
   surfaceId: string,
   baseline: LayoutBaseline,
-  offers: ActionOffer[]
+  offers: ActionOffer[],
+  componentCatalogJson: string
 ): A2uiEnvelope | null {
   const lines = candidateJsonl.trim().split(/\r?\n/);
   if (lines.length !== 1) {
@@ -344,7 +346,13 @@ function candidateEnvelope(
   if (update === null || !exactKeys(update, ['components', 'surfaceId']) || update['surfaceId'] !== surfaceId) {
     return null;
   }
-  const components = candidateComponents(update['components'], baseline.rootId, baseline.dataPaths, offers);
+  const components = candidateComponents(
+    update['components'],
+    baseline.rootId,
+    baseline.dataPaths,
+    offers,
+    componentCatalogJson
+  );
   if (components === null) {
     return null;
   }
@@ -361,7 +369,8 @@ export function mergeA2uiLayout(
   baselineJsonl: string,
   candidateJsonl: string,
   surfaceId: string,
-  offers: ActionOffer[]
+  offers: ActionOffer[],
+  componentCatalogJson: string = AIPHONE_COMPONENT_CATALOG_JSON
 ): string {
   if (baselineJsonl.length === 0 || candidateJsonl.length === 0 || surfaceId.length === 0) {
     return baselineJsonl;
@@ -371,7 +380,7 @@ export function mergeA2uiLayout(
   if (baseline === null) {
     return baselineJsonl;
   }
-  const candidate = candidateEnvelope(candidateJsonl, surfaceId, baseline, offers);
+  const candidate = candidateEnvelope(candidateJsonl, surfaceId, baseline, offers, componentCatalogJson);
   if (candidate === null) {
     return baselineJsonl;
   }

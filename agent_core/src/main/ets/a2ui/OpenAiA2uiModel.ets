@@ -21,9 +21,11 @@ interface ChatResponse {
 
 export class OpenAiA2uiModel implements A2uiModel {
   private provider: LlmProvider;
+  private componentCatalogJson: string;
 
-  constructor(provider: LlmProvider) {
+  constructor(provider: LlmProvider, componentCatalogJson: string = AIPHONE_COMPONENT_CATALOG_JSON) {
     this.provider = provider;
+    this.componentCatalogJson = componentCatalogJson;
   }
 
   async generate(userTask: string, surfaceId: string, conversation?: ConversationContext): Promise<string> {
@@ -72,7 +74,7 @@ export class OpenAiA2uiModel implements A2uiModel {
       '- Bind content only through dataPath values explicitly listed in the user task.\n' +
       '- An action slot contains only {"offerId":"an offered id"}; never invent or alter an offer.\n' +
       '- Keep at most 24 components. Use only this catalog:\n' +
-      AIPHONE_COMPONENT_CATALOG_JSON;
+      this.componentCatalogJson;
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt }

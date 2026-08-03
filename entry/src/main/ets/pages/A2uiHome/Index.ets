@@ -237,6 +237,10 @@ import {
   directRideToolIdForActionId,
   resolveA2uiHomeToolRequest
 } from './render/A2uiHomeToolRequest';
+import {
+  clearUiLabModelSettings,
+  configureUiLabModelSettings
+} from './lab/UiLabRuntimeConfig';
 
 const CONNECTION_TEST_PROMPT: string = '连接检查：请返回 A2UI v0.9.1 setup surface，说明 Local API 已可用。';
 const ENABLE_MULTI_AGENT_UI_LAYOUT_LLM: boolean = false;
@@ -253,6 +257,7 @@ const STRIPE_RECEIVING_PROFILE_KEY: string = 'stripe_receiving_profile';
 const COMPOSIO_AUTH_STORE_NAME: string = 'aiphone_composio_auth_store';
 const COMPOSIO_USER_ID_KEY: string = 'composio_user_id';
 const ANYTHING_DEMO_ROUTE_URL: string = 'pages/A2uiHome/AnythingDemo';
+const UI_AGENT_LAB_ROUTE_URL: string = 'pages/A2uiHome/UiAgentLab';
 const READ_CALENDAR_PERMISSION: Permissions = 'ohos.permission.READ_CALENDAR';
 const WRITE_CALENDAR_PERMISSION: Permissions = 'ohos.permission.WRITE_CALENDAR';
 const APPROX_LOCATION_PERMISSION: Permissions = 'ohos.permission.APPROXIMATELY_LOCATION';
@@ -2743,6 +2748,19 @@ struct Index {
         }
         resolve(true);
       });
+    });
+  }
+
+  private openUiAgentLab(): void {
+    configureUiLabModelSettings(this.getSettings());
+    router.pushUrl({ url: UI_AGENT_LAB_ROUTE_URL }, (error) => {
+      if (error) {
+        clearUiLabModelSettings();
+        aiLogError('[AIPhone][UiAgentLabRouteFailed] code=' + error.code.toString());
+        this.getUIContext().getPromptAction().showToast({ message: 'UI Lab 打开失败。' });
+        return;
+      }
+      aiLogInfo('[AIPhone][UiAgentLabRouteOpened]');
     });
   }
 
@@ -5719,6 +5737,9 @@ struct Index {
         composioAuthBusy: this.composioAuthBusy,
         onBack: () => {
           this.showConfigPage = false;
+        },
+        onOpenUiAgentLab: () => {
+          this.openUiAgentLab();
         },
         onTestConnection: () => {
           this.testConnection();

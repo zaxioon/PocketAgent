@@ -99,6 +99,7 @@ import trainPresaleConfirmationTest from './TrainPresaleConfirmation.test';
 import trainPresaleExecutionTest from './TrainPresaleExecution.test';
 import trainPresaleWebAutomationTest from './TrainPresaleWebAutomation.test';
 import trainPresaleDebugTest from './TrainPresaleDebug.test';
+import uiAgentLabTest from './UiAgentLab.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -196,6 +197,7 @@ export default function testsuite() {
   trainPresaleExecutionTest();
   trainPresaleWebAutomationTest();
   trainPresaleDebugTest();
+  uiAgentLabTest();
   personaStoreTest();
   personaA2uiTest();
   personaMemoryUpdateTest();
