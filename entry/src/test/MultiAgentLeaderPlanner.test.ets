@@ -34,6 +34,19 @@ const TAGGED_PARALLEL_DECISION: string = '{"personaId":"travel_companion","skill
   '"toolId":"train.search","input":{},"required":false}</appless_tool>' +
   '],"continuationMode":"complete","uiIntent":{"purpose":"比较出行方案","preferredDensity":"comfortable",' +
   '"requiredSections":["flight","train"]}}';
+const PARALLEL_DYNAMIC_DECISION: string = '{"personaId":"travel_companion","skillId":"",' +
+  '"requestedCapabilityIds":["dynamic.search"],"roundAction":"execute","continuationMode":"complete",' +
+  '"dataTasks":[' +
+  '{"localId":"github-profile","goal":"Get the GitHub user profile","allowedToolIds":["dynamic.search"],' +
+  '"toolId":"dynamic.search","input":{"query":"sindresorhus","platforms":["github"]},"required":true},' +
+  '{"localId":"github-repositories","goal":"List the GitHub user repositories",' +
+  '"allowedToolIds":["dynamic.search"],"toolId":"dynamic.search",' +
+  '"input":{"query":"sindresorhus","platforms":["github"]},"required":true},' +
+  '{"localId":"github-events","goal":"List the GitHub user recent events",' +
+  '"allowedToolIds":["dynamic.search"],"toolId":"dynamic.search",' +
+  '"input":{"query":"sindresorhus","platforms":["github"]},"required":true}' +
+  '],"uiIntent":{"purpose":"research","preferredDensity":"medium",' +
+  '"requiredSections":["profile","repositories","events"]}}';
 const TRAVEL_DECISION: string = '{"personaId":"travel_companion","skillId":"",' +
   '"requestedCapabilityIds":["travel.search"],"roundAction":"execute","continuationMode":"complete",' +
   '"dataTasks":[{"localId":"travel","goal":"我明天要从北京去上海，帮我搜索出行方案",' +
@@ -897,6 +910,22 @@ function planningContext(): LeaderPlanningContext {
   };
 }
 
+function dynamicPlanningContext(): LeaderPlanningContext {
+  const context = planningContext();
+  context.tools.push({
+    toolId: 'dynamic.search',
+    domain: 'dynamic',
+    intent: 'dynamic.search',
+    riskLevel: 'read',
+    registeredBackends: ['mcp_remote', 'oauth_api'],
+    inputSchema: 'dynamicToolSearchQuery',
+    outputSchema: 'dynamicToolConnect',
+    actions: [],
+    planningHint: toolPlanningDescriptionForToolId('dynamic.search')
+  });
+  return context;
+}
+
 function actionOwnerContext(): LeaderPlanningContext {
   const context = planningContext();
   const definitions: ToolDefinition[] = actionAgentToolDefinitions();
@@ -1082,6 +1111,39 @@ export default function multiAgentLeaderPlannerTest() {
       expect(streamed[1].task.toolId).assertEqual('train.search');
       expect(decision.dataTasks.length).assertEqual(2);
       expect(model.prompts[0].indexOf('<appless_tool>')).assertLarger(-1);
+    });
+
+    it('passes the focused single-operation dynamic search contract into the Leader prompt', 0, async () => {
+      const model = new QueueLocalModel([PARALLEL_DYNAMIC_DECISION]);
+      const decision = await new MultiAgentLeaderPlanner(model).plan(
+        inputMessage(),
+        { text: 'Build a GitHub profile, repositories, and recent events overview for sindresorhus' },
+        dynamicPlanningContext(),
+        1,
+        (): boolean => true
+      );
+
+      expect(model.prompts[0].indexOf('exactly one provider operation')).assertLarger(-1);
+      expect(model.prompts[0].indexOf('multiple focused dynamic.search DataTasks')).assertLarger(-1);
+      expect(model.prompts[0].indexOf('even when their toolId is identical')).assertLarger(-1);
+      expect(model.prompts[0].indexOf('input.query must carry only the exact entity or keyword')).assertLarger(-1);
+      expect(decision.requestedCapabilityIds.join(',')).assertEqual('dynamic.search');
+      expect(decision.dataTasks.length).assertEqual(3);
+      expect(decision.dataTasks[0].localId).assertEqual('github-profile');
+      expect(decision.dataTasks[1].localId).assertEqual('github-repositories');
+      expect(decision.dataTasks[2].localId).assertEqual('github-events');
+      expect(decision.dataTasks[0].toolId).assertEqual('dynamic.search');
+      expect(decision.dataTasks[1].toolId).assertEqual('dynamic.search');
+      expect(decision.dataTasks[2].toolId).assertEqual('dynamic.search');
+      expect(JSON.stringify(decision.dataTasks[0].input)).assertEqual(
+        '{"query":"sindresorhus","platforms":["github"]}'
+      );
+      expect(JSON.stringify(decision.dataTasks[1].input)).assertEqual(
+        '{"query":"sindresorhus","platforms":["github"]}'
+      );
+      expect(JSON.stringify(decision.dataTasks[2].input)).assertEqual(
+        '{"query":"sindresorhus","platforms":["github"]}'
+      );
     });
 
     it('rejects an oversized registered tool catalog before calling the model', 0, async () => {

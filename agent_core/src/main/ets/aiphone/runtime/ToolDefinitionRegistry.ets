@@ -660,8 +660,13 @@ const DYNAMIC_SEARCH_PLANNING_DESCRIPTION: string =
   'names Outlook or Composio Outlook; ordinary mailbox aggregation uses mail.search. World Cup page, schedule, ' +
   'next-match, preview, team, or player-card requests are covered by worldcup.open, not dynamic.search. For ' +
   'Composio, first call with the full user task to discover candidate tools; only call again with ' +
-  '{"operation":"execute","toolSlug":"returned slug","arguments":{...}} for read/search/list/get actions. Do not ' +
-  'use Composio for payment, Gmail, Calendar, SocialHub, Maps, Food, Travel, World Cup page/schedule requests, or ' +
+  '{"operation":"execute","toolSlug":"returned slug","arguments":{...}} for read/search/list/get actions. ' +
+  'One dynamic.search DataTask discovers and executes exactly one provider operation. When one user request needs ' +
+  'multiple independent datasets from the same app or toolkit, emit multiple focused dynamic.search DataTasks in ' +
+  'the same round even when their toolId is identical. Each task.goal must name exactly one operation target, and ' +
+  'structured input.query must carry only the exact entity or keyword, such as a GitHub username. Do not combine ' +
+  'GitHub profile, repositories, and recent events in one goal. ' +
+  'Do not use Composio for payment, Gmail, Calendar, SocialHub, Maps, Food, Travel, World Cup page/schedule requests, or ' +
   'other fixed-tool domains unless the user explicitly asks for an unsupported external app/toolkit. For ferry or ' +
   'boat ticket requests, use dynamic.search; fixed travel tools only cover train and flight options, and ' +
   'dynamic.search may return no_tool_found truthfully.';

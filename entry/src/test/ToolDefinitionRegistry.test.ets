@@ -185,6 +185,11 @@ export default function toolDefinitionRegistryTest() {
       expect(mail.indexOf('Never use it for SocialHub messages')).assertLarger(-1);
       expect(dynamic.indexOf('Composio-backed app/toolkit')).assertLarger(-1);
       expect(dynamic.indexOf('use social.feed.search')).assertLarger(-1);
+      expect(dynamic.indexOf('exactly one provider operation')).assertLarger(-1);
+      expect(dynamic.indexOf('multiple focused dynamic.search DataTasks')).assertLarger(-1);
+      expect(dynamic.indexOf('even when their toolId is identical')).assertLarger(-1);
+      expect(dynamic.indexOf('input.query must carry only the exact entity or keyword')).assertLarger(-1);
+      expect(dynamic.indexOf('GitHub profile, repositories, and recent events')).assertLarger(-1);
       expect(gmailDraft.indexOf('create a draft first')).assertLarger(-1);
       expect(gmailDraft.indexOf('exact current mail reply Send button')).assertLarger(-1);
       expect(aiphoneToolDescriptionForModel('gmail.message.send')).assertEqual('');
