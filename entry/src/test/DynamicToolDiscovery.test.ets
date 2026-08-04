@@ -1,9 +1,11 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
   callStructuredTool,
+  callStructuredToolForUiLab,
   configureDynamicReadExecutorForTests,
   discoverDynamicToolForPrompt,
   DynamicReadExecution,
+  DynamicReadExecutionProfile,
   DynamicStructuredData,
   DynamicGenericToolResult,
   DynamicToolDiscoveryResult,
@@ -213,6 +215,44 @@ export default function dynamicToolDiscoveryTest() {
         expect(drive.sources[0].operation).assertEqual(driveQualifiedName);
         expect(JSON.stringify(fourth.data).indexOf('turn-3')).assertEqual(-1);
         expect(calls).assertEqual(6);
+      } finally {
+        configureDynamicReadExecutorForTests(null);
+      }
+    });
+
+    it('exposes providerData only through the trusted UI Lab structured-tool profile', 0, async () => {
+      const preserveFlags: boolean[] = [];
+      configureDynamicReadExecutorForTests(async (
+        _prompt: string,
+        _args: Object | null,
+        profile?: DynamicReadExecutionProfile
+      ): Promise<DynamicReadExecution> => {
+        preserveFlags.push(profile?.preserveProviderData === true);
+        return {
+          results: [{
+            sourceTag: 'Composio', toolName: 'GITHUB_LIST_EVENTS_FOR_USER', title: 'GitHub events',
+            status: 'success', summary: 'one event', rows: [{ label: '结果 1', value: '' }], rawPreview: '{}'
+          }],
+          registration: {
+            provider: 'Composio', qualifiedName: 'GITHUB_LIST_EVENTS_FOR_USER',
+            inputSchema: looseObject('{}'), outputSchema: looseObject('{}'), receipt: 'ui-lab-provider'
+          },
+          providerData: looseObject('{"events":[{"type":"PushEvent","repo":{"name":"openui"}}]}')
+        };
+      });
+      try {
+        const args = looseObject('{"operation":"list","qualifiedName":"GITHUB_LIST_EVENTS_FOR_USER"}');
+        const legacy = await callStructuredTool('dynamic.search', 'list events', args);
+        const uiLab = await callStructuredToolForUiLab('dynamic.search', 'list events', args);
+        const legacyData = legacy.data as DynamicStructuredData;
+        const uiLabData = uiLab.data as DynamicStructuredData;
+
+        expect(legacyData.providerData === undefined).assertTrue();
+        expect(uiLabData.providerData === undefined).assertFalse();
+        expect(JSON.stringify(uiLabData.providerData)).assertContain('PushEvent');
+        expect(preserveFlags.length).assertEqual(2);
+        expect(preserveFlags[0]).assertFalse();
+        expect(preserveFlags[1]).assertTrue();
       } finally {
         configureDynamicReadExecutorForTests(null);
       }

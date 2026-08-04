@@ -6,6 +6,9 @@ import {
   composioDynamicMissingConfigResult,
   composioArgumentsForTool,
   composioDynamicResultFromObservation,
+  composioProviderDataFromObservation,
+  limitComposioObservation,
+  preservedComposioExecutionFromResponse,
   composioPreferredToolScore,
   composioExactToolSlugForFixedTool,
   composioPhoneNumberIdsFromObservation,
@@ -826,6 +829,7 @@ export default function composioDynamicBackendTest() {
       const preview = JSON.parse(result.rawPreview) as Record<string, Object[]>;
 
       expect(result.status).assertEqual('success');
+      expect(result.providerData === undefined).assertTrue();
       expect(preview.messages.length).assertEqual(1);
       expect(JSON.stringify(preview).indexOf('[ECCV 2026]')).assertLarger(-1);
       expect(result.rawPreview.length).assertLess(16000);
@@ -1030,6 +1034,145 @@ export default function composioDynamicBackendTest() {
       expect(result.title).assertEqual('Composio GitHub 结果');
       expect(result.summary.indexOf('返回 1 条')).assertLarger(-1);
       expect(JSON.stringify(result.rows).indexOf('Add Composio dynamic backend')).assertLarger(-1);
+    });
+
+    it('preserves nested GitHub event fields only for the schema-preserving execution profile', 0, () => {
+      const observation = '{"data":{"events":[{' +
+        '"type":"PushEvent","created_at":"2026-08-04T00:58:39Z",' +
+        '"repo":{"id":7,"name":"xojs/eslint-config-xo"},' +
+        '"actor":{"id":8,"login":"sindresorhus"},' +
+        '"payload":{"action":"published","commits":[{"sha":"abc123"}]}}]}}';
+      const legacy = composioDynamicResultFromObservation(
+        'execute', observation, 'GITHUB_LIST_EVENTS_FOR_USER', 'GitHub user activity'
+      );
+      const preserved = composioDynamicResultFromObservation(
+        'execute', observation, 'GITHUB_LIST_EVENTS_FOR_USER', 'GitHub user activity', true
+      );
+      const provider = preserved.providerData as Record<string, Object>;
+      const events = provider['events'] as Object[];
+      const event = events[0] as Record<string, Object | string>;
+      const repo = event['repo'] as Record<string, Object | string>;
+      const actor = event['actor'] as Record<string, Object | string>;
+
+      expect(legacy.providerData === undefined).assertTrue();
+      expect(preserved.providerData === undefined).assertFalse();
+      expect(event['type']).assertEqual('PushEvent');
+      expect(event['created_at']).assertEqual('2026-08-04T00:58:39Z');
+      expect(repo['name']).assertEqual('xojs/eslint-config-xo');
+      expect(actor['login']).assertEqual('sindresorhus');
+      expect(JSON.stringify(preserved.providerData).indexOf('结果 1')).assertEqual(-1);
+      expect(JSON.stringify(legacy.rows).indexOf('结果 1')).assertLarger(-1);
+    });
+
+    it('preserves common provider arrays and strings while redacting binary blobs', 0, () => {
+      const entries: Object[] = [];
+      entries.push(JSON.parse('{"name":"first","description":' + JSON.stringify('ordinary description '.repeat(200)) +
+        ',"blob":' + JSON.stringify('A'.repeat(4000)) + '}') as Object);
+      for (let index = 1; index < 140; index++) {
+        entries.push(JSON.parse('{"name":"item-' + index.toString() + '","value":' + index.toString() + '}') as Object);
+      }
+      const observation = '{"data":{"response_data":{"data":{"events":' +
+        JSON.stringify(entries) + '},"logs":[{"blob":' + JSON.stringify('B'.repeat(4000)) + '}]}},' +
+        '"error":null}';
+      const preserved = composioDynamicResultFromObservation(
+        'execute', observation, 'GITHUB_LIST_EVENTS_FOR_USER', 'GitHub events', true
+      );
+      const provider = preserved.providerData as Record<string, Object>;
+      const meta = preserved.providerDataMeta as Record<string, Object | string | number | boolean>;
+      const events = provider['events'] as Object[];
+      const first = events[0] as Record<string, Object | string>;
+
+      expect(events.length).assertEqual(140);
+      expect(meta['truncated']).assertFalse();
+      expect((first['description'] as string).length).assertEqual(4200);
+      expect(first['blob']).assertEqual('[omitted binary data]');
+      expect(JSON.stringify(provider).indexOf('logs')).assertEqual(-1);
+      expect(JSON.stringify(provider).length).assertLess(64001);
+    });
+
+    it('marks providerData metadata when a hard structural limit truncates content', 0, () => {
+      const items: Object[] = [];
+      for (let index = 0; index < 1100; index++) {
+        items.push(JSON.parse('{"name":"item-' + index.toString() + '"}') as Object);
+      }
+      const observation = '{"data":{"items":' + JSON.stringify(items) + '}}';
+      const preserved = composioDynamicResultFromObservation(
+        'execute', observation, 'GITHUB_GET_A_USER', 'GitHub profile', true
+      );
+      const meta = preserved.providerDataMeta as Record<string, Object | string | number | boolean>;
+      const provider = preserved.providerData as Record<string, Object>;
+      const arrays = meta['arrays'] as Object[];
+      const firstArray = arrays[0] as Record<string, Object | string | number>;
+
+      expect(meta['truncated']).assertTrue();
+      expect(meta['reason']).assertEqual('provider_data_array_limit');
+      expect((provider['items'] as Object[]).length).assertEqual(1000);
+      expect(firstArray['originalCount']).assertEqual(1100);
+      expect(firstArray['retainedCount']).assertEqual(1000);
+    });
+
+    it('keeps structured UI Lab data from a response larger than the legacy 200K observation limit', 0, () => {
+      const raw = '{"data":{"events":[{"type":"PushEvent","repo":{"name":"openui"},' +
+        '"actor":{"login":"developer"}}],"binary":' + JSON.stringify('A'.repeat(210000)) + '},' +
+        '"error":null}';
+      const legacy = limitComposioObservation(raw);
+      const legacyEnvelope = JSON.parse(legacy) as Record<string, Object | string | boolean>;
+      const preserved = preservedComposioExecutionFromResponse(raw);
+      const provider = preserved.providerData as Record<string, Object>;
+      const events = provider['events'] as Object[];
+
+      expect(raw.length).assertLarger(200000);
+      expect(legacyEnvelope['truncated']).assertTrue();
+      expect(preserved.observation).assertEqual(legacy);
+      expect(events.length).assertEqual(1);
+      expect(JSON.stringify(events[0])).assertContain('PushEvent');
+      expect(JSON.stringify(provider).indexOf('AAAAAA')).assertEqual(-1);
+      expect(preserved.providerDataMeta.truncated).assertFalse();
+      expect(preserved.providerDataMeta.redactedBinaryFields).assertEqual(1);
+    });
+
+    it('recursively removes normalized credential keys while preserving ordinary business content', 0, () => {
+      const observation = '{"data":{"messages":[{"subject":"Quarterly update",' +
+        '"body":"ordinary mail body","access_token":"short-access","refresh-token":"short-refresh",' +
+        '"apiKey":"short-api","xApiKey":"short-x-api","X-API-Key":"short-header-api",' +
+        '"Authorization":"Bearer short-auth","cookie":"sid=short-cookie",' +
+        '"set_cookie":"short-set-cookie","password":"short-password","passwd":"short-passwd",' +
+        '"client_secret":"short-client-secret","private-key":"short-private-key",' +
+        '"credential":"short-credential","auth_token":"short-auth-token","jwt":"short-jwt",' +
+        '"idToken":"short-id-token","nextPageToken":"next-page-2","pageToken":"page-3","token_count":17,' +
+        '"auth":"Bearer short-auth-field","headerValue":"Bearer short-header-value",' +
+        '"session_id":"short-session","signature":"short-signature","signing_key":"short-signing",' +
+        '"nested":{"bearer":"short-bearer","sender":"alice@example.com",' +
+        '"auth":{"method":"oauth2","account":"alice","accessToken":"nested-access",' +
+        '"Authorization":"Bearer nested-auth"}}}]}}';
+      const provider = composioProviderDataFromObservation(observation) as Record<string, Object>;
+      const encoded = JSON.stringify(provider);
+
+      expect(encoded).assertContain('Quarterly update');
+      expect(encoded).assertContain('ordinary mail body');
+      expect(encoded).assertContain('alice@example.com');
+      expect(encoded.indexOf('short-access')).assertEqual(-1);
+      expect(encoded.indexOf('short-refresh')).assertEqual(-1);
+      expect(encoded.indexOf('short-api')).assertEqual(-1);
+      expect(encoded.indexOf('short-x-api')).assertEqual(-1);
+      expect(encoded.indexOf('short-header-api')).assertEqual(-1);
+      expect(encoded.indexOf('short-cookie')).assertEqual(-1);
+      expect(encoded.indexOf('short-password')).assertEqual(-1);
+      expect(encoded.indexOf('short-client-secret')).assertEqual(-1);
+      expect(encoded.indexOf('short-auth-token')).assertEqual(-1);
+      expect(encoded.indexOf('short-jwt')).assertEqual(-1);
+      expect(encoded.indexOf('short-auth-field')).assertEqual(-1);
+      expect(encoded.indexOf('short-header-value')).assertEqual(-1);
+      expect(encoded.indexOf('short-session')).assertEqual(-1);
+      expect(encoded.indexOf('short-signature')).assertEqual(-1);
+      expect(encoded.indexOf('short-bearer')).assertEqual(-1);
+      expect(encoded.indexOf('nested-access')).assertEqual(-1);
+      expect(encoded.indexOf('nested-auth')).assertEqual(-1);
+      expect(encoded).assertContain('next-page-2');
+      expect(encoded).assertContain('page-3');
+      expect(encoded).assertContain('"token_count":17');
+      expect(encoded).assertContain('"method":"oauth2"');
+      expect(encoded).assertContain('"account":"alice"');
     });
 
     it('treats Gmail draft payloads with draft ids as successful execute results', 0, () => {

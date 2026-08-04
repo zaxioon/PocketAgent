@@ -87,6 +87,9 @@ export interface DynamicGenericToolResult {
   actions?: A2uiAction[];
   registration?: DynamicRegistrationMetadata;
   providerPhase?: 'discovery' | 'execution';
+  /** Trusted, bounded provider payload used only by schema-preserving execution profiles. */
+  providerData?: Object;
+  providerDataMeta?: Object;
 }
 
 export interface GenericStructuredData {
@@ -174,13 +177,25 @@ export function dynamicReceiptFromProviderPayload(payload: string): string {
 
 export interface DynamicStructuredData extends GenericStructuredData {
   registration: DynamicRegistrationMetadata;
+  providerData?: Object;
+  providerDataMeta?: Object;
 }
 
 export interface DynamicReadExecution extends GenericStructuredData {
   registration: DynamicRegistrationMetadata;
+  providerData?: Object;
+  providerDataMeta?: Object;
 }
 
-export type DynamicReadExecutor = (prompt: string, args: Object | null) => Promise<DynamicReadExecution>;
+export interface DynamicReadExecutionProfile {
+  preserveProviderData: boolean;
+}
+
+export type DynamicReadExecutor = (
+  prompt: string,
+  args: Object | null,
+  profile?: DynamicReadExecutionProfile
+) => Promise<DynamicReadExecution>;
 
 export interface ModelScopeSchemaProperty {
   type?: string;

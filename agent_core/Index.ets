@@ -79,7 +79,13 @@ export {
 export { ModelScopeTool } from './src/main/ets/modelscope/ModelScopeTool';
 export { ComposioConfig } from './src/main/ets/composio/ComposioConfig';
 export * from './src/main/ets/composio/ComposioAuthClient';
-export { ComposioSessionClient, describeComposioFailure } from './src/main/ets/composio/ComposioSessionClient';
+export {
+  ComposioPreservedExecution,
+  ComposioSessionClient,
+  describeComposioFailure,
+  limitComposioObservation,
+  preservedComposioExecutionFromResponse
+} from './src/main/ets/composio/ComposioSessionClient';
 export { ComposioTool } from './src/main/ets/composio/ComposioTool';
 export * from './src/main/ets/composio/ComposioUserId';
 export { A2UI_VERSION, AGENUI_CATALOG_ID, buildCreateSurface, buildDeleteSurface, parseJsonl, extractJsonObjects, newSurfaceId } from './src/main/ets/a2ui/A2uiProtocol';

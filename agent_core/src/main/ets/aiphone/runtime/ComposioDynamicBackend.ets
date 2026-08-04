@@ -1,5 +1,9 @@
 import { ComposioConfig } from '../../composio/ComposioConfig';
-import { ComposioSessionClient, proxyToolkitAccountsFromAuthConfigs } from '../../composio/ComposioSessionClient';
+import {
+  ComposioPreservedExecution,
+  ComposioSessionClient,
+  proxyToolkitAccountsFromAuthConfigs
+} from '../../composio/ComposioSessionClient';
 import { A2uiLabelValueData } from './A2uiTypes';
 import {
   dynamicCompoundControlPrefix,
@@ -10,6 +14,12 @@ import {
   normalizedDynamicToolTokens
 } from './DynamicToolRegistry';
 import { DynamicGenericToolResult, dynamicReceiptFromProviderPayload } from './DynamicToolTypes';
+import {
+  composioProviderDataFromObservation,
+  extractComposioProviderData
+} from '../../composio/ComposioProviderData';
+
+export { composioProviderDataFromObservation } from '../../composio/ComposioProviderData';
 
 interface ComposioExecuteArgs {
   operation?: string;
@@ -60,6 +70,12 @@ interface ComposioArrayHit {
   found: boolean;
   label: string;
   items: Object[];
+}
+
+interface ComposioExecutionObservation {
+  observation: string;
+  providerData?: Object;
+  providerDataMeta?: Object;
 }
 
 interface FixedArgumentAlias {
@@ -2226,7 +2242,8 @@ export function composioDynamicResultFromObservation(
   phase: string,
   observation: string,
   toolSlug: string = '',
-  prompt: string = ''
+  prompt: string = '',
+  preserveProviderData: boolean = false
 ): DynamicGenericToolResult {
   try {
     const payload = JSON.parse(observation) as ComposioSearchObservation;
@@ -2252,7 +2269,7 @@ export function composioDynamicResultFromObservation(
           providerPhase: 'execution'
         };
       }
-      return {
+      const result: DynamicGenericToolResult = {
         sourceTag: 'Composio',
         toolName: toolSlug.length > 0 ? toolSlug : 'dynamic.search',
         title: resultTitleForTool(toolSlug),
@@ -2262,6 +2279,14 @@ export function composioDynamicResultFromObservation(
         rawPreview: rawPreviewForExecute(payload as Object, observation, draftId),
         providerPhase: 'execution'
       };
+      if (preserveProviderData) {
+        const extracted = extractComposioProviderData(observation);
+        if (extracted.data !== null) {
+          result.providerData = extracted.data;
+          result.providerDataMeta = extracted.meta as Object;
+        }
+      }
+      return result;
     }
     const slug = firstToolSlug(payload);
     const rows = rowsForSearch(payload);
@@ -2300,11 +2325,39 @@ export function composioDynamicResultFromObservation(
   }
 }
 
+async function executeComposioObservation(
+  current: ComposioSearchExecuteClient | ComposioSessionClient,
+  toolSlug: string,
+  args: Object,
+  preserveProviderData: boolean
+): Promise<ComposioExecutionObservation> {
+  if (preserveProviderData && current instanceof ComposioSessionClient) {
+    const preserved: ComposioPreservedExecution = await current.executePreservingProviderData(toolSlug, args);
+    const result: ComposioExecutionObservation = { observation: preserved.observation };
+    if (preserved.providerData !== null) {
+      result.providerData = preserved.providerData;
+      result.providerDataMeta = preserved.providerDataMeta as Object;
+    }
+    return result;
+  }
+  const observation = await current.execute(toolSlug, args);
+  const result: ComposioExecutionObservation = { observation: observation };
+  if (preserveProviderData) {
+    const extracted = extractComposioProviderData(observation);
+    if (extracted.data !== null) {
+      result.providerData = extracted.data;
+      result.providerDataMeta = extracted.meta as Object;
+    }
+  }
+  return result;
+}
+
 async function callComposioSearchAndExecuteParsed(
   current: ComposioSearchExecuteClient | ComposioSessionClient,
   prompt: string,
   parsed: ComposioExecuteArgs,
-  allowFixedContract: boolean
+  allowFixedContract: boolean,
+  preserveProviderData: boolean = false
 ): Promise<DynamicGenericToolResult> {
   const fixedToolId = textOf(parsed.fixedToolId).trim();
   const selected = selectedQualifiedName(parsed);
@@ -2368,8 +2421,13 @@ async function callComposioSearchAndExecuteParsed(
   if (authorizationMessage.length > 0) {
     return blockedSelectedSlugResult(slug, authorizationMessage);
   }
-  const executionObservation = await current.execute(slug, args);
+  const execution = await executeComposioObservation(current, slug, args, preserveProviderData);
+  const executionObservation = execution.observation;
   const result = composioDynamicResultFromObservation('execute', executionObservation, slug, prompt);
+  if (execution.providerData !== undefined) {
+    result.providerData = execution.providerData;
+    result.providerDataMeta = execution.providerDataMeta;
+  }
   result.registration = {
     provider: 'Composio',
     qualifiedName: slug,
@@ -2458,7 +2516,8 @@ async function clientForPrompt(prompt: string): Promise<ComposioSessionClient> {
 async function callComposioParsed(
   prompt: string,
   parsed: ComposioExecuteArgs,
-  allowFixedContract: boolean
+  allowFixedContract: boolean,
+  preserveProviderData: boolean = false
 ): Promise<DynamicGenericToolResult | null> {
   const fixedToolId = textOf(parsed.fixedToolId).trim();
   const missingFixedArgs = missingFixedWriteArgs(fixedToolId, parsed.fixedArgs ?? null);
@@ -2487,13 +2546,28 @@ async function callComposioParsed(
     if (authorizationMessage.length > 0) {
       return blockedSelectedSlugResult(slug, authorizationMessage);
     }
-    return composioDynamicResultFromObservation('execute', await current.execute(slug, parsed.arguments ?? new Object()), slug, prompt);
+    const execution = await executeComposioObservation(
+      current, slug, parsed.arguments ?? new Object(), preserveProviderData
+    );
+    const result = composioDynamicResultFromObservation('execute', execution.observation, slug, prompt);
+    if (execution.providerData !== undefined) {
+      result.providerData = execution.providerData;
+      result.providerDataMeta = execution.providerDataMeta;
+    }
+    return result;
   }
-  return callComposioSearchAndExecuteParsed(current, prompt, parsed, allowFixedContract);
+  return callComposioSearchAndExecuteParsed(current, prompt, parsed, allowFixedContract, preserveProviderData);
 }
 
 export async function callComposioDynamic(prompt: string, args: Object | null): Promise<DynamicGenericToolResult | null> {
   return callComposioParsed(prompt, parsedExecuteArgs(args), false);
+}
+
+export async function callComposioDynamicWithProviderData(
+  prompt: string,
+  args: Object | null
+): Promise<DynamicGenericToolResult | null> {
+  return callComposioParsed(prompt, parsedExecuteArgs(args), false, true);
 }
 
 export async function callComposioFixedDynamic(

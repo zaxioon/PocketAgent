@@ -16,6 +16,7 @@ import {
   UiTaskRenderer,
   UserInputPayload,
   aiLogInfo,
+  callStructuredToolForUiLab,
   mergeA2uiLayoutWithStatus,
   toolDefinitionForToolId
 } from '@loop/agent-core';
@@ -26,6 +27,7 @@ import { HtmlHomeAction, HtmlHomeBlock, HtmlHomeDocument } from '../html/HtmlHom
 const UI_LAB_LAYOUT_TIMEOUT_MS: number = 60000;
 const UI_LAB_SNAPSHOT_LIMIT: number = 12000;
 const UI_LAB_PATH_LIMIT: number = 96;
+const UI_LAB_LAYOUT_PROMPT_LIMIT: number = 24000;
 
 type UiLabJsonValue = Object | string | number | boolean | null | undefined;
 export type UiLabRecord = Record<string, UiLabJsonValue>;
@@ -166,10 +168,24 @@ function factsOf(data: Object): UiLabFact[] {
   return facts;
 }
 
+function uiLabVisibleData(data: Object): Object {
+  const source = recordOf(data);
+  if (source === null) return data;
+  const providerData = source['providerData'];
+  if (providerData === null || providerData === undefined || typeof providerData !== 'object') return data;
+  const visible = {} as UiLabRecord;
+  visible['providerData'] = providerData;
+  const providerDataMeta = source['providerDataMeta'];
+  if (providerDataMeta !== null && providerDataMeta !== undefined && typeof providerDataMeta === 'object') {
+    visible['providerDataMeta'] = providerDataMeta;
+  }
+  return visible as Object;
+}
+
 function sampled(value: UiLabJsonValue, depth: number = 0): UiLabJsonValue {
   if (typeof value === 'string') return value.substring(0, 1200);
   if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (depth >= 5) return '[bounded]';
+  if (depth >= 7) return '[bounded]';
   if (Array.isArray(value)) {
     const source = value as UiLabJsonValue[];
     const result: UiLabJsonValue[] = [];
@@ -185,17 +201,39 @@ function sampled(value: UiLabJsonValue, depth: number = 0): UiLabJsonValue {
   return result as Object;
 }
 
+function tightlySampled(value: UiLabJsonValue, depth: number = 0): UiLabJsonValue {
+  if (typeof value === 'string') return value.substring(0, 320);
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (depth >= 7) return '[bounded]';
+  if (Array.isArray(value)) {
+    const source = value as UiLabJsonValue[];
+    const result: UiLabJsonValue[] = [];
+    for (let index = 0; index < source.length && index < 3; index++) {
+      result.push(tightlySampled(source[index], depth + 1));
+    }
+    return result as Object;
+  }
+  const source = value as UiLabRecord;
+  const result: UiLabRecord = {};
+  const keys = Object.keys(source);
+  for (let index = 0; index < keys.length && index < 20; index++) {
+    result[keys[index]] = tightlySampled(source[keys[index]], depth + 1);
+  }
+  return result as Object;
+}
+
 export function buildUiAgentLabSnapshot(task: CreateUiTaskPayload, data: DataResult[]): UiLabSnapshot {
   const results: UiLabResultSnapshot[] = [];
   for (let index = 0; index < data.length; index++) {
+    const visibleData = uiLabVisibleData(data[index].data);
     results.push({
       dataTaskId: index < task.dataTaskIds.length ? task.dataTaskIds[index] : 'data-' + index.toString(),
       toolId: data[index].toolId,
       outputSchema: data[index].outputSchema,
       status: data[index].status,
       warnings: data[index].warnings.slice(0, 8),
-      facts: factsOf(data[index].data),
-      data: sampled(data[index].data) as Object
+      facts: factsOf(visibleData),
+      data: sampled(visibleData) as Object
     });
   }
   let snapshot: UiLabSnapshot = {
@@ -207,6 +245,23 @@ export function buildUiAgentLabSnapshot(task: CreateUiTaskPayload, data: DataRes
     },
     results
   };
+  if (JSON.stringify(snapshot).length > UI_LAB_SNAPSHOT_LIMIT) {
+    snapshot = {
+      summary: snapshot.summary,
+      results: results.map((item: UiLabResultSnapshot, index: number): UiLabResultSnapshot => {
+        const visibleData = index < data.length ? uiLabVisibleData(data[index].data) : item.data;
+        return {
+          dataTaskId: item.dataTaskId,
+          toolId: item.toolId,
+          outputSchema: item.outputSchema,
+          status: item.status,
+          warnings: item.warnings,
+          facts: item.facts,
+          data: tightlySampled(visibleData) as Object
+        };
+      })
+    };
+  }
   if (JSON.stringify(snapshot).length > UI_LAB_SNAPSHOT_LIMIT) {
     snapshot = {
       summary: snapshot.summary,
@@ -322,7 +377,7 @@ function replaceArrayAtPointer(root: UiLabJsonValue, path: string, value: UiLabJ
   return true;
 }
 
-function listPathsOfMergedLayout(jsonl: string, surfaceId: string): string[] {
+function arrayCandidatePathsOfMergedLayout(jsonl: string, surfaceId: string): string[] {
   const paths: string[] = [];
   const lines = jsonl.trim().split(/\r?\n/);
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
@@ -337,14 +392,35 @@ function listPathsOfMergedLayout(jsonl: string, surfaceId: string): string[] {
     const components = update['components'] as UiLabJsonValue[];
     for (let componentIndex = 0; componentIndex < components.length; componentIndex++) {
       const component = recordOf(components[componentIndex]);
-      if (component === null || component['component'] !== 'List') continue;
-      const children = recordOf(component['children']);
-      if (children === null || typeof children['path'] !== 'string') continue;
-      const path = children['path'] as string;
-      if (paths.indexOf(path) < 0) paths.push(path);
+      if (component === null) continue;
+      if (typeof component['dataPath'] === 'string') {
+        const dataPath = component['dataPath'] as string;
+        if (paths.indexOf(dataPath) < 0) paths.push(dataPath);
+      }
+      if (component['component'] === 'List') {
+        const children = recordOf(component['children']);
+        if (children !== null && typeof children['path'] === 'string') {
+          const listPath = children['path'] as string;
+          if (paths.indexOf(listPath) < 0) paths.push(listPath);
+        }
+      }
     }
   }
   return paths;
+}
+
+function collectSampledArrayPaths(value: UiLabJsonValue, path: string, output: string[]): void {
+  if (output.length >= UI_LAB_PATH_LIMIT || value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    if (output.indexOf(path) < 0) output.push(path);
+    return;
+  }
+  const source = recordOf(value);
+  if (source === null) return;
+  const keys = Object.keys(source);
+  for (let index = 0; index < keys.length && output.length < UI_LAB_PATH_LIMIT; index++) {
+    collectSampledArrayPaths(source[keys[index]], path + '/' + pointerToken(keys[index]), output);
+  }
 }
 
 function fullUiAgentLabSource(snapshot: UiLabSnapshot, data: DataResult[]): UiLabSnapshot {
@@ -358,7 +434,7 @@ function fullUiAgentLabSource(snapshot: UiLabSnapshot, data: DataResult[]): UiLa
       status: sampledResult.status,
       warnings: sampledResult.warnings,
       facts: sampledResult.facts,
-      data: index < data.length ? data[index].data : sampledResult.data
+      data: index < data.length ? uiLabVisibleData(data[index].data) : sampledResult.data
     });
   }
   return { summary: snapshot.summary, results };
@@ -372,12 +448,17 @@ export function hydrateUiAgentLabSnapshotForMergedLayout(
 ): UiLabSnapshot {
   const hydrated = JSON.parse(JSON.stringify(snapshot)) as UiLabSnapshot;
   const fullSource = fullUiAgentLabSource(snapshot, data);
-  const listPaths = listPathsOfMergedLayout(mergedJsonl, surfaceId);
-  for (let index = 0; index < listPaths.length; index++) {
-    const fullValue = valueAtPointer(fullSource as Object, listPaths[index]);
-    const sampledValue = valueAtPointer(hydrated as Object, listPaths[index]);
+  const componentPaths = arrayCandidatePathsOfMergedLayout(mergedJsonl, surfaceId);
+  const arrayPaths: string[] = [];
+  for (let index = 0; index < componentPaths.length; index++) {
+    const sampledValue = valueAtPointer(hydrated as Object, componentPaths[index]);
+    collectSampledArrayPaths(sampledValue, componentPaths[index], arrayPaths);
+  }
+  for (let index = 0; index < arrayPaths.length; index++) {
+    const fullValue = valueAtPointer(fullSource as Object, arrayPaths[index]);
+    const sampledValue = valueAtPointer(hydrated as Object, arrayPaths[index]);
     if (!Array.isArray(fullValue) || !Array.isArray(sampledValue)) continue;
-    replaceArrayAtPointer(hydrated as Object, listPaths[index], fullValue as UiLabJsonValue[]);
+    replaceArrayAtPointer(hydrated as Object, arrayPaths[index], fullValue as UiLabJsonValue[]);
   }
   return hydrated;
 }
@@ -569,18 +650,52 @@ export function uiAgentLabLayoutPrompt(
       return { offerId: offer.offerId, label: offer.label, variant: offer.variant };
     }
   );
-  return ('Lay out a useful mobile UI from all verified DataResult values.\n' +
+  const instructions = 'Lay out a useful mobile UI from all verified DataResult values.\n' +
     'Choose presentation by the meaning and shape of the actual values. Do not assume a business schema and do not prescribe a chart type.\n' +
+    'When result.data.providerData exists, it is the schema-preserving provider payload. Prefer paths below providerData and do not bind generic rows or rawPreview compatibility fields.\n' +
+    'If result.data.providerDataMeta.truncated is true, the provider payload is incomplete. Never treat a retained array length as the original total; use only explicit provider counts or providerDataMeta array counts.\n' +
     'For every normal non-error UI Lab result with displayable verified data, you MUST output exactly one HeroBanner. Do not fabricate a HeroBanner summary for an error or no-display-data baseline. HeroBanner is always the first visible element in the main content container. If any other visible component exists, SurfaceRoot.child must reference a Column and the HeroBanner id must be Column.children[0]. Never connect root only to HeroBanner while leaving sibling components disconnected. If HeroBanner is the only visible component, SurfaceRoot.child may reference it directly. Its title is required; use text as a kicker and body to naturally synthesize all verified results without mechanically listing toolId values.\n' +
     '/summary/count and /summary/text describe the number of DataResult sets, not the number of business entities. HeroBanner must never present them as an entity total.\n' +
     'Never infer a total from a sampled array length. State a business count only when result.data explicitly labels a scalar as count or total, or when result.data.summary text explicitly supports it.\n' +
     'For chart components, bind the narrowest matching dataPath. Never output SVG, path, points, rect, viewBox, coordinates, dimensions, geometry, stroke settings, or colors; the renderer owns them.\n' +
     'Use only the UI Lab component catalog.\n' +
     'Use only exact allowedDataPaths. Actions may contain only an offered offerId; never output action arguments.\n' +
-    'intent=' + JSON.stringify(task.intent) + '\n' +
-    'allowedDataPaths=' + JSON.stringify(uiAgentLabDataPaths(snapshot)) + '\n' +
-    'verifiedOffers=' + JSON.stringify(promptOffers) + '\n' +
-    'dataSnapshot=' + JSON.stringify(snapshot)).substring(0, 24000);
+    'intent=' + JSON.stringify(task.intent) + '\n';
+  const verifiedOffers = 'verifiedOffers=' + JSON.stringify(promptOffers) + '\n';
+  const originalPaths = uiAgentLabDataPaths(snapshot);
+  let retainedPaths = originalPaths.slice();
+  const compactResults = snapshot.results.map((item: UiLabResultSnapshot): UiLabResultSnapshot => {
+    return {
+      dataTaskId: item.dataTaskId, toolId: item.toolId, outputSchema: item.outputSchema,
+      status: item.status, warnings: item.warnings, facts: item.facts,
+      data: tightlySampled(item.data) as Object
+    };
+  });
+  const compactSnapshot: UiLabSnapshot = { summary: snapshot.summary, results: compactResults };
+  const omittedResults = snapshot.results.map((item: UiLabResultSnapshot): UiLabResultSnapshot => {
+    const omitted: UiLabOmittedData = { omittedDueToPromptBudget: true };
+    return {
+      dataTaskId: item.dataTaskId, toolId: item.toolId, outputSchema: item.outputSchema,
+      status: item.status, warnings: item.warnings, facts: item.facts, data: omitted
+    };
+  });
+  const omittedSnapshot: UiLabSnapshot = { summary: snapshot.summary, results: omittedResults };
+  const snapshots: UiLabSnapshot[] = [snapshot, compactSnapshot, omittedSnapshot];
+  const completeMarker = '\ndataSnapshotComplete=true';
+  while (retainedPaths.length > 0) {
+    const pathsSection = 'allowedDataPaths=' + JSON.stringify(retainedPaths) + '\n' +
+      'allowedDataPathsComplete=' + (retainedPaths.length === originalPaths.length).toString() + '\n';
+    const prefix = instructions + pathsSection + verifiedOffers + 'dataSnapshot=';
+    for (let index = 0; index < snapshots.length; index++) {
+      const encodedSnapshot = JSON.stringify(snapshots[index]);
+      const candidate = prefix + encodedSnapshot + completeMarker;
+      if (candidate.length <= UI_LAB_LAYOUT_PROMPT_LIMIT) return candidate;
+    }
+    retainedPaths.pop();
+  }
+  const fallbackPrefix = instructions + 'allowedDataPaths=[]\nallowedDataPathsComplete=false\n' +
+    verifiedOffers + 'dataSnapshot=';
+  return fallbackPrefix + JSON.stringify(omittedSnapshot) + completeMarker;
 }
 
 class UiAgentLabRenderer implements UiTaskRenderer {
@@ -737,6 +852,7 @@ export class UiAgentLabHarness {
       model: new OpenAiCompatibleModel(provider),
       opener: new RejectUiLabUriOpener(),
       uiRenderer: new UiAgentLabRenderer(planner),
+      structuredToolCall: callStructuredToolForUiLab,
       surfaceDocumentProjector: projectUiAgentLabSurface,
       currentHostSurface: (): A2uiSurfaceState | null =>
         this.currentSurface === null ? null : cloneSurface(this.currentSurface),

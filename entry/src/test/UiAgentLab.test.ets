@@ -493,7 +493,7 @@ export default function uiAgentLabTest() {
       );
       const hydratedData = hydrated.results[0].data as Record<string, Object>;
       expect((hydratedData['shops'] as Object[]).length).assertEqual(24);
-      expect((hydratedData['notes'] as Object[]).length).assertEqual(8);
+      expect((hydratedData['notes'] as Object[]).length).assertEqual(24);
 
       const hydratedJsonl = hydrateUiAgentLabMergedJsonl(
         merged.jsonl,
@@ -510,7 +510,79 @@ export default function uiAgentLabTest() {
       const finalData = firstHydrated['data'] as Record<string, Object>;
       expect(hydratedParsed.error).assertEqual('');
       expect((finalData['shops'] as Object[]).length).assertEqual(24);
-      expect((finalData['notes'] as Object[]).length).assertEqual(8);
+      expect((finalData['notes'] as Object[]).length).assertEqual(24);
+    });
+
+    it('prefers providerData paths and hydrates the selected provider array without generic rows', 0, () => {
+      const task: CreateUiTaskPayload = {
+        taskId: 'ui-provider-data',
+        dataTaskIds: ['data-provider-data'],
+        skillId: 'dynamic',
+        intent: '展示 GitHub 活动',
+        expectedOutputSchema: 'dynamicToolConnect'
+      };
+      const events: Object[] = [];
+      const xLabels: string[] = [];
+      const chartValues: number[] = [];
+      for (let index = 0; index < 20; index++) {
+        events.push(JSON.parse('{"type":"PushEvent","created_at":"2026-08-04T00:00:00Z",' +
+          '"repo":{"name":"repo-' + index.toString() + '"},' +
+          '"actor":{"login":"developer"}}') as Object);
+        xLabels.push('D' + index.toString());
+        chartValues.push(index);
+      }
+      const data: DataResult = {
+        toolId: 'dynamic.search',
+        outputSchema: 'dynamicToolConnect',
+        status: 'success',
+        sources: [],
+        warnings: [],
+        data: JSON.parse('{"providerData":{"events":' + JSON.stringify(events) + ',' +
+          '"chart":{"xLabels":' + JSON.stringify(xLabels) + ',"series":[{"label":"Commits",' +
+          '"values":' + JSON.stringify(chartValues) + '}]}},' +
+          '"results":[{"rows":[{"label":"结果 1","value":""}],"rawPreview":"legacy"}],' +
+          '"registration":{"provider":"Composio"}}') as Object
+      };
+      const snapshot = buildUiAgentLabSnapshot(task, [data]);
+      const visible = snapshot.results[0].data as Record<string, Object>;
+      const sampledProvider = visible['providerData'] as Record<string, Object>;
+      const paths = uiAgentLabDataPaths(snapshot);
+      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
+
+      expect(Object.keys(visible).length).assertEqual(1);
+      expect(visible['results'] === undefined).assertTrue();
+      expect((sampledProvider['events'] as Object[]).length).assertEqual(8);
+      const sampledChart = sampledProvider['chart'] as Record<string, Object>;
+      const sampledSeries = sampledChart['series'] as Object[];
+      const sampledFirstSeries = sampledSeries[0] as Record<string, Object>;
+      expect((sampledFirstSeries['values'] as number[]).length).assertEqual(8);
+      expect(paths.indexOf('/results/0/data/providerData/events') >= 0).assertTrue();
+      expect(paths.indexOf('/results/0/data/results') >= 0).assertFalse();
+      expect(prompt).assertContain('Prefer paths below providerData');
+      expect(prompt.indexOf('结果 1')).assertEqual(-1);
+
+      const mergedJsonl = '{"version":"v0.9.1","updateComponents":{' +
+        '"surfaceId":"surface-provider-data","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["hero","event-list","chart"]},' +
+        '{"id":"hero","component":"HeroBanner","title":"活动概览"},' +
+        '{"id":"event-list","component":"List","children":{' +
+        '"path":"/results/0/data/providerData/events","componentId":"event-card"}},' +
+        '{"id":"event-card","component":"ExpandableCard"},' +
+        '{"id":"chart","component":"MultiSeriesLineChart",' +
+        '"dataPath":"/results/0/data/providerData/chart"}]}}\n' +
+        uiAgentLabDataJsonl('surface-provider-data', snapshot);
+      const hydrated = hydrateUiAgentLabSnapshotForMergedLayout(
+        snapshot, [data], mergedJsonl, 'surface-provider-data'
+      );
+      const hydratedVisible = hydrated.results[0].data as Record<string, Object>;
+      const hydratedProvider = hydratedVisible['providerData'] as Record<string, Object>;
+      const hydratedChart = hydratedProvider['chart'] as Record<string, Object>;
+      const hydratedSeries = hydratedChart['series'] as Object[];
+      const hydratedFirstSeries = hydratedSeries[0] as Record<string, Object>;
+      expect((hydratedProvider['events'] as Object[]).length).assertEqual(20);
+      expect((hydratedChart['xLabels'] as string[]).length).assertEqual(20);
+      expect((hydratedFirstSeries['values'] as number[]).length).assertEqual(20);
     });
 
     it('builds a bounded generic snapshot and lets UI Agent choose presentation', 0, () => {
@@ -548,6 +620,41 @@ export default function uiAgentLabTest() {
       expect(prompt).assertContain('result.data.summary text explicitly supports it');
       expect(prompt.indexOf('mock.travel')).assertEqual(-1);
       expect(uiAgentLabDataPaths(snapshot).indexOf('/results/0/data/count') >= 0).assertTrue();
+    });
+
+    it('keeps every prompt JSON section parseable under long paths and a near-budget snapshot', 0, () => {
+      const task: CreateUiTaskPayload = {
+        taskId: 'ui-prompt-budget', dataTaskIds: ['data-prompt-budget'], skillId: 'dynamic',
+        intent: '验证完整 JSON section', expectedOutputSchema: 'custom.v1'
+      };
+      const data: DataResult = {
+        toolId: 'time', outputSchema: 'custom.v1', status: 'success', sources: [], warnings: [],
+        data: JSON.parse('{"seed":true}') as Object
+      };
+      const snapshot = buildUiAgentLabSnapshot(task, [data]);
+      const longData = JSON.parse('{}') as Record<string, Object | string>;
+      for (let index = 0; index < 96; index++) {
+        longData['long_provider_path_' + index.toString().padStart(3, '0') + '_' + 'segment'.repeat(8)] = 'v';
+      }
+      longData['zz_payload'] = 'p'.repeat(11000);
+      snapshot.results[0].data = longData as Object;
+      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
+      const pathsPrefix = 'allowedDataPaths=';
+      const pathsStart = prompt.indexOf(pathsPrefix) + pathsPrefix.length;
+      const pathsEnd = prompt.indexOf('\n', pathsStart);
+      const snapshotPrefix = 'dataSnapshot=';
+      const snapshotStart = prompt.indexOf(snapshotPrefix) + snapshotPrefix.length;
+      const completeMarker = '\ndataSnapshotComplete=true';
+      const snapshotEnd = prompt.indexOf(completeMarker, snapshotStart);
+      const parsedPaths = JSON.parse(prompt.substring(pathsStart, pathsEnd)) as string[];
+      const parsedSnapshot = JSON.parse(prompt.substring(snapshotStart, snapshotEnd)) as Object;
+
+      expect(prompt.length).assertLess(24001);
+      expect(pathsStart).assertLarger(pathsPrefix.length - 1);
+      expect(parsedPaths.length).assertLarger(0);
+      expect(snapshotEnd).assertLarger(snapshotStart);
+      expect(parsedSnapshot === null).assertFalse();
+      expect(prompt.endsWith('dataSnapshotComplete=true')).assertTrue();
     });
 
     it('sends only component identity and action index through ArkWeb', 0, () => {

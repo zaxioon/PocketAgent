@@ -166,6 +166,7 @@ import {
 } from './SocialHubTypes';
 import {
   callComposioDynamic,
+  callComposioDynamicWithProviderData,
   callComposioFixedDynamic,
   callComposioFixedRaw,
   composioDynamicResultFromObservation,
@@ -230,6 +231,7 @@ import {
   DynamicGenericToolResult,
   DynamicMcpTool,
   DynamicReadExecution,
+  DynamicReadExecutionProfile,
   DynamicReadExecutor,
   DynamicRegistrationMetadata,
   DynamicStructuredData,
@@ -11029,7 +11031,14 @@ function dynamicExecutionResult(
   result: DynamicGenericToolResult,
   registration: DynamicRegistrationMetadata
 ): DynamicReadExecution {
-  return { results: [result], registration: registration };
+  const execution: DynamicReadExecution = { results: [result], registration: registration };
+  if (result.providerData !== undefined) {
+    execution.providerData = result.providerData;
+    execution.providerDataMeta = result.providerDataMeta;
+    result.providerData = undefined;
+    result.providerDataMeta = undefined;
+  }
+  return execution;
 }
 
 function dynamicReadFailure(
@@ -11162,7 +11171,11 @@ async function dynamicManifestReadExecution(
   return dynamicExecutionResult(result, metadata);
 }
 
-async function defaultDynamicReadExecutor(prompt: string, args: Object | null): Promise<DynamicReadExecution> {
+async function defaultDynamicReadExecutor(
+  prompt: string,
+  args: Object | null,
+  profile?: DynamicReadExecutionProfile
+): Promise<DynamicReadExecution> {
   const selected = dynamicQualifiedName(dynamicReadRequestArgs(args));
   if (selected.length > 0) {
     const selectedManifest = selectedDynamicManifest(selected);
@@ -11174,7 +11187,8 @@ async function defaultDynamicReadExecutor(prompt: string, args: Object | null): 
   if (discovery !== null) {
     return dynamicManifestReadExecution(discovery, prompt);
   }
-  const result = await callComposioDynamic(prompt, args);
+  const result = profile?.preserveProviderData === true ?
+    await callComposioDynamicWithProviderData(prompt, args) : await callComposioDynamic(prompt, args);
   if (result === null) {
     return dynamicReadFailure('dynamic.search', selected,
       new Object(), 'No matching dynamic read provider was found.', 'no_tool_found');
@@ -11194,12 +11208,19 @@ async function defaultDynamicReadExecutor(prompt: string, args: Object | null): 
   return dynamicExecutionResult(result, metadata);
 }
 
-function dynamicStructuredDataResult(execution: DynamicReadExecution): DataResult {
+function dynamicStructuredDataResult(
+  execution: DynamicReadExecution,
+  exposeProviderData: boolean = false
+): DataResult {
   const base = genericStructuredDataResult('dynamic.search', 'dynamicToolConnect', execution.results);
   const data: DynamicStructuredData = {
     results: execution.results,
     registration: execution.registration
   };
+  if (exposeProviderData && execution.providerData !== undefined) {
+    data.providerData = execution.providerData;
+    if (execution.providerDataMeta !== undefined) data.providerDataMeta = execution.providerDataMeta;
+  }
   base.data = data;
   const source: DataSource = {
     provider: execution.registration.provider,
@@ -11236,7 +11257,11 @@ function dynamicStructuredDataResult(execution: DynamicReadExecution): DataResul
   return base;
 }
 
-async function callStructuredDynamicTool(prompt: string, args: Object | null): Promise<DataResult> {
+async function callStructuredDynamicTool(
+  prompt: string,
+  args: Object | null,
+  profile?: DynamicReadExecutionProfile
+): Promise<DataResult> {
   const authorizationMessage = dynamicReadAuthorizationMessage(args);
   if (authorizationMessage.length > 0) {
     return errorDataResult(
@@ -11244,7 +11269,10 @@ async function callStructuredDynamicTool(prompt: string, args: Object | null): P
     );
   }
   try {
-    return dynamicStructuredDataResult(await dynamicReadExecutor(prompt, args));
+    return dynamicStructuredDataResult(
+      await dynamicReadExecutor(prompt, args, profile),
+      profile?.preserveProviderData === true
+    );
   } catch (error) {
     const message = describeThrown(error);
     const qualifiedName = dynamicQualifiedName(dynamicReadRequestArgs(args));
@@ -15517,6 +15545,19 @@ export async function callStructuredTool(
     'STRUCTURED_ADAPTER_MISSING',
     'Structured adapter is not migrated for ' + toolId + '.'
   );
+}
+
+/** Trusted UI Lab execution entrypoint. The profile is supplied by host code, never model-generated args. */
+export async function callStructuredToolForUiLab(
+  toolId: string,
+  prompt: string,
+  args: Object | null
+): Promise<DataResult> {
+  if (toolId === 'dynamic.search') {
+    const profile: DynamicReadExecutionProfile = { preserveProviderData: true };
+    return callStructuredDynamicTool(prompt, args, profile);
+  }
+  return callStructuredTool(toolId, prompt, args);
 }
 
 class CurrentHotelToolLookup implements ToolDefinitionLookup {
