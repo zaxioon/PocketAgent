@@ -4,11 +4,18 @@ import {
   A2UI_COMPONENT_COLUMN,
   A2UI_COMPONENT_CONFIRM_PANEL,
   A2UI_COMPONENT_ERROR_NOTICE,
+  A2UI_COMPONENT_EXPANDABLE_CARD,
   A2UI_COMPONENT_FLIGHT_BOARD,
   A2UI_COMPONENT_FOOD_CHOICES,
   A2UI_COMPONENT_GENERIC_TOOL_RESULTS,
   A2UI_COMPONENT_INFO_ROWS,
+  A2UI_COMPONENT_LIST,
+  A2UI_COMPONENT_MASONRY_GRID,
+  A2UI_COMPONENT_MEDIA_SLIDER,
   A2UI_COMPONENT_ROW,
+  A2UI_COMPONENT_SCENE_TABS,
+  A2UI_COMPONENT_SCHEDULE_STACK,
+  A2UI_COMPONENT_SKELETON_CARD,
   A2UI_COMPONENT_SOCIAL_HUB,
   A2UI_COMPONENT_STRIPE_RECEIVING_ACCOUNT_CARD,
   A2UI_COMPONENT_SURFACE_ROOT,
@@ -45,7 +52,14 @@ const KNOWN_COMPONENTS: string[] = [
   A2UI_COMPONENT_GENERIC_TOOL_RESULTS,
   A2UI_COMPONENT_SOCIAL_HUB,
   A2UI_COMPONENT_STRIPE_RECEIVING_ACCOUNT_CARD,
-  A2UI_COMPONENT_AGGREGATE_SEARCH
+  A2UI_COMPONENT_AGGREGATE_SEARCH,
+  A2UI_COMPONENT_SCHEDULE_STACK,
+  A2UI_COMPONENT_SKELETON_CARD,
+  A2UI_COMPONENT_EXPANDABLE_CARD,
+  A2UI_COMPONENT_MEDIA_SLIDER,
+  A2UI_COMPONENT_SCENE_TABS,
+  A2UI_COMPONENT_MASONRY_GRID,
+  A2UI_COMPONENT_LIST
 ];
 
 function normalizeString(value: string | Object | undefined | null, fallback: string): string {
@@ -76,6 +90,18 @@ function normalizeStringList(value: string[] | undefined | null): string[] {
     }
   });
   return result;
+}
+
+type ParserJsonValue = Object | string | number | boolean | null | undefined;
+type ParserJsonRecord = Record<string, ParserJsonValue>;
+
+function rawListChildren(value: A2uiComponent): ParserJsonRecord | null {
+  const source = value as Object as ParserJsonRecord;
+  const children = source['children'];
+  if (children === undefined || children === null || typeof children !== 'object' || Array.isArray(children)) {
+    return null;
+  }
+  return children as ParserJsonRecord;
 }
 
 function normalizeActions(value: A2uiAction[] | undefined | null): A2uiAction[] {
@@ -124,11 +150,28 @@ function normalizeComponent(value: A2uiComponent): A2uiComponent {
   if (!isKnownComponent(component)) {
     throw new Error('A2UI component is not registered: ' + component);
   }
+  const listChildren = rawListChildren(value);
+  if (component !== A2UI_COMPONENT_LIST && listChildren !== null) {
+    throw new Error('A2UI children object is only supported by List');
+  }
+  let child = normalizeString(value.child, '');
+  let children = normalizeStringList(value.children);
+  let dataPath = normalizeString(value.dataPath, '');
+  if (component === A2UI_COMPONENT_LIST && listChildren !== null) {
+    child = normalizeString(listChildren['componentId'] as string | Object | undefined | null, '');
+    dataPath = normalizeString(listChildren['path'] as string | Object | undefined | null, '');
+    children = [];
+    if (child.length === 0 || dataPath.length === 0) {
+      throw new Error('A2UI List children requires path and componentId');
+    }
+  } else if (component === A2UI_COMPONENT_LIST) {
+    throw new Error('A2UI List requires official children path and componentId');
+  }
   return {
     id: id,
     component: component,
-    child: normalizeString(value.child, ''),
-    children: normalizeStringList(value.children),
+    child: child,
+    children: children,
     title: normalizeString(value.title, ''),
     text: normalizeString(value.text, ''),
     body: normalizeString(value.body, ''),
@@ -136,7 +179,7 @@ function normalizeComponent(value: A2uiComponent): A2uiComponent {
     tone: normalizeString(value.tone, ''),
     variant: normalizeString(value.variant, ''),
     path: normalizeString(value.path, ''),
-    dataPath: normalizeString(value.dataPath, ''),
+    dataPath: dataPath,
     actions: normalizeActions(value.actions)
   };
 }

@@ -1,6 +1,7 @@
 import { ConversationContext } from '../agent/ConversationContext';
 import { A2uiModel } from './A2uiModel';
 import { buildCreateSurface, newSurfaceId, parseJsonl } from './A2uiProtocol';
+import { aiLogInfo } from '../aiphone/runtime/AiphoneLogger';
 
 export type A2uiLineListener = (line: string) => void;
 export type A2uiErrorListener = (message: string) => void;
@@ -18,8 +19,12 @@ export class A2uiAgentRunner implements UiLayoutPlanner {
 
   async plan(task: string, surfaceId: string): Promise<string | null> {
     try {
-      return await this.generate(task, surfaceId);
-    } catch (_error) {
+      const candidate = await this.generate(task, surfaceId);
+      aiLogInfo('[A2uiLayoutPlan] surface=' + surfaceId + ' outcome=candidate chars=' + candidate.length.toString());
+      return candidate;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${error}`;
+      aiLogInfo('[A2uiLayoutPlan] surface=' + surfaceId + ' outcome=null reason=' + JSON.stringify(message));
       return null;
     }
   }

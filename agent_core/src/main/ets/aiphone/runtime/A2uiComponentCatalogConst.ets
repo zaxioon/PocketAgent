@@ -33,8 +33,9 @@ export const UI_AGENT_LAB_COMPONENT_CATALOG_JSON: string =
     '{"name":"ThinkingCard","role":"状态组件","usage":"展示结构生成中的摘要、进度与事件；全部可见内容必须由 title、body、status props 或 dataPath 绑定 {label,progress,events} 动态提供，renderer 不得内置设计稿文案；不承载业务 actions"},' +
     '{"name":"ScheduleStack","role":"复合内容组件","usage":"展示多日或多段日程卡，全部可见日期、标题、条目和指标必须用 dataPath 绑定 Array<{id,label,title,entries,metric?,tone?}> 动态提供；renderer 不得内置行程文案，不使用 children"},' +
     '{"name":"SkeletonCard","role":"局部加载组件","usage":"仅在最终布局已经确定且局部数据未返回时使用，status 必须为 loading；如有可见标题只能由 title props 动态提供，renderer 不得内置加载文案；不使用 children、dataPath 或 actions"},' +
-    '{"name":"ExpandableCard","role":"复合交互组件","usage":"展示可折叠摘要、可选方图、信息行与详情入口；全部可见内容必须用 dataPath 绑定 {eyebrow?,title,summary?,thumbnailAssetKey?,rows,expanded?} 动态提供；最多一个已提供的 action，renderer 不得内置文案，不使用 children"},' +
+    '{"name":"ExpandableCard","role":"复合交互组件","usage":"展示一条数据的可折叠摘要、信息行与详情；通常用 dataPath 绑定对象；作为 List 的 item 模板时可省略 dataPath（或使用 /）以读取当前 item scope；最多一个已提供的 action，renderer 不得内置业务文案，不使用 children"},' +
     '{"name":"MediaSlider","role":"复合媒体组件","usage":"展示可横向滑动的图片或视频卡组，全部可见标题和媒体描述必须用 dataPath 绑定 Array<{id,kind,title,assetKey,posterAssetKey?,alt}> 动态提供；媒体只能引用预登记 assetKey，actions 必须引用已提供的 offerId，renderer 不得内置文案，不使用 children"},' +
     '{"name":"SceneTabs","role":"复合导航组件","usage":"展示同一主题下的场景分页，全部可见 tab 标签、标题、正文和指标必须用 dataPath 绑定 Array<{id,icon,label,title,body,metrics}> 动态提供；tab 切换由客户端处理，renderer 不得内置场景文案，不使用 children 或 actions"},' +
-    '{"name":"MasonryGrid","role":"复合布局组件","usage":"展示固定双列不等高信息卡，全部可见标题和正文必须用 dataPath 绑定 Array<{id,title,body,tone,height}> 动态提供；tone 仅允许 blue、peach、mint，height 仅允许 regular、tall，renderer 不得内置文案，不使用 children 或 actions"}' +
+    '{"name":"MasonryGrid","role":"复合布局组件","usage":"展示固定双列不等高信息卡，全部可见标题和正文必须用 dataPath 绑定 Array<{id,title,body,tone,height}> 动态提供；tone 仅允许 blue、peach、mint，height 仅允许 regular、tall，renderer 不得内置文案，不使用 children 或 actions"},' +
+    '{"name":"List","role":"动态布局组件","usage":"对数组逐项重复一个模板组件；必须使用 A2UI v0.9 官方 children 对象 {path:ARRAY_PATH,componentId:TEMPLATE_ID}，其中 path 是允许的最窄数组路径，componentId 是真实模板组件 id；不得改写为静态 children 数组或自行添加 dataPath/child；模板组件从当前 item scope 取值，适合 List + ExpandableCard 的一项一卡布局；最多渲染有限项，不承载 actions 或可见业务文案"}' +
   ']';

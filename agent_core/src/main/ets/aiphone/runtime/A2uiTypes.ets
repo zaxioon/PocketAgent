@@ -30,6 +30,13 @@ export const A2UI_COMPONENT_SOCIAL_HUB: string = 'SocialHub';
 export const A2UI_COMPONENT_STRIPE_RECEIVING_ACCOUNT_CARD: string = 'StripeReceivingAccountCard';
 export const A2UI_COMPONENT_AGGREGATE_SEARCH: string = 'AggregateSearch';
 export const A2UI_COMPONENT_MULTI_TASK_BOARD: string = 'MultiTaskBoard';
+export const A2UI_COMPONENT_SCHEDULE_STACK: string = 'ScheduleStack';
+export const A2UI_COMPONENT_SKELETON_CARD: string = 'SkeletonCard';
+export const A2UI_COMPONENT_EXPANDABLE_CARD: string = 'ExpandableCard';
+export const A2UI_COMPONENT_MEDIA_SLIDER: string = 'MediaSlider';
+export const A2UI_COMPONENT_SCENE_TABS: string = 'SceneTabs';
+export const A2UI_COMPONENT_MASONRY_GRID: string = 'MasonryGrid';
+export const A2UI_COMPONENT_LIST: string = 'List';
 
 export interface A2uiAction {
   id: string;

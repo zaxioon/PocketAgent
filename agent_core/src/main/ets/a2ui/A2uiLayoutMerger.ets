@@ -1,6 +1,11 @@
 import { ActionOffer } from '../agent/action/ActionOfferTypes';
 import { AIPHONE_COMPONENT_CATALOG_JSON } from '../aiphone/runtime/A2uiComponentCatalogConst';
-import { A2uiAction, A2uiComponent, A2uiEnvelope } from '../aiphone/runtime/A2uiTypes';
+import {
+  A2UI_COMPONENT_LIST,
+  A2uiAction,
+  A2uiComponent,
+  A2uiEnvelope
+} from '../aiphone/runtime/A2uiTypes';
 
 type JsonValue = Object | string | number | boolean | null | undefined;
 type JsonRecord = Record<string, JsonValue>;
@@ -16,6 +21,12 @@ interface LayoutBaseline {
   componentEnvelope: A2uiEnvelope;
   rootId: string;
   dataPaths: string[];
+}
+
+export interface A2uiLayoutMergeResult {
+  jsonl: string;
+  accepted: boolean;
+  reason: string;
 }
 
 function objectRecord(value: JsonValue): JsonRecord | null {
@@ -125,7 +136,27 @@ function validDataPath(path: string, baselinePaths: string[]): boolean {
   return false;
 }
 
+function listChildren(record: JsonRecord): JsonRecord | null {
+  if (record['component'] !== A2UI_COMPONENT_LIST) {
+    return null;
+  }
+  const children = objectRecord(record['children']);
+  if (children === null || !exactKeys(children, ['componentId', 'path']) ||
+    typeof children['componentId'] !== 'string' || (children['componentId'] as string).length === 0 ||
+    typeof children['path'] !== 'string' || (children['path'] as string).length === 0) {
+    return null;
+  }
+  return children;
+}
+
 function childIds(record: JsonRecord): string[] | null {
+  if (record['component'] === A2UI_COMPONENT_LIST) {
+    if (record['child'] !== undefined || record['dataPath'] !== undefined) {
+      return null;
+    }
+    const dynamicChildren = listChildren(record);
+    return dynamicChildren === null ? null : [dynamicChildren['componentId'] as string];
+  }
   if (record['child'] !== undefined && record['children'] !== undefined) {
     return null;
   }
@@ -246,6 +277,7 @@ function candidateComponents(
   const byId: Map<string, JsonRecord> = new Map<string, JsonRecord>();
   const childrenById: Map<string, string[]> = new Map<string, string[]>();
   const parentCount: Map<string, number> = new Map<string, number>();
+  const listTemplateIds: Set<string> = new Set<string>();
   const output: A2uiComponent[] = [];
   const usedOffers: Set<string> = new Set<string>();
   for (let index = 0; index < rawComponents.length; index++) {
@@ -260,8 +292,19 @@ function candidateComponents(
       return null;
     }
     if (record['dataPath'] !== undefined &&
-      (typeof record['dataPath'] !== 'string' || !validDataPath(record['dataPath'] as string, baselinePaths))) {
+      (typeof record['dataPath'] !== 'string' ||
+        (record['dataPath'] !== '/' && !validDataPath(record['dataPath'] as string, baselinePaths)))) {
       return null;
+    }
+    if (record['component'] === A2UI_COMPONENT_LIST) {
+      if (record['actions'] !== undefined) {
+        return null;
+      }
+      const dynamicChildren = listChildren(record);
+      if (dynamicChildren === null || !validDataPath(dynamicChildren['path'] as string, baselinePaths)) {
+        return null;
+      }
+      listTemplateIds.add(dynamicChildren['componentId'] as string);
     }
     const childList = childIds(record);
     if (childList === null) {
@@ -287,6 +330,47 @@ function candidateComponents(
   }
   if (!byId.has(rootId)) {
     return null;
+  }
+  const listIds: string[] = [];
+  listTemplateIds.forEach((templateId: string) => {
+    const template = byId.get(templateId);
+    if (template === undefined || template['component'] === A2UI_COMPONENT_LIST || template['actions'] !== undefined) {
+      listIds.push('');
+    }
+  });
+  if (listIds.indexOf('') >= 0) {
+    return null;
+  }
+  byId.forEach((record: JsonRecord, id: string) => {
+    if (record['component'] === A2UI_COMPONENT_LIST) {
+      listIds.push(id);
+    }
+  });
+  for (let index = 0; index < listIds.length; index++) {
+    const descendants: string[] = (childrenById.get(listIds[index]) ?? []).slice();
+    const checked: Set<string> = new Set<string>();
+    while (descendants.length > 0) {
+      const descendantId = descendants.shift();
+      if (descendantId === undefined || checked.has(descendantId)) {
+        return null;
+      }
+      checked.add(descendantId);
+      const descendant = byId.get(descendantId);
+      if (descendant === undefined || descendant['component'] === A2UI_COMPONENT_LIST ||
+        descendant['actions'] !== undefined) {
+        return null;
+      }
+      const grandchildren = childrenById.get(descendantId) ?? [];
+      for (let childIndex = 0; childIndex < grandchildren.length; childIndex++) {
+        descendants.push(grandchildren[childIndex]);
+      }
+    }
+  }
+  for (let index = 0; index < output.length; index++) {
+    const component = output[index];
+    if (component.dataPath === '/' && !listTemplateIds.has(component.id)) {
+      return null;
+    }
   }
   const ids = Array.from(byId.keys());
   for (let index = 0; index < ids.length; index++) {
@@ -372,18 +456,38 @@ export function mergeA2uiLayout(
   offers: ActionOffer[],
   componentCatalogJson: string = AIPHONE_COMPONENT_CATALOG_JSON
 ): string {
-  if (baselineJsonl.length === 0 || candidateJsonl.length === 0 || surfaceId.length === 0) {
+  const result = mergeA2uiLayoutWithStatus(
+    baselineJsonl,
+    candidateJsonl,
+    surfaceId,
+    offers,
+    componentCatalogJson
+  );
+  if (!result.accepted) {
     return baselineJsonl;
+  }
+  return result.jsonl;
+}
+
+export function mergeA2uiLayoutWithStatus(
+  baselineJsonl: string,
+  candidateJsonl: string,
+  surfaceId: string,
+  offers: ActionOffer[],
+  componentCatalogJson: string = AIPHONE_COMPONENT_CATALOG_JSON
+): A2uiLayoutMergeResult {
+  if (baselineJsonl.length === 0 || candidateJsonl.length === 0 || surfaceId.length === 0) {
+    return { jsonl: baselineJsonl, accepted: false, reason: 'empty_input' };
   }
   const lines = baselineJsonl.split('\n');
   const baseline = baselineOf(lines, surfaceId);
   if (baseline === null) {
-    return baselineJsonl;
+    return { jsonl: baselineJsonl, accepted: false, reason: 'invalid_baseline' };
   }
   const candidate = candidateEnvelope(candidateJsonl, surfaceId, baseline, offers, componentCatalogJson);
   if (candidate === null) {
-    return baselineJsonl;
+    return { jsonl: baselineJsonl, accepted: false, reason: 'candidate_rejected' };
   }
   lines[baseline.componentLineIndex] = JSON.stringify(candidate);
-  return lines.join('\n');
+  return { jsonl: lines.join('\n'), accepted: true, reason: 'accepted' };
 }

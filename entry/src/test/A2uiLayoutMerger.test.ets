@@ -1,7 +1,10 @@
 import { describe, expect, it } from '@ohos/hypium';
 import {
   ActionOffer,
+  aiLogChunks,
+  buildA2uiLayoutSystemPrompt,
   mergeA2uiLayout,
+  mergeA2uiLayoutWithStatus,
   UI_AGENT_LAB_COMPONENT_CATALOG_JSON
 } from '@loop/agent-core';
 
@@ -41,7 +44,7 @@ interface ComponentCatalogEntry {
 
 const LAB_COMPONENT_NAMES: string[] = [
   'SurfaceRoot', 'Column', 'Row', 'Text', 'InfoRows', 'ActionBar', 'ErrorNotice', 'ThinkingStream',
-  'ThinkingCard', 'ScheduleStack', 'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs', 'MasonryGrid'
+  'ThinkingCard', 'ScheduleStack', 'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs', 'MasonryGrid', 'List'
 ];
 
 interface HotelIdArg {
@@ -75,6 +78,52 @@ export default function a2uiLayoutMergerTest() {
       expect(mergedLines[1].includes('"hotelId":1')).assertTrue();
     });
 
+    it('reports accepted and fallback merge outcomes without changing jsonl', 0, () => {
+      const accepted = mergeA2uiLayoutWithStatus(BASELINE, VALID_CANDIDATE, SURFACE_ID, offers());
+      const rejected = mergeA2uiLayoutWithStatus(BASELINE, '{}', SURFACE_ID, offers());
+      expect(accepted.accepted).assertTrue();
+      expect(accepted.reason).assertEqual('accepted');
+      expect(accepted.jsonl).assertEqual(mergeA2uiLayout(BASELINE, VALID_CANDIDATE, SURFACE_ID, offers()));
+      expect(rejected.accepted).assertFalse();
+      expect(rejected.reason).assertEqual('candidate_rejected');
+      expect(rejected.jsonl).assertEqual(BASELINE);
+    });
+
+    it('splits complete log payloads into lossless ordered chunks', 0, () => {
+      const source = 'x'.repeat(1001) + '\n中文' + 'y'.repeat(1002);
+      const chunks = aiLogChunks(source);
+      let rebuilt = '';
+      for (let index = 0; index < chunks.length; index++) {
+        expect(chunks[index].index).assertEqual(index + 1);
+        expect(chunks[index].total).assertEqual(chunks.length);
+        rebuilt += chunks[index].content;
+      }
+      expect(chunks.length).assertEqual(3);
+      expect(rebuilt).assertEqual(source);
+    });
+
+    it('includes one complete generic A2UI protocol-shape example in the layout prompt', 0, () => {
+      const prompt = buildA2uiLayoutSystemPrompt(SURFACE_ID, UI_AGENT_LAB_COMPONENT_CATALOG_JSON);
+      const example =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["summary","project-list"]},' +
+        '{"id":"summary","component":"Text","dataPath":"/summary/text"},' +
+        '{"id":"project-list","component":"List","children":{"path":"/results/0/data/projects","componentId":"project-card"}},' +
+        '{"id":"project-card","component":"ExpandableCard"}' +
+        ']}}';
+      expect(prompt.includes(example)).assertTrue();
+      expect(prompt.includes('actual allowedDataPaths and component catalog')).assertTrue();
+      expect(prompt.includes('Use "component", never "type"')).assertTrue();
+      expect(prompt.includes('nested "props" object')).assertTrue();
+      expect(prompt.includes('Prefer the narrowest allowed path')).assertTrue();
+      expect(prompt.includes('current item scope')).assertTrue();
+      expect(example.includes('"type"')).assertFalse();
+      expect(example.includes('"props"')).assertFalse();
+      expect(example.includes('餐馆')).assertFalse();
+      expect(example.includes('food')).assertFalse();
+    });
+
     it('keeps the business catalog as the default', 0, () => {
       const merged: string = mergeA2uiLayout(BASELINE, VALID_CANDIDATE, SURFACE_ID, offers());
       expect(merged === BASELINE).assertFalse();
@@ -94,9 +143,9 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(BASELINE, LAB_CANDIDATE, SURFACE_ID, [])).assertEqual(BASELINE);
     });
 
-    it('keeps the UI Lab allowlist fixed at fifteen components without BentoGrid', 0, () => {
+    it('keeps the UI Lab allowlist fixed at sixteen components without BentoGrid', 0, () => {
       const catalog = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as ComponentCatalogEntry[];
-      expect(catalog.length).assertEqual(15);
+      expect(catalog.length).assertEqual(16);
       for (let index = 0; index < LAB_COMPONENT_NAMES.length; index++) {
         expect(catalog[index].name).assertEqual(LAB_COMPONENT_NAMES[index]);
       }
@@ -108,6 +157,67 @@ export default function a2uiLayoutMergerTest() {
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       )).assertEqual(BASELINE);
+    });
+
+    it('accepts an official List template and rejects unbound or invalid scoped layouts', 0, () => {
+      const valid =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"items"},' +
+        '{"id":"items","component":"List","children":{"path":"/genericToolResults","componentId":"item-card"}},' +
+        '{"id":"item-card","component":"ExpandableCard"}]}}';
+      const unbound = valid.replace(
+        '"children":{"path":"/genericToolResults","componentId":"item-card"}',
+        '"children":["item-card"]'
+      );
+      const invalidPath = valid.replace('/genericToolResults', '/secret');
+      const listAction = valid.replace(
+        '"component":"List","children"',
+        '"component":"List","actions":[],"children"'
+      );
+      const templateAction = valid.replace(
+        '{"id":"item-card","component":"ExpandableCard"}',
+        '{"id":"item-card","component":"ExpandableCard","actions":[]}'
+      );
+      const templateRootScope = valid.replace(
+        '{"id":"item-card","component":"ExpandableCard"}',
+        '{"id":"item-card","component":"ExpandableCard","dataPath":"/"}'
+      );
+      const nestedList = valid.replace(
+        '{"id":"item-card","component":"ExpandableCard"}',
+        '{"id":"item-card","component":"List","children":' +
+        '{"path":"/genericToolResults","componentId":"nested-card"}},' +
+        '{"id":"nested-card","component":"ExpandableCard"}'
+      );
+      const nestedTemplateAction = valid.replace(
+        '{"id":"item-card","component":"ExpandableCard"}',
+        '{"id":"item-card","component":"Column","children":["nested-action"]},' +
+        '{"id":"nested-action","component":"ActionBar","actions":[]}'
+      );
+      const rootScope = valid.replace(
+        '{"id":"root","component":"SurfaceRoot","child":"items"}',
+        '{"id":"root","component":"SurfaceRoot","child":"items","dataPath":"/"}'
+      );
+      const scopeBaseline = BASELINE +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/","value":{}}}\n';
+      const merged = mergeA2uiLayout(BASELINE, valid, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON);
+
+      expect(merged === BASELINE).assertFalse();
+      expect(merged.includes('"component":"List"')).assertTrue();
+      expect(merged.includes('"componentId":"item-card"')).assertTrue();
+      expect(mergeA2uiLayout(BASELINE, unbound, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(BASELINE, invalidPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(BASELINE, listAction, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(BASELINE, templateAction, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(
+        BASELINE,
+        templateRootScope,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === BASELINE).assertFalse();
+      expect(mergeA2uiLayout(BASELINE, nestedList, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(BASELINE, nestedTemplateAction, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(scopeBaseline, rootScope, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(scopeBaseline);
     });
 
     it('rejects business components when the UI Lab catalog is selected', 0, () => {

@@ -6,6 +6,45 @@ export interface UiAgentLabStatusPayload {
   responseChars: number;
 }
 
+type UiAgentLabDataValue = Object | string | number | boolean | null | undefined;
+type UiAgentLabDataRecord = Record<string, UiAgentLabDataValue>;
+
+function uiAgentLabDataRecord(value: UiAgentLabDataValue): UiAgentLabDataRecord | null {
+  if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as UiAgentLabDataRecord;
+}
+
+function decodeUiAgentLabPointerSegment(segment: string): string {
+  return segment.split('~1').join('/').split('~0').join('~');
+}
+
+export function resolveUiAgentLabDataPath(
+  model: UiAgentLabDataValue,
+  path: string
+): UiAgentLabDataValue {
+  if (path.length === 0 || path.charAt(0) !== '/') return undefined;
+  if (path === '/') return model;
+  const segments = path.substring(1).split('/');
+  let current: UiAgentLabDataValue = model;
+  for (let index = 0; index < segments.length; index++) {
+    const key = decodeUiAgentLabPointerSegment(segments[index]);
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(key)) return undefined;
+      const values = current as UiAgentLabDataValue[];
+      const arrayIndex = Number(key);
+      if (arrayIndex >= values.length) return undefined;
+      current = values[arrayIndex];
+      continue;
+    }
+    const source = uiAgentLabDataRecord(current);
+    if (source === null || Object.keys(source).indexOf(key) < 0) return undefined;
+    current = source[key];
+  }
+  return current;
+}
+
 function scriptString(value: string): string {
   let encoded = '"';
   for (let index = 0; index < value.length; index++) {
@@ -49,6 +88,12 @@ export function createUiAgentLabHtmlShell(): string {
     .title p { margin:3px 0 0; color:var(--muted); font-size:12px; }
     .surface-viewport { min-height:0; border-radius:30px; overflow:auto; overscroll-behavior:contain; padding:18px; text-align:left; }
     .surface-root,.lab-column { width:100%; display:flex; flex-direction:column; gap:12px; }
+    .lab-list { display:flex; flex-direction:column; gap:10px; min-width:0; }
+    .lab-list-items { display:flex; flex-direction:column; gap:10px; min-width:0; }
+    .list-pager { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:2px 4px 0; }
+    .list-page-status { color:var(--muted); font-size:12px; }
+    .list-more { min-height:34px; border:0; border-radius:999px; padding:0 14px; color:white; background:linear-gradient(145deg,#5b91ff,#2867eb); }
+    .list-more:disabled { color:var(--muted); background:rgba(255,255,255,.56); box-shadow:inset 0 0 0 1px rgba(84,79,71,.08); }
     .lab-row { width:100%; display:flex; gap:10px; align-items:stretch; overflow-x:auto; }
     .lab-row>* { min-width:0; flex:1 1 0; }
     .empty { min-height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:28px; }
@@ -97,6 +142,15 @@ export function createUiAgentLabHtmlShell(): string {
     .expandable-panel-inner { min-height:0; overflow:hidden; margin-top:0; padding-top:0; border-top:1px solid transparent; transition:margin-top .34s cubic-bezier(.22,1,.36,1),padding-top .34s cubic-bezier(.22,1,.36,1),border-color .22s cubic-bezier(.22,1,.36,1); }
     .expandable-card.is-open .expandable-panel { grid-template-rows:1fr; opacity:1; transform:translateY(0); }
     .expandable-card.is-open .expandable-panel-inner { margin-top:12px; padding-top:12px; border-color:var(--line); }
+    .expandable-data { display:flex; flex-direction:column; gap:9px; min-width:0; }
+    .expandable-data+.expandable-data,.expandable-data>.expandable-data { margin-top:4px; }
+    .expandable-data-title { margin:0; color:var(--ink); font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
+    .expandable-item { padding:10px 0 0; border-top:1px solid var(--line); }
+    .expandable-item:first-child { padding-top:0; border-top:0; }
+    .expandable-field { display:grid; grid-template-columns:minmax(72px,.72fr) minmax(0,1.28fr); gap:12px; }
+    .expandable-field-label { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+    .expandable-field-value { font-size:13px; text-align:right; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .expandable-limit { color:var(--muted); font-size:11px; line-height:1.45; }
     .media-slider { display:flex; gap:11px; overflow-x:auto; scroll-snap-type:x mandatory; padding-bottom:3px; }
     .media-card { min-width:76%; scroll-snap-align:start; border:0; border-radius:20px; padding:0; overflow:hidden; text-align:left; color:var(--ink); background:rgba(255,255,255,.65); }
     .media-frame { height:112px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#bfd3ff,#ffd0bd 52%,#b9e8d6); color:rgba(32,36,43,.72); font-size:11px; letter-spacing:.08em; }
@@ -157,6 +211,10 @@ export function createUiAgentLabHtmlShell(): string {
         if(typeof value==='string'||typeof value==='number'||typeof value==='boolean')return String(value);
         return typeof fallback==='string'?fallback:'';
       }
+      function nonEmptyText(value,fallback){
+        var candidate=text(value);
+        return candidate.trim().length>0?candidate:text(fallback);
+      }
       function record(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:null;}
       function list(value){return Array.isArray(value)?value:[];}
       function node(tag,className,content){
@@ -191,7 +249,11 @@ export function createUiAgentLabHtmlShell(): string {
         return current;
       }
       function componentValue(component,context){
-        return typeof component.dataPath==='string'?pointer(context.model,component.dataPath):undefined;
+        if(context.hasItemScope===true){
+          if(typeof component.dataPath!=='string'||component.dataPath.length===0||component.dataPath==='/')return context.itemScope;
+          return pointer(context.itemScope,component.dataPath);
+        }
+        return typeof component.dataPath==='string'&&component.dataPath.length>0?pointer(context.model,component.dataPath):undefined;
       }
       function card(title,body,className){
         var result=node('article','lab-card'+(className?' '+className:''));
@@ -219,6 +281,26 @@ export function createUiAgentLabHtmlShell(): string {
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.Row=function(component,context,trail){
         var row=node('div','lab-row'); appendChildren(row,component,context,trail); return row;
+      };
+      var LIST_PAGE_SIZE=8;
+      UI_AGENT_LAB_COMPONENT_REGISTRY.List=function(component,context,trail){
+        var wrapper=node('section','lab-list'),items=componentValue(component,context),templateId=text(component.child);
+        if(!Array.isArray(items)||items.length===0){wrapper.appendChild(node('p','lab-card-copy','暂无内容'));return wrapper;}
+        if(!templateId){wrapper.appendChild(safeError('List 缺少模板','没有可用的 componentId。'));return wrapper;}
+        var itemHost=node('div','lab-list-items'),pager=node('div','list-pager'),status=node('span','list-page-status');
+        var more=node('button','list-more','加载更多'),visibleCount=0;more.type='button';
+        function appendPage(){
+          var nextCount=Math.min(visibleCount+LIST_PAGE_SIZE,items.length);
+          items.slice(visibleCount,nextCount).forEach(function(item){
+            var itemContext={surface:context.surface,model:context.model,byId:context.byId,hasItemScope:true,itemScope:item};
+            itemHost.appendChild(renderById(templateId,itemContext,trail));
+          });
+          visibleCount=nextCount;status.textContent='已显示 '+String(visibleCount)+' / '+String(items.length);
+          more.disabled=visibleCount>=items.length;more.textContent=more.disabled?'已显示全部':'加载更多';
+        }
+        more.addEventListener('click',appendPage);pager.appendChild(status);pager.appendChild(more);
+        wrapper.appendChild(itemHost);wrapper.appendChild(pager);appendPage();
+        return wrapper;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.Text=function(component,context){
         var value=componentValue(component,context);
@@ -295,12 +377,85 @@ export function createUiAgentLabHtmlShell(): string {
         copy.appendChild(node('i','skeleton-bar'));copy.appendChild(node('i','skeleton-bar short'));copy.appendChild(node('i','skeleton-bar'));
         wrapper.appendChild(media);wrapper.appendChild(copy);wrapper.setAttribute('role','status');wrapper.setAttribute('aria-label','内容加载中');return wrapper;
       };
+      var EXPANDABLE_MAX_DEPTH=4,EXPANDABLE_MAX_NODES=72,EXPANDABLE_MAX_ARRAY_ITEMS=12,EXPANDABLE_MAX_OBJECT_FIELDS=16;
+      function appendExpandableLimit(parent,budget,message){
+        if(budget.notified)return;
+        budget.notified=true;
+        parent.appendChild(node('p','expandable-limit',message||'其余内容已折叠，避免页面过长。'));
+      }
+      function takeExpandableBudget(parent,budget){
+        if(budget.remaining<=0){appendExpandableLimit(parent,budget);return false;}
+        budget.remaining-=1;return true;
+      }
+      function expandableIdentity(source){
+        if(!source)return '';
+        return nonEmptyText(source.title,nonEmptyText(source.name,source.label));
+      }
+      function appendExpandableField(parent,label,value,budget){
+        if(!takeExpandableBudget(parent,budget))return false;
+        var row=node('div','expandable-field');
+        row.appendChild(node('span','expandable-field-label',label));
+        row.appendChild(node('span','expandable-field-value',value===null?'—':text(value)));
+        parent.appendChild(row);return true;
+      }
+      function appendExpandableValue(parent,value,label,depth,budget){
+        if(depth>EXPANDABLE_MAX_DEPTH){appendExpandableLimit(parent,budget,'嵌套内容已达到显示深度上限。');return false;}
+        if(value===undefined)return false;
+        if(value===null||typeof value==='string'||typeof value==='number'||typeof value==='boolean'){
+          return appendExpandableField(parent,label||'值',value,budget);
+        }
+        if(Array.isArray(value)){
+          if(!takeExpandableBudget(parent,budget))return false;
+          var arraySection=node('section','expandable-data');
+          if(nonEmptyText(label))arraySection.appendChild(node('h4','expandable-data-title',label));
+          var visible=value.slice(0,EXPANDABLE_MAX_ARRAY_ITEMS);
+          visible.forEach(function(item,index){
+            if(budget.remaining<=0){appendExpandableLimit(arraySection,budget);return;}
+            var itemRecord=record(item),itemHost=node('article','expandable-item');
+            if(itemRecord){
+              var itemTitle=expandableIdentity(itemRecord)||'项目 '+String(index+1);
+              itemHost.appendChild(node('h5','expandable-data-title',itemTitle));
+              appendExpandableValue(itemHost,itemRecord,'',depth+1,budget);
+            }else{
+              appendExpandableValue(itemHost,item,'项目 '+String(index+1),depth+1,budget);
+            }
+            if(itemHost.firstChild)arraySection.appendChild(itemHost);
+          });
+          if(value.length===0)arraySection.appendChild(node('p','lab-card-copy','暂无内容'));
+          if(value.length>visible.length)arraySection.appendChild(node('p','expandable-limit','还有 '+String(value.length-visible.length)+' 项未显示。'));
+          parent.appendChild(arraySection);return true;
+        }
+        var source=record(value);
+        if(!source)return false;
+        if(!takeExpandableBudget(parent,budget))return false;
+        var objectSection=node('section','expandable-data'),identity=expandableIdentity(source);
+        if(nonEmptyText(label))objectSection.appendChild(node('h4','expandable-data-title',identity?label+': '+identity:label));
+        var keys=Object.keys(source),visibleKeys=keys.slice(0,EXPANDABLE_MAX_OBJECT_FIELDS),rendered=false;
+        visibleKeys.forEach(function(key){
+          if(budget.remaining<=0){appendExpandableLimit(objectSection,budget);return;}
+          var child=source[key];
+          if((key==='title'||key==='name'||key==='label')&&text(child)===identity)return;
+          if(child===null||typeof child==='string'||typeof child==='number'||typeof child==='boolean'){
+            rendered=appendExpandableField(objectSection,key,child,budget)||rendered;
+          }else{
+            rendered=appendExpandableValue(objectSection,child,key,depth+1,budget)||rendered;
+          }
+        });
+        if(keys.length>visibleKeys.length)objectSection.appendChild(node('p','expandable-limit','还有 '+String(keys.length-visibleKeys.length)+' 个字段未显示。'));
+        if(!rendered&&keys.length===0)objectSection.appendChild(node('p','lab-card-copy','暂无内容'));
+        parent.appendChild(objectSection);return true;
+      }
       UI_AGENT_LAB_COMPONENT_REGISTRY.ExpandableCard=function(component,context){
-        var value=record(componentValue(component,context))||Object.create(null),wrapper=node('article','lab-card expandable-card');
-        var trigger=node('button','expandable-trigger'),label=node('span','',text(component.title,text(value.title,'展开详情'))),icon=node('span','','+');
+        var value=componentValue(component,context),valueRecord=record(value),wrapper=node('article','lab-card expandable-card');
+        var title=nonEmptyText(component.title,nonEmptyText(valueRecord?valueRecord.title:undefined,nonEmptyText(valueRecord?valueRecord.name:undefined,nonEmptyText(valueRecord?valueRecord.label:undefined,'展开详情'))));
+        var trigger=node('button','expandable-trigger'),label=node('span','',title),icon=node('span','','+');
         trigger.type='button';trigger.setAttribute('aria-expanded','false');trigger.appendChild(label);trigger.appendChild(icon);
-        var panel=node('div','expandable-panel'),panelInner=node('div','expandable-panel-inner');panel.setAttribute('aria-hidden','true');panelInner.appendChild(node('p','lab-card-copy',text(component.body,text(value.body,value.summary))));
-        itemArray(value,'rows').slice(0,12).forEach(function(item){var rowRecord=record(item);panelInner.appendChild(node('p','lab-card-copy','• '+(rowRecord?text(rowRecord.label)+': '+text(rowRecord.value):text(item))));});panel.appendChild(panelInner);
+        var panel=node('div','expandable-panel'),panelInner=node('div','expandable-panel-inner'),body=nonEmptyText(component.body),rendered=false;
+        panel.setAttribute('aria-hidden','true');
+        if(body){panelInner.appendChild(node('p','lab-card-copy',body));rendered=true;}
+        if(value!==undefined)rendered=appendExpandableValue(panelInner,value,'',0,{remaining:EXPANDABLE_MAX_NODES,notified:false})||rendered;
+        if(!rendered)panelInner.appendChild(node('p','lab-card-copy','暂无详细信息'));
+        panel.appendChild(panelInner);
         trigger.addEventListener('click',function(){var open=wrapper.classList.toggle('is-open');trigger.setAttribute('aria-expanded',open?'true':'false');panel.setAttribute('aria-hidden',open?'false':'true');});
         wrapper.appendChild(trigger);wrapper.appendChild(panel);return wrapper;
       };
@@ -353,7 +508,7 @@ export function createUiAgentLabHtmlShell(): string {
         var model=Object.create(null);try{model=typeof source.dataModelJson==='string'?JSON.parse(source.dataModelJson):(record(source.dataModel)||Object.create(null));}catch(_error){model=Object.create(null);}
         clear(surfaceHost);
         if(typeof source.rootId!=='string'||!source.rootId){surfaceHost.appendChild(safeError('Surface 无根节点','UI Agent 没有提供 rootId。'));return;}
-        surfaceHost.appendChild(renderById(source.rootId,{surface:source,model:model,byId:byId},[]));
+        surfaceHost.appendChild(renderById(source.rootId,{surface:source,model:model,byId:byId,hasItemScope:false,itemScope:undefined},[]));
       };
       var status=document.getElementById('status'),statusText=document.getElementById('statusText'),responseMeta=document.getElementById('responseMeta');
       var prompt=document.getElementById('prompt'),send=document.getElementById('send');

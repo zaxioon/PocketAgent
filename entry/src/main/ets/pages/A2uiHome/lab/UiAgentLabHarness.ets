@@ -15,7 +15,8 @@ import {
   UiRenderResult,
   UiTaskRenderer,
   UserInputPayload,
-  mergeA2uiLayout,
+  aiLogInfo,
+  mergeA2uiLayoutWithStatus,
   toolDefinitionForToolId
 } from '@loop/agent-core';
 import { MultiAgentCanaryRuntime, MultiAgentCanaryOptions } from '../agent/MultiAgentCanaryRuntime';
@@ -29,12 +30,12 @@ const UI_LAB_PATH_LIMIT: number = 96;
 type UiLabJsonValue = Object | string | number | boolean | null | undefined;
 export type UiLabRecord = Record<string, UiLabJsonValue>;
 
-interface UiLabFact {
+export interface UiLabFact {
   label: string;
   value: string;
 }
 
-interface UiLabResultSnapshot {
+export interface UiLabResultSnapshot {
   dataTaskId: string;
   toolId: string;
   outputSchema: string;
@@ -44,14 +45,14 @@ interface UiLabResultSnapshot {
   data: Object;
 }
 
-interface UiLabSummary {
+export interface UiLabSummary {
   text: string;
   toolName: string;
   dataLabel: string;
   count: number;
 }
 
-interface UiLabSnapshot {
+export interface UiLabSnapshot {
   summary: UiLabSummary;
   results: UiLabResultSnapshot[];
 }
@@ -230,6 +231,181 @@ function pointerToken(value: string): string {
   return value.split('~').join('~0').split('/').join('~1');
 }
 
+function decodePointerToken(value: string): string | null {
+  let decoded = '';
+  for (let index = 0; index < value.length; index++) {
+    const current = value.charAt(index);
+    if (current !== '~') {
+      decoded += current;
+      continue;
+    }
+    if (index + 1 >= value.length) return null;
+    const escaped = value.charAt(index + 1);
+    if (escaped === '0') decoded += '~';
+    else if (escaped === '1') decoded += '/';
+    else return null;
+    index++;
+  }
+  return decoded;
+}
+
+function pointerParts(path: string): string[] | null {
+  if (path.length === 0 || path.charAt(0) !== '/' || path === '/') return null;
+  const encoded = path.substring(1).split('/');
+  const decoded: string[] = [];
+  for (let index = 0; index < encoded.length; index++) {
+    const part = decodePointerToken(encoded[index]);
+    if (part === null) return null;
+    decoded.push(part);
+  }
+  return decoded;
+}
+
+function valueAtPointer(root: UiLabJsonValue, path: string): UiLabJsonValue {
+  if (path === '/') return root;
+  const parts = pointerParts(path);
+  if (parts === null) return undefined;
+  let current = root;
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(part)) return undefined;
+      const values = current as UiLabJsonValue[];
+      const itemIndex = Number(part);
+      if (itemIndex >= values.length) return undefined;
+      current = values[itemIndex];
+      continue;
+    }
+    const source = recordOf(current);
+    if (source === null || Object.keys(source).indexOf(part) < 0) return undefined;
+    current = source[part];
+  }
+  return current;
+}
+
+function replaceArrayAtPointer(root: UiLabJsonValue, path: string, value: UiLabJsonValue[]): boolean {
+  const parts = pointerParts(path);
+  if (parts === null) return false;
+  let current = root;
+  for (let index = 0; index < parts.length - 1; index++) {
+    const part = parts[index];
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(part)) return false;
+      const values = current as UiLabJsonValue[];
+      const itemIndex = Number(part);
+      if (itemIndex >= values.length) return false;
+      current = values[itemIndex];
+      continue;
+    }
+    const source = recordOf(current);
+    if (source === null || Object.keys(source).indexOf(part) < 0) return false;
+    current = source[part];
+  }
+  const last = parts[parts.length - 1];
+  let cloned: UiLabJsonValue[];
+  try {
+    cloned = JSON.parse(JSON.stringify(value)) as UiLabJsonValue[];
+  } catch (_error) {
+    return false;
+  }
+  if (Array.isArray(current)) {
+    if (!/^(0|[1-9][0-9]*)$/.test(last)) return false;
+    const values = current as UiLabJsonValue[];
+    const itemIndex = Number(last);
+    if (itemIndex >= values.length || !Array.isArray(values[itemIndex])) return false;
+    values[itemIndex] = cloned as Object;
+    return true;
+  }
+  const source = recordOf(current);
+  if (source === null || Object.keys(source).indexOf(last) < 0 || !Array.isArray(source[last])) return false;
+  source[last] = cloned as Object;
+  return true;
+}
+
+function listPathsOfMergedLayout(jsonl: string, surfaceId: string): string[] {
+  const paths: string[] = [];
+  const lines = jsonl.trim().split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    let envelope: UiLabRecord;
+    try {
+      envelope = JSON.parse(lines[lineIndex]) as UiLabRecord;
+    } catch (_error) {
+      continue;
+    }
+    const update = recordOf(envelope['updateComponents']);
+    if (update === null || update['surfaceId'] !== surfaceId || !Array.isArray(update['components'])) continue;
+    const components = update['components'] as UiLabJsonValue[];
+    for (let componentIndex = 0; componentIndex < components.length; componentIndex++) {
+      const component = recordOf(components[componentIndex]);
+      if (component === null || component['component'] !== 'List') continue;
+      const children = recordOf(component['children']);
+      if (children === null || typeof children['path'] !== 'string') continue;
+      const path = children['path'] as string;
+      if (paths.indexOf(path) < 0) paths.push(path);
+    }
+  }
+  return paths;
+}
+
+function fullUiAgentLabSource(snapshot: UiLabSnapshot, data: DataResult[]): UiLabSnapshot {
+  const results: UiLabResultSnapshot[] = [];
+  for (let index = 0; index < snapshot.results.length; index++) {
+    const sampledResult = snapshot.results[index];
+    results.push({
+      dataTaskId: sampledResult.dataTaskId,
+      toolId: sampledResult.toolId,
+      outputSchema: sampledResult.outputSchema,
+      status: sampledResult.status,
+      warnings: sampledResult.warnings,
+      facts: sampledResult.facts,
+      data: index < data.length ? data[index].data : sampledResult.data
+    });
+  }
+  return { summary: snapshot.summary, results };
+}
+
+export function hydrateUiAgentLabSnapshotForMergedLayout(
+  snapshot: UiLabSnapshot,
+  data: DataResult[],
+  mergedJsonl: string,
+  surfaceId: string
+): UiLabSnapshot {
+  const hydrated = JSON.parse(JSON.stringify(snapshot)) as UiLabSnapshot;
+  const fullSource = fullUiAgentLabSource(snapshot, data);
+  const listPaths = listPathsOfMergedLayout(mergedJsonl, surfaceId);
+  for (let index = 0; index < listPaths.length; index++) {
+    const fullValue = valueAtPointer(fullSource as Object, listPaths[index]);
+    const sampledValue = valueAtPointer(hydrated as Object, listPaths[index]);
+    if (!Array.isArray(fullValue) || !Array.isArray(sampledValue)) continue;
+    replaceArrayAtPointer(hydrated as Object, listPaths[index], fullValue as UiLabJsonValue[]);
+  }
+  return hydrated;
+}
+
+export function hydrateUiAgentLabMergedJsonl(
+  mergedJsonl: string,
+  surfaceId: string,
+  snapshot: UiLabSnapshot,
+  data: DataResult[]
+): string {
+  const hydrated = hydrateUiAgentLabSnapshotForMergedLayout(snapshot, data, mergedJsonl, surfaceId);
+  const lines = mergedJsonl.trim().split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    let envelope: UiLabRecord;
+    try {
+      envelope = JSON.parse(lines[index]) as UiLabRecord;
+    } catch (_error) {
+      continue;
+    }
+    const update = recordOf(envelope['updateDataModel']);
+    if (update === null || update['surfaceId'] !== surfaceId || update['path'] !== '/') continue;
+    update['value'] = hydrated as Object;
+    lines[index] = JSON.stringify(envelope);
+    return lines.join('\n') + '\n';
+  }
+  return mergedJsonl;
+}
+
 function collectPaths(value: UiLabJsonValue, path: string, output: UiLabPathValue[]): void {
   if (output.length >= UI_LAB_PATH_LIMIT) return;
   output.push({ path, value });
@@ -277,24 +453,33 @@ function surfaceShell(surfaceId: string, status: string, components: A2uiCompone
   return envelopeLine(create) + envelopeLine(update);
 }
 
-function dataLines(surfaceId: string, snapshot: UiLabSnapshot): string {
+export function uiAgentLabDataJsonl(surfaceId: string, snapshot: UiLabSnapshot): string {
   const values: UiLabPathValue[] = [];
   collectPaths(snapshot.summary as Object, '/summary', values);
   collectPaths(snapshot.results as Object, '/results', values);
   let jsonl = '';
   for (let index = 0; index < values.length; index++) {
-    const update: UiLabUpdateDataModel = {
+    const pathUpdate: UiLabUpdateDataModel = {
       surfaceId,
       path: values[index].path,
       value: values[index].value
     };
-    const envelope: UiLabDataEnvelope = {
+    const pathEnvelope: UiLabDataEnvelope = {
       version: 'v0.9.1',
-      updateDataModel: update
+      updateDataModel: pathUpdate
     };
-    jsonl += envelopeLine(envelope);
+    jsonl += envelopeLine(pathEnvelope);
   }
-  return jsonl;
+  const rootUpdate: UiLabUpdateDataModel = {
+    surfaceId,
+    path: '/',
+    value: snapshot as Object
+  };
+  const rootEnvelope: UiLabDataEnvelope = {
+    version: 'v0.9.1',
+    updateDataModel: rootUpdate
+  };
+  return jsonl + envelopeLine(rootEnvelope);
 }
 
 function offerSourceToolId(offer: ActionOffer, data: DataResult[]): string {
@@ -418,7 +603,8 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     surfaceId: string
   ): Promise<UiRenderResult> {
     const snapshot = buildUiAgentLabSnapshot(task, data);
-    const baseline = surfaceShell(surfaceId, 'ready', baselineComponents(data, offers)) + dataLines(surfaceId, snapshot);
+    const baseline = surfaceShell(surfaceId, 'ready', baselineComponents(data, offers)) +
+      uiAgentLabDataJsonl(surfaceId, snapshot);
     let timerId: number = -1;
     const timeout = new Promise<string | null>((resolve: (value: string | null) => void): void => {
       timerId = setTimeout((): void => resolve(null), UI_LAB_LAYOUT_TIMEOUT_MS);
@@ -428,10 +614,24 @@ class UiAgentLabRenderer implements UiTaskRenderer {
         this.planner.plan(uiAgentLabLayoutPrompt(task, snapshot, offers), surfaceId),
         timeout
       ]);
-      if (candidate === null) return { jsonl: baseline };
+      if (candidate === null) {
+        aiLogInfo('[UiAgentLabLayout] surface=' + surfaceId + ' planner=null fallback=true');
+        return { jsonl: baseline };
+      }
+      const merge = mergeA2uiLayoutWithStatus(
+        baseline,
+        candidate,
+        surfaceId,
+        offers,
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      aiLogInfo(
+        '[UiAgentLabLayout] surface=' + surfaceId + ' mergeAccepted=' + merge.accepted.toString() +
+        ' reason=' + merge.reason
+      );
       return {
         jsonl: annotateActionSources(
-          mergeA2uiLayout(baseline, candidate, surfaceId, offers, UI_AGENT_LAB_COMPONENT_CATALOG_JSON),
+          merge.accepted ? hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data) : merge.jsonl,
           data,
           offers
         )

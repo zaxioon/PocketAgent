@@ -16,6 +16,59 @@ import { SocialHubItemData } from '@loop/agent-core';
 
 export default function a2uiParserTest() {
   describe('a2uiParser', () => {
+    it('accepts the fixed UI Lab catalog components in the shared surface writer parser', 0, () => {
+      const parsed = parseA2uiEnvelope(
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab","components":[' +
+        '{"id":"root","component":"SurfaceRoot","children":["schedule","skeleton","expandable","media","tabs","grid"]},' +
+        '{"id":"schedule","component":"ScheduleStack","dataPath":"/results/0/data"},' +
+        '{"id":"skeleton","component":"SkeletonCard","status":"loading"},' +
+        '{"id":"expandable","component":"ExpandableCard","dataPath":"/results/0/data"},' +
+        '{"id":"media","component":"MediaSlider","dataPath":"/results/0/data"},' +
+        '{"id":"tabs","component":"SceneTabs","dataPath":"/results/0/data"},' +
+        '{"id":"grid","component":"MasonryGrid","dataPath":"/results/0/data"}' +
+        ']}}'
+      );
+
+      expect(parsed.updateComponents !== undefined).assertTrue();
+      if (parsed.updateComponents !== undefined) {
+        expect(parsed.updateComponents.components.length).assertEqual(7);
+        expect(parsed.updateComponents.components[3].component).assertEqual('ExpandableCard');
+        expect(parsed.updateComponents.components[6].component).assertEqual('MasonryGrid');
+      }
+    });
+
+    it('normalizes official List children into internal item binding fields', 0, () => {
+      const parsed = parseA2uiEnvelope(
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab-list","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"items"},' +
+        '{"id":"items","component":"List","children":{"path":"/results/0/data/items","componentId":"item-card"}},' +
+        '{"id":"item-card","component":"ExpandableCard"}]}}'
+      );
+
+      expect(parsed.updateComponents !== undefined).assertTrue();
+      if (parsed.updateComponents !== undefined) {
+        const list = parsed.updateComponents.components[1];
+        expect(list.component).assertEqual('List');
+        expect(list.dataPath).assertEqual('/results/0/data/items');
+        expect(list.child).assertEqual('item-card');
+        expect(list.children?.length).assertEqual(0);
+      }
+    });
+
+    it('rejects a List that uses static children instead of the official binding object', 0, () => {
+      let rejected = false;
+      try {
+        parseA2uiEnvelope(
+          '{"updateComponents":{"surfaceId":"lab-list","components":[' +
+          '{"id":"items","component":"List","children":["item-card"]},' +
+          '{"id":"item-card","component":"ExpandableCard"}]}}'
+        );
+      } catch (_error) {
+        rejected = true;
+      }
+      expect(rejected).assertTrue();
+    });
+
     it('builds a surface from A2UI JSONL envelopes', 0, () => {
       const stream =
         '{"version":"v0.9.1","createSurface":{"surfaceId":"travel","root":"root","title":"北京到上海","intent":"travel","status":"thinking"}}\n' +

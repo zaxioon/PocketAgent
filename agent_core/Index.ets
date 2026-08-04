@@ -86,8 +86,12 @@ export { A2UI_VERSION, AGENUI_CATALOG_ID, buildCreateSurface, buildDeleteSurface
 export { A2uiComponentDef, CreateSurfaceBody, UpdateComponentsBody } from './src/main/ets/a2ui/A2uiTypes';
 export { A2uiModel } from './src/main/ets/a2ui/A2uiModel';
 export { A2uiAgentRunner, A2uiLineListener, A2uiErrorListener, UiLayoutPlanner } from './src/main/ets/a2ui/A2uiAgentRunner';
-export { mergeA2uiLayout } from './src/main/ets/a2ui/A2uiLayoutMerger';
-export { OpenAiA2uiModel } from './src/main/ets/a2ui/OpenAiA2uiModel';
+export {
+  A2uiLayoutMergeResult,
+  mergeA2uiLayout,
+  mergeA2uiLayoutWithStatus
+} from './src/main/ets/a2ui/A2uiLayoutMerger';
+export { buildA2uiLayoutSystemPrompt, OpenAiA2uiModel } from './src/main/ets/a2ui/OpenAiA2uiModel';
 export {
   AIPHONE_COMPONENT_CATALOG_JSON,
   UI_AGENT_LAB_COMPONENT_CATALOG_JSON
