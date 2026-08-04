@@ -19,22 +19,53 @@ export default function a2uiParserTest() {
     it('accepts the fixed UI Lab catalog components in the shared surface writer parser', 0, () => {
       const parsed = parseA2uiEnvelope(
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab","components":[' +
-        '{"id":"root","component":"SurfaceRoot","children":["schedule","skeleton","expandable","media","tabs","grid"]},' +
+        '{"id":"root","component":"SurfaceRoot","children":["schedule","skeleton","expandable","media","tabs","grid",' +
+        '"hero","metrics","ring","line","heat"]},' +
         '{"id":"schedule","component":"ScheduleStack","dataPath":"/results/0/data"},' +
         '{"id":"skeleton","component":"SkeletonCard","status":"loading"},' +
         '{"id":"expandable","component":"ExpandableCard","dataPath":"/results/0/data"},' +
         '{"id":"media","component":"MediaSlider","dataPath":"/results/0/data"},' +
         '{"id":"tabs","component":"SceneTabs","dataPath":"/results/0/data"},' +
-        '{"id":"grid","component":"MasonryGrid","dataPath":"/results/0/data"}' +
+        '{"id":"grid","component":"MasonryGrid","dataPath":"/results/0/data"},' +
+        '{"id":"hero","component":"HeroBanner","text":"OVERVIEW","title":"Summary","body":"Verified results."},' +
+        '{"id":"metrics","component":"MetricGrid","title":"Metrics","dataPath":"/results/0/data"},' +
+        '{"id":"ring","component":"SegmentedRingChart","dataPath":"/results/0/data"},' +
+        '{"id":"line","component":"MultiSeriesLineChart","dataPath":"/results/0/data"},' +
+        '{"id":"heat","component":"MatrixHeatmap","body":"Activity","dataPath":"/results/0/data"}' +
         ']}}'
       );
 
       expect(parsed.updateComponents !== undefined).assertTrue();
       if (parsed.updateComponents !== undefined) {
-        expect(parsed.updateComponents.components.length).assertEqual(7);
+        expect(parsed.updateComponents.components.length).assertEqual(12);
         expect(parsed.updateComponents.components[3].component).assertEqual('ExpandableCard');
         expect(parsed.updateComponents.components[6].component).assertEqual('MasonryGrid');
+        expect(parsed.updateComponents.components[7].component).assertEqual('HeroBanner');
+        expect(parsed.updateComponents.components[11].component).assertEqual('MatrixHeatmap');
       }
+    });
+
+    it('rejects invalid HeroBanner and chart component shapes', 0, () => {
+      const invalidComponents: string[] = [
+        '{"id":"hero","component":"HeroBanner","body":"Missing title"}',
+        '{"id":"hero","component":"HeroBanner","title":"Summary","dataPath":"/summary"}',
+        '{"id":"metrics","component":"MetricGrid","title":"Metrics"}',
+        '{"id":"ring","component":"SegmentedRingChart","dataPath":"/data","actions":[]}',
+        '{"id":"line","component":"MultiSeriesLineChart","dataPath":"/data","children":[]}',
+        '{"id":"heat","component":"MatrixHeatmap","dataPath":"/data","path":"M0 0"}'
+      ];
+      let rejected: number = 0;
+      for (let index = 0; index < invalidComponents.length; index++) {
+        try {
+          parseA2uiEnvelope(
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab","components":[' +
+            invalidComponents[index] + ']}}'
+          );
+        } catch (_error) {
+          rejected++;
+        }
+      }
+      expect(rejected).assertEqual(invalidComponents.length);
     });
 
     it('normalizes official List children into internal item binding fields', 0, () => {

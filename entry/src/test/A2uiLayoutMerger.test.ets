@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@ohos/hypium';
 import {
   ActionOffer,
+  AIPHONE_COMPONENT_CATALOG_JSON,
   aiLogChunks,
   buildA2uiLayoutSystemPrompt,
   mergeA2uiLayout,
@@ -40,11 +41,13 @@ const BENTO_CANDIDATE: string =
 
 interface ComponentCatalogEntry {
   name: string;
+  usage: string;
 }
 
 const LAB_COMPONENT_NAMES: string[] = [
   'SurfaceRoot', 'Column', 'Row', 'Text', 'InfoRows', 'ActionBar', 'ErrorNotice', 'ThinkingStream',
-  'ThinkingCard', 'ScheduleStack', 'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs', 'MasonryGrid', 'List'
+  'ThinkingCard', 'ScheduleStack', 'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs', 'MasonryGrid', 'List',
+  'HeroBanner', 'MetricGrid', 'SegmentedRingChart', 'MultiSeriesLineChart', 'MatrixHeatmap'
 ];
 
 interface HotelIdArg {
@@ -107,21 +110,61 @@ export default function a2uiLayoutMergerTest() {
       const example =
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
         '{"id":"root","component":"SurfaceRoot","child":"content"},' +
-        '{"id":"content","component":"Column","children":["summary","project-list"]},' +
-        '{"id":"summary","component":"Text","dataPath":"/summary/text"},' +
-        '{"id":"project-list","component":"List","children":{"path":"/results/0/data/projects","componentId":"project-card"}},' +
-        '{"id":"project-card","component":"ExpandableCard"}' +
+        '{"id":"content","component":"Column","children":["hero","info","result-list"]},' +
+        '{"id":"hero","component":"HeroBanner",' +
+        '"title":"REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS"},' +
+        '{"id":"info","component":"InfoRows","dataPath":"/summary"},' +
+        '{"id":"result-list","component":"List","children":{"path":"/results","componentId":"result-card"}},' +
+        '{"id":"result-card","component":"ExpandableCard"}' +
         ']}}';
+      const uiLabBaseline =
+        '{"version":"v0.9.1","createSurface":{"surfaceId":"surface-layout-test","root":"root"}}\n' +
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"summary"},' +
+        '{"id":"summary","component":"Text","dataPath":"/summary/text"}]}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/summary","value":{}}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/results","value":[]}}\n';
       expect(prompt.includes(example)).assertTrue();
       expect(prompt.includes('actual allowedDataPaths and component catalog')).assertTrue();
       expect(prompt.includes('Use "component", never "type"')).assertTrue();
       expect(prompt.includes('nested "props" object')).assertTrue();
       expect(prompt.includes('Prefer the narrowest allowed path')).assertTrue();
       expect(prompt.includes('current item scope')).assertTrue();
+      expect(prompt.includes('MUST output exactly one HeroBanner')).assertTrue();
+      expect(prompt.includes('Do not fabricate a HeroBanner summary for an error or no-display-data baseline')).assertTrue();
+      expect(prompt.includes('always the first visible element in the main content container')).assertTrue();
+      expect(prompt.includes('SurfaceRoot.child must reference a Column')).assertTrue();
+      expect(prompt.includes('HeroBanner id must be Column.children[0]')).assertTrue();
+      expect(prompt.includes('leaving sibling components disconnected')).assertTrue();
+      expect(prompt.includes('Every HeroBanner visible string must be rewritten from the current verified results')).assertTrue();
+      expect(prompt.includes('never copy the REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS placeholder')).assertTrue();
+      expect(prompt.includes('sampled array length')).assertTrue();
+      expect(prompt.includes('/summary/count and /summary/text describe how many DataResult sets')).assertTrue();
+      expect(prompt.includes('result.data explicitly labels a scalar as count or total')).assertTrue();
+      expect(prompt.includes('result.data.summary text explicitly supports it')).assertTrue();
+      expect(prompt.includes('must not mechanically list toolId')).assertTrue();
+      expect(prompt.includes('each result gets its own card')).assertTrue();
+      expect(prompt.includes('output no SVG')).assertTrue();
+      expect(prompt.includes('renderer owns all chart geometry and styling')).assertTrue();
       expect(example.includes('"type"')).assertFalse();
       expect(example.includes('"props"')).assertFalse();
+      expect(example.includes('"child":"content"')).assertTrue();
+      expect(example.includes('"children":["hero","info","result-list"]')).assertTrue();
+      expect(example.includes('"title":"REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS"')).assertTrue();
+      expect(example.includes('"text"')).assertFalse();
+      expect(example.includes('"body"')).assertFalse();
+      expect(example.includes('"path":"/results","componentId":"result-card"')).assertTrue();
+      expect(example.includes('"id":"result-card","component":"ExpandableCard"')).assertTrue();
       expect(example.includes('餐馆')).assertFalse();
       expect(example.includes('food')).assertFalse();
+      expect(example.includes('GitHub')).assertFalse();
+      expect(mergeA2uiLayout(
+        uiLabBaseline,
+        example,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === uiLabBaseline).assertFalse();
     });
 
     it('keeps the business catalog as the default', 0, () => {
@@ -143,13 +186,26 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(BASELINE, LAB_CANDIDATE, SURFACE_ID, [])).assertEqual(BASELINE);
     });
 
-    it('keeps the UI Lab allowlist fixed at sixteen components without BentoGrid', 0, () => {
+    it('keeps the UI Lab allowlist fixed at twenty-one components without BentoGrid', 0, () => {
       const catalog = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as ComponentCatalogEntry[];
-      expect(catalog.length).assertEqual(16);
+      expect(catalog.length).assertEqual(21);
       for (let index = 0; index < LAB_COMPONENT_NAMES.length; index++) {
         expect(catalog[index].name).assertEqual(LAB_COMPONENT_NAMES[index]);
       }
+      let heroUsage: string = '';
+      for (let index = 0; index < catalog.length; index++) {
+        if (catalog[index].name === 'HeroBanner') heroUsage = catalog[index].usage;
+      }
+      expect(heroUsage.includes('主内容容器中的第一个可见元素')).assertTrue();
+      expect(heroUsage.includes('必须且只能生成一个 HeroBanner')).assertTrue();
+      expect(heroUsage.includes('错误或无可展示数据的 baseline 不得强造 HeroBanner 概述')).assertTrue();
+      expect(heroUsage.includes('SurfaceRoot.child 必须指向 Column')).assertTrue();
+      expect(heroUsage.includes('Column.children[0]')).assertTrue();
+      expect(heroUsage.includes('不得让 root 只连接 HeroBanner 而留下孤立组件')).assertTrue();
       expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes('"name":"BentoGrid"')).assertFalse();
+      for (let index = 16; index < LAB_COMPONENT_NAMES.length; index++) {
+        expect(AIPHONE_COMPONENT_CATALOG_JSON.includes('"name":"' + LAB_COMPONENT_NAMES[index] + '"')).assertFalse();
+      }
       expect(mergeA2uiLayout(
         BASELINE,
         BENTO_CANDIDATE,
@@ -157,6 +213,53 @@ export default function a2uiLayoutMergerTest() {
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       )).assertEqual(BASELINE);
+    });
+
+    it('accepts constrained UI Lab presentation components and rejects unsafe shapes', 0, () => {
+      const valid =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["hero","metrics","ring","line","heat"]},' +
+        '{"id":"hero","component":"HeroBanner","text":"OVERVIEW","title":"Summary","body":"Verified results."},' +
+        '{"id":"metrics","component":"MetricGrid","title":"Metrics","dataPath":"/genericToolResults"},' +
+        '{"id":"ring","component":"SegmentedRingChart","dataPath":"/genericToolResults"},' +
+        '{"id":"line","component":"MultiSeriesLineChart","dataPath":"/genericToolResults"},' +
+        '{"id":"heat","component":"MatrixHeatmap","body":"Activity","dataPath":"/genericToolResults"}' +
+        ']}}';
+      const duplicateHero = valid.replace(
+        '"children":["hero","metrics","ring","line","heat"]',
+        '"children":["hero","hero-2","metrics","ring","line","heat"]'
+      ).replace(
+        '{"id":"metrics"',
+        '{"id":"hero-2","component":"HeroBanner","title":"Second"},{"id":"metrics"'
+      );
+      const invalid: string[] = [
+        valid.replace(',"title":"Summary"', ''),
+        valid.replace('"title":"Summary"', '"title":"Summary","dataPath":"/summary"'),
+        duplicateHero,
+        valid.replace('"title":"Metrics","dataPath":"/genericToolResults"', '"title":"Metrics"'),
+        valid.replace('"component":"SegmentedRingChart","dataPath"', '"component":"SegmentedRingChart","actions":[],"dataPath"'),
+        valid.replace('"component":"MultiSeriesLineChart","dataPath"', '"component":"MultiSeriesLineChart","children":[],"dataPath"'),
+        valid.replace('"component":"MatrixHeatmap","body"', '"component":"MatrixHeatmap","path":"M0 0","body"')
+      ];
+
+      expect(mergeA2uiLayout(
+        BASELINE,
+        valid,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === BASELINE).assertFalse();
+      expect(mergeA2uiLayout(BASELINE, valid, SURFACE_ID, [])).assertEqual(BASELINE);
+      for (let index = 0; index < invalid.length; index++) {
+        expect(mergeA2uiLayout(
+          BASELINE,
+          invalid[index],
+          SURFACE_ID,
+          [],
+          UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+        )).assertEqual(BASELINE);
+      }
     });
 
     it('accepts an official List template and rejects unbound or invalid scoped layouts', 0, () => {
@@ -177,6 +280,10 @@ export default function a2uiLayoutMergerTest() {
       const templateAction = valid.replace(
         '{"id":"item-card","component":"ExpandableCard"}',
         '{"id":"item-card","component":"ExpandableCard","actions":[]}'
+      );
+      const heroTemplate = valid.replace(
+        '{"id":"item-card","component":"ExpandableCard"}',
+        '{"id":"item-card","component":"HeroBanner","title":"Repeated summary"}'
       );
       const templateRootScope = valid.replace(
         '{"id":"item-card","component":"ExpandableCard"}',
@@ -208,6 +315,7 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(BASELINE, invalidPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
       expect(mergeA2uiLayout(BASELINE, listAction, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
       expect(mergeA2uiLayout(BASELINE, templateAction, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(BASELINE, heroTemplate, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
       expect(mergeA2uiLayout(
         BASELINE,
         templateRootScope,

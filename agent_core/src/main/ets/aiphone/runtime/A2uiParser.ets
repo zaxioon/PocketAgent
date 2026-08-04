@@ -8,13 +8,18 @@ import {
   A2UI_COMPONENT_FLIGHT_BOARD,
   A2UI_COMPONENT_FOOD_CHOICES,
   A2UI_COMPONENT_GENERIC_TOOL_RESULTS,
+  A2UI_COMPONENT_HERO_BANNER,
   A2UI_COMPONENT_INFO_ROWS,
   A2UI_COMPONENT_LIST,
+  A2UI_COMPONENT_MATRIX_HEATMAP,
   A2UI_COMPONENT_MASONRY_GRID,
   A2UI_COMPONENT_MEDIA_SLIDER,
+  A2UI_COMPONENT_METRIC_GRID,
+  A2UI_COMPONENT_MULTI_SERIES_LINE_CHART,
   A2UI_COMPONENT_ROW,
   A2UI_COMPONENT_SCENE_TABS,
   A2UI_COMPONENT_SCHEDULE_STACK,
+  A2UI_COMPONENT_SEGMENTED_RING_CHART,
   A2UI_COMPONENT_SKELETON_CARD,
   A2UI_COMPONENT_SOCIAL_HUB,
   A2UI_COMPONENT_STRIPE_RECEIVING_ACCOUNT_CARD,
@@ -59,7 +64,12 @@ const KNOWN_COMPONENTS: string[] = [
   A2UI_COMPONENT_MEDIA_SLIDER,
   A2UI_COMPONENT_SCENE_TABS,
   A2UI_COMPONENT_MASONRY_GRID,
-  A2UI_COMPONENT_LIST
+  A2UI_COMPONENT_LIST,
+  A2UI_COMPONENT_HERO_BANNER,
+  A2UI_COMPONENT_METRIC_GRID,
+  A2UI_COMPONENT_SEGMENTED_RING_CHART,
+  A2UI_COMPONENT_MULTI_SERIES_LINE_CHART,
+  A2UI_COMPONENT_MATRIX_HEATMAP
 ];
 
 function normalizeString(value: string | Object | undefined | null, fallback: string): string {
@@ -102,6 +112,37 @@ function rawListChildren(value: A2uiComponent): ParserJsonRecord | null {
     return null;
   }
   return children as ParserJsonRecord;
+}
+
+const UI_LAB_CHART_COMPONENTS: string[] = [
+  A2UI_COMPONENT_METRIC_GRID,
+  A2UI_COMPONENT_SEGMENTED_RING_CHART,
+  A2UI_COMPONENT_MULTI_SERIES_LINE_CHART,
+  A2UI_COMPONENT_MATRIX_HEATMAP
+];
+
+function parserAllowedKeys(source: ParserJsonRecord, allowed: string[]): boolean {
+  const keys = Object.keys(source);
+  for (let index = 0; index < keys.length; index++) {
+    if (allowed.indexOf(keys[index]) < 0) return false;
+  }
+  return true;
+}
+
+function validateUiLabPresentationComponent(value: A2uiComponent, component: string): void {
+  const source = value as Object as ParserJsonRecord;
+  if (component === A2UI_COMPONENT_HERO_BANNER) {
+    if (!parserAllowedKeys(source, ['body', 'component', 'id', 'text', 'title']) ||
+      typeof source['title'] !== 'string' || (source['title'] as string).trim().length === 0) {
+      throw new Error('A2UI HeroBanner requires title and text-only presentation fields');
+    }
+    return;
+  }
+  if (UI_LAB_CHART_COMPONENTS.indexOf(component) >= 0 &&
+    (!parserAllowedKeys(source, ['body', 'component', 'dataPath', 'id', 'text', 'title']) ||
+      typeof source['dataPath'] !== 'string' || (source['dataPath'] as string).trim().length === 0)) {
+    throw new Error('A2UI chart requires dataPath and text-only presentation fields');
+  }
 }
 
 function normalizeActions(value: A2uiAction[] | undefined | null): A2uiAction[] {
@@ -150,6 +191,7 @@ function normalizeComponent(value: A2uiComponent): A2uiComponent {
   if (!isKnownComponent(component)) {
     throw new Error('A2UI component is not registered: ' + component);
   }
+  validateUiLabPresentationComponent(value, component);
   const listChildren = rawListChildren(value);
   if (component !== A2UI_COMPONENT_LIST && listChildren !== null) {
     throw new Error('A2UI children object is only supported by List');

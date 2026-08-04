@@ -71,6 +71,7 @@ export function createUiAgentLabHtmlShell(): string {
   <style>
     :root { color-scheme:light; --ink:#20242b; --muted:#747985; --blue:#3976f6; --glass:rgba(255,252,247,.68); --line:rgba(82,76,67,.10); }
     * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    .sr-only { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; border:0!important; }
     html,body { width:100%; height:100%; margin:0; overflow:hidden; font-family:HarmonyOS Sans SC,system-ui,sans-serif; color:var(--ink); }
     body { background:#ebe8e2; }
     button,input { font:inherit; }
@@ -151,6 +152,49 @@ export function createUiAgentLabHtmlShell(): string {
     .expandable-field-label { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
     .expandable-field-value { font-size:13px; text-align:right; white-space:pre-wrap; overflow-wrap:anywhere; }
     .expandable-limit { color:var(--muted); font-size:11px; line-height:1.45; }
+    .hero-banner { position:relative; overflow:hidden; min-height:132px; border-radius:25px; padding:22px; display:flex; flex-direction:column; justify-content:flex-end; background:linear-gradient(145deg,rgba(41,83,163,.94),rgba(41,54,82,.92)); color:white; box-shadow:0 16px 34px rgba(33,55,96,.22); }
+    .hero-banner:after { content:""; position:absolute; width:150px; height:150px; right:-46px; top:-68px; border-radius:50%; border:25px solid rgba(255,255,255,.08); }
+    .hero-kicker { position:relative; z-index:1; margin:0 0 6px; color:rgba(255,255,255,.70); font-size:11px; font-weight:700; letter-spacing:.08em; }
+    .hero-title { position:relative; z-index:1; margin:0; max-width:88%; font-size:24px; line-height:1.15; letter-spacing:-.025em; overflow-wrap:anywhere; }
+    .hero-body { position:relative; z-index:1; margin:8px 0 0; max-width:92%; color:rgba(255,255,255,.76); font-size:12px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .viz-card { min-width:0; }
+    .viz-header { margin-bottom:13px; }
+    .viz-kicker { margin:0 0 4px; color:#5274a8; font-size:10px; font-weight:700; letter-spacing:.07em; }
+    .viz-header .lab-card-copy { margin-top:4px; }
+    .metric-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+    .metric-item { min-width:0; border-radius:17px; padding:13px; background:rgba(222,230,241,.64); }
+    .metric-label { display:block; color:var(--muted); font-size:11px; line-height:1.35; overflow-wrap:anywhere; }
+    .metric-value { display:block; margin-top:6px; font-size:21px; line-height:1.1; letter-spacing:-.03em; overflow-wrap:anywhere; }
+    .metric-unit { margin-left:4px; color:var(--muted); font-size:11px; font-weight:500; letter-spacing:0; }
+    .metric-delta { display:block; margin-top:6px; color:var(--muted); font-size:10px; }
+    .metric-delta.is-positive { color:#287356; }
+    .metric-delta.is-negative { color:#b84d4d; }
+    .ring-layout { display:grid; grid-template-columns:minmax(118px,.8fr) minmax(0,1.2fr); gap:14px; align-items:center; }
+    .ring-svg { display:block; width:100%; max-width:156px; margin:auto; overflow:visible; }
+    .ring-center-value { fill:var(--ink); font-size:15px; font-weight:700; text-anchor:middle; }
+    .ring-center-label,.ring-center-unit { fill:var(--muted); font-size:7px; text-anchor:middle; }
+    .chart-legend { display:flex; flex-direction:column; gap:8px; min-width:0; }
+    .legend-item { display:grid; grid-template-columns:9px minmax(0,1fr) auto; gap:7px; align-items:center; min-width:0; font-size:11px; }
+    .legend-swatch { width:9px; height:9px; border-radius:50%; }
+    .legend-label { min-width:0; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .legend-value { color:var(--ink); font-variant-numeric:tabular-nums; }
+    .line-svg { display:block; width:100%; height:auto; overflow:visible; }
+    .line-grid { stroke:rgba(72,82,98,.12); stroke-width:1; }
+    .line-series { fill:none; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; }
+    .line-labels { display:flex; justify-content:space-between; gap:6px; margin:4px 7px 0 20px; color:var(--muted); font-size:9px; }
+    .line-legend { display:flex; flex-wrap:wrap; gap:7px 12px; margin-top:10px; }
+    .line-legend .legend-item { display:flex; flex:0 1 auto; }
+    .heatmap-layout { display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px; align-items:stretch; }
+    .heatmap-row-labels { display:grid; gap:3px; color:var(--muted); font-size:9px; text-align:right; }
+    .heatmap-row-label { min-height:0; display:flex; align-items:center; justify-content:flex-end; white-space:nowrap; }
+    .heatmap-main { min-width:0; }
+    .heatmap-column-labels,.heatmap-grid { display:grid; gap:3px; }
+    .heatmap-column-labels { margin-bottom:4px; color:var(--muted); font-size:8px; text-align:center; }
+    .heatmap-column-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .heatmap-cell { width:100%; aspect-ratio:1/1; border-radius:3px; background:#dfe3e8; }
+    .heatmap-scale { display:flex; justify-content:flex-end; gap:3px; margin-top:8px; }
+    .heatmap-scale span { width:10px; height:10px; border-radius:3px; }
+    @media (max-width:360px) { .ring-layout { grid-template-columns:112px minmax(0,1fr); gap:10px; } .hero-title { font-size:21px; } }
     .media-slider { display:flex; gap:11px; overflow-x:auto; scroll-snap-type:x mandatory; padding-bottom:3px; }
     .media-card { min-width:76%; scroll-snap-align:start; border:0; border-radius:20px; padding:0; overflow:hidden; text-align:left; color:var(--ink); background:rgba(255,255,255,.65); }
     .media-frame { height:112px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#bfd3ff,#ffd0bd 52%,#b9e8d6); color:rgba(32,36,43,.72); font-size:11px; letter-spacing:.08em; }
@@ -273,6 +317,65 @@ export function createUiAgentLabHtmlShell(): string {
         var source=record(value);
         return source&&Array.isArray(source[key])?source[key]:[];
       }
+      function svgNode(tag,className){
+        var next=document.createElementNS('http://www.w3.org/2000/svg',tag);
+        if(className)next.setAttribute('class',className);
+        return next;
+      }
+      function finiteNumber(value){
+        if(value===null||value===undefined||typeof value==='boolean'||(typeof value==='string'&&value.trim().length===0))return null;
+        var next=Number(value);return Number.isFinite(next)?next:null;
+      }
+      function numericField(source){
+        if(!source)return null;
+        var keys=['value','bytes','percent','count'];
+        for(var index=0;index<keys.length;index++){
+          var next=finiteNumber(source[keys[index]]);if(next!==null)return {value:next,kind:keys[index]};
+        }
+        return null;
+      }
+      function compactNumber(value){
+        var absolute=Math.abs(value),divisor=1,suffix='';
+        if(absolute>=1000000000){divisor=1000000000;suffix='B';}
+        else if(absolute>=1000000){divisor=1000000;suffix='M';}
+        else if(absolute>=1000){divisor=1000;suffix='K';}
+        var scaled=value/divisor,precision=Math.abs(scaled)>=100||Number.isInteger(scaled)?0:1;
+        var copy=scaled.toFixed(precision);if(copy.endsWith('.0'))copy=copy.slice(0,-2);return copy+suffix;
+      }
+      function formattedBytes(value){
+        var absolute=Math.abs(value),units=['B','KB','MB','GB','TB'],unitIndex=0,scaled=absolute;
+        while(scaled>=1024&&unitIndex<units.length-1){scaled/=1024;unitIndex++;}
+        if(value<0)scaled=-scaled;
+        var precision=Math.abs(scaled)>=100||Number.isInteger(scaled)?0:1,copy=scaled.toFixed(precision);
+        if(copy.endsWith('.0'))copy=copy.slice(0,-2);return copy+units[unitIndex];
+      }
+      function formattedNumber(field){
+        if(field.kind==='bytes')return formattedBytes(field.value);
+        var copy=compactNumber(field.value);
+        if(field.kind==='percent')return copy+'%';
+        return copy;
+      }
+      function headerFields(value){
+        var source=record(value),raw=source?source.header:undefined,header=record(raw);
+        return {
+          kicker:header?text(header.kicker):'',
+          title:header?text(header.title):text(raw),
+          description:header?text(header.description):'',
+          ariaLabel:header?text(header.ariaLabel):''
+        };
+      }
+      function appendVisualHeader(parent,component,value){
+        var fields=headerFields(value),kicker=nonEmptyText(component.text,fields.kicker),title=nonEmptyText(component.title,fields.title),body=nonEmptyText(component.body,fields.description);
+        if(fields.ariaLabel)parent.setAttribute('aria-label',fields.ariaLabel);
+        if(!kicker&&!title&&!body)return;
+        var header=node('header','viz-header');
+        if(kicker)header.appendChild(node('p','viz-kicker',kicker));
+        if(title)header.appendChild(node('h3','lab-card-title',title));
+        if(body)header.appendChild(node('p','lab-card-copy',body));
+        parent.appendChild(header);
+      }
+      var CHART_PALETTE=['#d9dee6','#c7d7f0','#a8c3eb','#7da5df','#527fd0','#315eae','#21457f','#172f59'];
+      var HEATMAP_PALETTE=['#dfe3e8','#d8e4f5','#b7cfee','#8fb1e4','#5d8bd2','#2d5fae'];
       UI_AGENT_LAB_COMPONENT_REGISTRY.SurfaceRoot=function(component,context,trail){
         var root=node('section','surface-root'); appendChildren(root,component,context,trail); return root;
       };
@@ -301,6 +404,123 @@ export function createUiAgentLabHtmlShell(): string {
         more.addEventListener('click',appendPage);pager.appendChild(status);pager.appendChild(more);
         wrapper.appendChild(itemHost);wrapper.appendChild(pager);appendPage();
         return wrapper;
+      };
+      UI_AGENT_LAB_COMPONENT_REGISTRY.HeroBanner=function(component,context){
+        var value=componentValue(component,context),fields=headerFields(value),wrapper=node('article','hero-banner');
+        var kicker=nonEmptyText(component.text,fields.kicker),title=nonEmptyText(component.title,fields.title),body=nonEmptyText(component.body,fields.description);
+        if(fields.ariaLabel)wrapper.setAttribute('aria-label',fields.ariaLabel);
+        if(kicker)wrapper.appendChild(node('p','hero-kicker',kicker));
+        if(title)wrapper.appendChild(node('h2','hero-title',title));
+        if(body)wrapper.appendChild(node('p','hero-body',body));
+        return wrapper;
+      };
+      UI_AGENT_LAB_COMPONENT_REGISTRY.MetricGrid=function(component,context){
+        var value=componentValue(component,context),wrapper=node('section','lab-card viz-card'),grid=node('div','metric-grid');
+        appendVisualHeader(wrapper,component,value);
+        var items=Array.isArray(value)?value:itemArray(value,'items'),rendered=0;
+        items.slice(0,6).forEach(function(item){
+          var source=record(item),field=numericField(source);if(!source||field===null)return;
+          var label=nonEmptyText(source.label,source.name);if(!label)return;
+          var metric=node('article','metric-item');metric.appendChild(node('span','metric-label',label));
+          var metricValue=node('strong','metric-value',formattedNumber(field)),unit=nonEmptyText(source.unit);if(unit)metricValue.appendChild(node('small','metric-unit',unit));metric.appendChild(metricValue);
+          var deltaValue=finiteNumber(source.delta),delta=nonEmptyText(source.deltaLabel,deltaValue===null?'':(deltaValue>0?'+':'')+compactNumber(deltaValue));
+          if(delta){var deltaClass='metric-delta'+(deltaValue!==null&&deltaValue>0?' is-positive':deltaValue!==null&&deltaValue<0?' is-negative':'');metric.appendChild(node('span',deltaClass,delta));}
+          grid.appendChild(metric);rendered++;
+        });
+        if(rendered===0)grid.appendChild(node('p','lab-card-copy','暂无有效数据'));
+        wrapper.appendChild(grid);return wrapper;
+      };
+      UI_AGENT_LAB_COMPONENT_REGISTRY.SegmentedRingChart=function(component,context){
+        var value=componentValue(component,context),source=record(value),wrapper=node('section','lab-card viz-card');appendVisualHeader(wrapper,component,value);
+        var items=Array.isArray(value)?value:itemArray(value,'segments'),segments=[],total=0;
+        items.slice(0,8).forEach(function(item){
+          var source=record(item),field=numericField(source);if(!source||field===null||field.value<0)return;
+          var label=nonEmptyText(source.label,source.name);if(!label)return;
+          segments.push({label:label,field:field});total+=field.value;
+        });
+        if(segments.length===0||total<=0){wrapper.appendChild(node('p','lab-card-copy','暂无有效数据'));return wrapper;}
+        var ranks=[];segments.forEach(function(segment){if(ranks.indexOf(segment.field.value)<0)ranks.push(segment.field.value);});ranks.sort(function(left,right){return left-right;});
+        segments.forEach(function(segment){segment.paletteIndex=ranks.length===1?CHART_PALETTE.length-1:Math.round(ranks.indexOf(segment.field.value)/(ranks.length-1)*(CHART_PALETTE.length-1));});
+        var layout=node('div','ring-layout'),svg=svgNode('svg','ring-svg'),legend=node('div','chart-legend');
+        var ringFields=headerFields(value),ringSummary=segments.map(function(segment){return segment.label+' '+compactNumber(segment.field.value/total*100)+'%';}).join(', '),ringAria=nonEmptyText(ringFields.ariaLabel,ringSummary);
+        svg.setAttribute('viewBox','0 0 120 120');svg.setAttribute('role','img');svg.setAttribute('aria-label',ringAria);
+        var ringTitle=svgNode('title','');ringTitle.textContent=ringAria;svg.appendChild(ringTitle);
+        var track=svgNode('circle','');track.setAttribute('cx','60');track.setAttribute('cy','60');track.setAttribute('r','44');track.setAttribute('fill','none');track.setAttribute('stroke','#e4e7eb');track.setAttribute('stroke-width','8');svg.appendChild(track);
+        var gap=Math.min(1.6,8/segments.length),usable=100-gap*segments.length,cursor=0;
+        segments.forEach(function(segment,index){
+          var amount=segment.field.value/total*usable,arc=svgNode('circle','');
+          arc.setAttribute('cx','60');arc.setAttribute('cy','60');arc.setAttribute('r','44');arc.setAttribute('fill','none');
+          arc.setAttribute('pathLength','100');arc.setAttribute('stroke',CHART_PALETTE[segment.paletteIndex]);arc.setAttribute('stroke-width','8');
+          arc.setAttribute('stroke-linecap','butt');arc.setAttribute('stroke-dasharray',String(amount)+' '+String(100-amount));
+          arc.setAttribute('stroke-dashoffset',String(-cursor));arc.setAttribute('transform','rotate(-90 60 60)');svg.appendChild(arc);cursor+=amount+gap;
+          var entry=node('div','legend-item'),swatch=node('span','legend-swatch');swatch.style.background=CHART_PALETTE[segment.paletteIndex];
+          entry.appendChild(swatch);entry.appendChild(node('span','legend-label',segment.label));entry.appendChild(node('span','legend-value',compactNumber(segment.field.value/total*100)+'%'));legend.appendChild(entry);
+        });
+        var centerLabel=source?nonEmptyText(source.centerLabel):'',unitLabel=source?nonEmptyText(source.unitLabel):'';
+        if(centerLabel){var centerTop=svgNode('text','ring-center-label');centerTop.setAttribute('x','60');centerTop.setAttribute('y','49');centerTop.textContent=centerLabel;svg.appendChild(centerTop);}
+        var centerValue=svgNode('text','ring-center-value');centerValue.setAttribute('x','60');centerValue.setAttribute('y',centerLabel||unitLabel?'65':'64');centerValue.textContent=compactNumber(total);svg.appendChild(centerValue);
+        if(unitLabel){var centerUnit=svgNode('text','ring-center-unit');centerUnit.setAttribute('x','60');centerUnit.setAttribute('y','77');centerUnit.textContent=unitLabel;svg.appendChild(centerUnit);}
+        layout.appendChild(svg);layout.appendChild(legend);wrapper.appendChild(layout);return wrapper;
+      };
+      UI_AGENT_LAB_COMPONENT_REGISTRY.MultiSeriesLineChart=function(component,context){
+        var value=componentValue(component,context),source=record(value),wrapper=node('section','lab-card viz-card');appendVisualHeader(wrapper,component,value);
+        if(!source){wrapper.appendChild(node('p','lab-card-copy','暂无有效数据'));return wrapper;}
+        var rawXLabels=list(source.xLabels).length?list(source.xLabels):list(source.labels),xLabels=rawXLabels.slice(0,24);
+        var inputSeries=list(source.series).slice(0,4),series=[],minimum=Infinity,maximum=-Infinity,pointCount=0;
+        inputSeries.forEach(function(item,index){
+          var itemRecord=record(item);if(!itemRecord)return;
+          var rawValues=list(itemRecord.values);if(rawXLabels.length&&rawValues.length!==rawXLabels.length)return;
+          var values=rawValues.slice(0,24),points=[];
+          values.forEach(function(raw,pointIndex){var next=finiteNumber(raw);if(next===null)return;points.push({index:pointIndex,value:next});minimum=Math.min(minimum,next);maximum=Math.max(maximum,next);pointCount=Math.max(pointCount,pointIndex+1);});
+          if(points.length)series.push({label:nonEmptyText(itemRecord.label,itemRecord.name),points:points,index:index});
+        });
+        if(series.length===0||!Number.isFinite(minimum)||!Number.isFinite(maximum)){wrapper.appendChild(node('p','lab-card-copy','暂无有效数据'));return wrapper;}
+        if(maximum===minimum){maximum+=1;minimum-=1;}
+        pointCount=Math.max(pointCount,xLabels.length,2);var width=320,height=150,left=20,right=8,top=10,bottom=16,plotWidth=width-left-right,plotHeight=height-top-bottom;
+        var lineSummary=series.map(function(entry,index){var label=nonEmptyText(entry.label,'系列 '+String(index+1)),values=entry.points.map(function(point){return compactNumber(point.value);}).join(', ');return label+': '+values;}).join('; ');
+        var lineFields=headerFields(value),lineAria=nonEmptyText(lineFields.ariaLabel,lineSummary),svg=svgNode('svg','line-svg');svg.setAttribute('viewBox','0 0 '+String(width)+' '+String(height));svg.setAttribute('role','img');svg.setAttribute('aria-label',lineAria);
+        var lineTitle=svgNode('title','');lineTitle.textContent=lineAria;svg.appendChild(lineTitle);
+        [0,.5,1].forEach(function(ratio){var line=svgNode('line','line-grid'),y=top+plotHeight*ratio;line.setAttribute('x1',String(left));line.setAttribute('x2',String(width-right));line.setAttribute('y1',String(y));line.setAttribute('y2',String(y));svg.appendChild(line);});
+        series.forEach(function(entry,seriesIndex){
+          var polyline=svgNode('polyline','line-series'),coordinates=[];
+          entry.points.forEach(function(point){var x=left+plotWidth*(point.index/Math.max(1,pointCount-1)),y=top+plotHeight*(1-(point.value-minimum)/(maximum-minimum));coordinates.push(String(x)+','+String(y));});
+          polyline.setAttribute('points',coordinates.join(' '));polyline.setAttribute('stroke',CHART_PALETTE[(seriesIndex+2)%CHART_PALETTE.length]);svg.appendChild(polyline);
+        });
+        wrapper.appendChild(svg);wrapper.appendChild(node('p','sr-only',lineSummary));
+        if(xLabels.length){var labels=node('div','line-labels'),indices=xLabels.length===1?[0]:[0,Math.floor((xLabels.length-1)/2),xLabels.length-1];indices.filter(function(item,index,self){return self.indexOf(item)===index;}).forEach(function(labelIndex){labels.appendChild(node('span','',text(xLabels[labelIndex])));});wrapper.appendChild(labels);}
+        var legend=node('div','line-legend');series.forEach(function(entry,index){if(!entry.label)return;var item=node('span','legend-item'),swatch=node('i','legend-swatch');swatch.style.background=CHART_PALETTE[(index+2)%CHART_PALETTE.length];item.appendChild(swatch);item.appendChild(node('span','legend-label',entry.label));legend.appendChild(item);});if(legend.firstChild)wrapper.appendChild(legend);
+        return wrapper;
+      };
+      function heatmapCellValue(value){var source=record(value);return source?numericField(source):finiteNumber(value)===null?null:{value:finiteNumber(value),kind:'value'};}
+      function heatmapRows(source){
+        var direct=list(source.values).slice(0,12),rows=[];
+        if(direct.length){direct.forEach(function(row){rows.push(list(row).slice(0,24));});return rows;}
+        var weeks=list(source.weeks).slice(0,24),columns=[];weeks.forEach(function(week){var weekRecord=record(week);columns.push(Array.isArray(week)?week:itemArray(weekRecord,'values').length?itemArray(weekRecord,'values'):itemArray(weekRecord,'days'));});
+        var rowCount=Math.min(12,columns.reduce(function(maximum,column){return Math.max(maximum,column.length);},0));
+        for(var rowIndex=0;rowIndex<rowCount;rowIndex++){var row=[];columns.forEach(function(column){row.push(column[rowIndex]);});rows.push(row);}
+        return rows;
+      }
+      UI_AGENT_LAB_COMPONENT_REGISTRY.MatrixHeatmap=function(component,context){
+        var value=componentValue(component,context),source=record(value),wrapper=node('section','lab-card viz-card');appendVisualHeader(wrapper,component,value);
+        if(!source){wrapper.appendChild(node('p','lab-card-copy','暂无有效数据'));return wrapper;}
+        var rows=heatmapRows(source),columnCount=rows.reduce(function(maximum,row){return Math.max(maximum,row.length);},0);
+        if(rows.length===0||columnCount===0){wrapper.appendChild(node('p','lab-card-copy','暂无有效数据'));return wrapper;}
+        columnCount=Math.min(24,columnCount);var maximum=0;
+        rows.forEach(function(row){row.slice(0,columnCount).forEach(function(raw){var field=heatmapCellValue(raw);if(field!==null)maximum=Math.max(maximum,field.value);});});
+        var rowLabels=list(source.rowLabels).length?list(source.rowLabels).slice(0,12):list(source.dayLabels).slice(0,12);
+        var columnLabels=list(source.columnLabels).length?list(source.columnLabels).slice(0,24):list(source.weekLabels).slice(0,24);
+        var layout=node('div','heatmap-layout'),rowLabelHost=node('div','heatmap-row-labels'),main=node('div','heatmap-main'),columnHost=node('div','heatmap-column-labels'),grid=node('div','heatmap-grid');
+        grid.setAttribute('role','grid');
+        rowLabelHost.style.gridTemplateRows='repeat('+String(rows.length)+',minmax(0,1fr))';columnHost.style.gridTemplateColumns='repeat('+String(columnCount)+',minmax(0,1fr))';grid.style.gridTemplateColumns='repeat('+String(columnCount)+',minmax(0,1fr))';
+        rows.forEach(function(_row,index){rowLabelHost.appendChild(node('span','heatmap-row-label',text(rowLabels[index])));});
+        for(var columnIndex=0;columnIndex<columnCount;columnIndex++)columnHost.appendChild(node('span','heatmap-column-label',text(columnLabels[columnIndex])));
+        rows.forEach(function(row,rowIndex){for(var columnIndex=0;columnIndex<columnCount;columnIndex++){
+          var field=heatmapCellValue(row[columnIndex]),level=field===null||field.value<=0||maximum<=0?0:Math.min(5,Math.ceil(field.value/maximum*5)),cell=node('span','heatmap-cell');cell.style.background=HEATMAP_PALETTE[level];
+          var rowLabel=text(rowLabels[rowIndex]),columnLabel=text(columnLabels[columnIndex]),cellLabel=(rowLabel?rowLabel+' ':'')+(columnLabel?columnLabel+' ':'')+(field===null?'无数据':compactNumber(field.value));cell.setAttribute('role','gridcell');cell.setAttribute('aria-label',cellLabel);
+          grid.appendChild(cell);
+        }});
+        main.appendChild(columnHost);main.appendChild(grid);layout.appendChild(rowLabelHost);layout.appendChild(main);wrapper.appendChild(layout);
+        var scale=node('div','heatmap-scale');HEATMAP_PALETTE.forEach(function(color){var step=node('span','');step.style.background=color;scale.appendChild(step);});wrapper.appendChild(scale);return wrapper;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.Text=function(component,context){
         var value=componentValue(component,context);

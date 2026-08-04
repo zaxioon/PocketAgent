@@ -46,6 +46,61 @@ interface UiLabHydrationData {
   notes: UiLabHydrationNote[];
 }
 
+interface UiLabDashboardHeader {
+  kicker?: string;
+  title: string;
+  description?: string;
+  ariaLabel: string;
+}
+
+interface UiLabDashboardMetric {
+  label: string;
+  value: number;
+  unit: string;
+  delta: number;
+  deltaLabel: string;
+}
+
+interface UiLabDashboardMetrics {
+  header: UiLabDashboardHeader;
+  items: UiLabDashboardMetric[];
+}
+
+interface UiLabDashboardSegment {
+  label: string;
+  bytes: number;
+}
+
+interface UiLabDashboardRing {
+  header: UiLabDashboardHeader;
+  centerLabel: string;
+  unitLabel: string;
+  segments: UiLabDashboardSegment[];
+}
+
+interface UiLabDashboardSeries {
+  label: string;
+  values: number[];
+}
+
+interface UiLabDashboardLine {
+  xLabels: string[];
+  series: UiLabDashboardSeries[];
+}
+
+interface UiLabDashboardHeatmap {
+  weekLabels: string[];
+  dayLabels: string[];
+  values: number[][];
+}
+
+interface UiLabDashboardModel {
+  metrics: UiLabDashboardMetrics;
+  ring: UiLabDashboardRing;
+  line: UiLabDashboardLine;
+  heatmap: UiLabDashboardHeatmap;
+}
+
 function settings(): LocalModelSettings {
   return {
     provider: 'test-provider',
@@ -101,7 +156,8 @@ export default function uiAgentLabTest() {
         'SurfaceRoot', 'Column', 'Row', 'Text', 'InfoRows', 'ActionBar',
         'ErrorNotice', 'ThinkingStream', 'ThinkingCard', 'ScheduleStack',
         'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs',
-        'MasonryGrid', 'List'
+        'MasonryGrid', 'List', 'HeroBanner', 'MetricGrid',
+        'SegmentedRingChart', 'MultiSeriesLineChart', 'MatrixHeatmap'
       ];
       componentNames.forEach((name: string) => {
         expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.' + name + '=');
@@ -119,6 +175,97 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('.textContent=');
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
       expect(html).assertContain("return safeError('不支持的组件'");
+    });
+
+    it('renders dynamic dashboard components with bounded renderer-owned geometry', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+      expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.HeroBanner=');
+      expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MetricGrid=');
+      expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.SegmentedRingChart=');
+      expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MultiSeriesLineChart=');
+      expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MatrixHeatmap=');
+      expect(html).assertContain("document.createElementNS('http://www.w3.org/2000/svg',tag)");
+      expect(html).assertContain("var CHART_PALETTE=['#d9dee6'");
+      expect(html).assertContain("var HEATMAP_PALETTE=['#dfe3e8'");
+      expect(html).assertContain("if(copy.endsWith('.0'))copy=copy.slice(0,-2)");
+      expect(html).assertContain("function formattedBytes(value)");
+      expect(html).assertContain("units=['B','KB','MB','GB','TB']");
+      expect(html).assertContain("if(field.kind==='bytes')return formattedBytes(field.value)");
+      expect(html.indexOf("if(field.kind==='bytes')return copy+'B'")).assertEqual(-1);
+      expect(html).assertContain("items.slice(0,6).forEach");
+      expect(html).assertContain("itemArray(value,'segments')");
+      expect(html).assertContain("list(source.series).slice(0,4)");
+      expect(html).assertContain("var rawValues=list(itemRecord.values)");
+      expect(html).assertContain("rawValues.slice(0,24)");
+      expect(html).assertContain("list(source.values).slice(0,12)");
+      expect(html).assertContain("list(source.weeks).slice(0,24)");
+      expect(html).assertContain("componentValue(component,context)");
+      expect(html).assertContain("raw=source?source.header:undefined,header=record(raw)");
+      expect(html).assertContain("nonEmptyText(component.text,fields.kicker)");
+      expect(html).assertContain("nonEmptyText(component.title,fields.title)");
+      expect(html).assertContain("nonEmptyText(component.body,fields.description)");
+      expect(html).assertContain("parent.setAttribute('aria-label',fields.ariaLabel)");
+      expect(html).assertContain("ranks.sort(function(left,right){return left-right;})");
+      expect(html).assertContain("segment.paletteIndex=ranks.length===1?CHART_PALETTE.length-1");
+      expect(html).assertContain("track.setAttribute('stroke-width','8')");
+      expect(html).assertContain("arc.setAttribute('stroke-width','8')");
+      expect(html).assertContain("compactNumber(segment.field.value/total*100)+'%'");
+      expect(html).assertContain("source?nonEmptyText(source.centerLabel):''");
+      expect(html).assertContain("centerValue.textContent=compactNumber(total)");
+      expect(html).assertContain("centerUnit.textContent=unitLabel");
+      expect(html).assertContain("ringAria=nonEmptyText(ringFields.ariaLabel,ringSummary)");
+      expect(html).assertContain("svg.setAttribute('aria-label',ringAria)");
+      expect(html).assertContain("ringTitle.textContent=ringAria");
+      expect(html).assertContain("rawValues.length!==rawXLabels.length");
+      expect(html).assertContain("lineAria=nonEmptyText(lineFields.ariaLabel,lineSummary)");
+      expect(html).assertContain("svg.setAttribute('aria-label',lineAria)");
+      expect(html).assertContain("lineTitle.textContent=lineAria");
+      expect(html).assertContain("wrapper.appendChild(node('p','sr-only',lineSummary))");
+      expect(html).assertContain('.sr-only { position:absolute!important;');
+      expect(html).assertContain("node('small','metric-unit',unit)");
+      expect(html).assertContain("nonEmptyText(source.deltaLabel");
+      expect(html).assertContain("metric-delta'+(deltaValue");
+      expect(html).assertContain("cell.style.background=HEATMAP_PALETTE[level]");
+      expect(html).assertContain("grid.setAttribute('role','grid')");
+      expect(html).assertContain("cell.setAttribute('role','gridcell')");
+      expect(html).assertContain("cell.setAttribute('aria-label',cellLabel)");
+      expect(html).assertContain("arc.setAttribute('stroke',CHART_PALETTE");
+      expect(html.indexOf('source.color')).assertEqual(-1);
+      expect(html.indexOf('source.svg')).assertEqual(-1);
+      expect(html.indexOf('.innerHTML')).assertEqual(-1);
+    });
+
+    it('encodes dashboard component props and dynamic data without embedding raw text', 0, () => {
+      const marker = '<svg onload="window.__DASHBOARD_INJECTED=true">';
+      const model: UiLabDashboardModel = {
+        metrics: {
+          header: { kicker: '统计', title: '动态指标', description: '指标说明', ariaLabel: '指标区' },
+          items: [{ label: '仓库', value: 24, unit: '个', delta: 3, deltaLabel: '增加 3' }]
+        },
+        ring: {
+          header: { title: '语言分布', ariaLabel: '语言占比图' }, centerLabel: '总量', unitLabel: 'bytes',
+          segments: [{ label: 'TypeScript', bytes: 123456 }, { label: 'ArkTS', bytes: 456789 }]
+        },
+        line: { xLabels: ['一月', '二月'], series: [{ label: '提交', values: [3, 8] }] },
+        heatmap: { weekLabels: ['W1', 'W2'], dayLabels: ['一', '二'], values: [[0, 5], [2, 9]] }
+      };
+      const modelJson = JSON.stringify(model);
+      const surfaceJson = '{"surfaceId":"surface-dashboard","rootId":"root","components":[' +
+        '{"id":"root","component":"Column","children":["hero","metrics","ring","line","heatmap"]},' +
+        '{"id":"hero","component":"HeroBanner","text":"概览","title":' + JSON.stringify(marker) + ',"body":"动态正文"},' +
+        '{"id":"metrics","component":"MetricGrid","dataPath":"/metrics"},' +
+        '{"id":"ring","component":"SegmentedRingChart","dataPath":"/ring"},' +
+        '{"id":"line","component":"MultiSeriesLineChart","dataPath":"/line"},' +
+        '{"id":"heatmap","component":"MatrixHeatmap","dataPath":"/heatmap"}],' +
+        '"dataModelJson":' + JSON.stringify(modelJson) + '}';
+      const script = uiAgentLabSurfaceScript(surfaceJson);
+
+      expect(script).assertContain('window.__applyUiAgentLabSurface(JSON.parse(');
+      expect(script.indexOf(marker)).assertEqual(-1);
+      expect(script.indexOf('动态指标')).assertEqual(-1);
+      expect(script.indexOf('TypeScript')).assertEqual(-1);
+      expect(script).assertContain('\\u003c');
+      expect(script).assertContain('\\u52a8');
     });
 
     it('renders a paged List by appending every template item in stable item scope', 0, () => {
@@ -241,7 +388,9 @@ export default function uiAgentLabTest() {
       expect(paths.indexOf('/results/0/data/details/items/0/label') >= 0).assertTrue();
       expect(paths.indexOf('/results/0/data/slash~1key/til~0de') >= 0).assertTrue();
       expect(paths[paths.length - 1]).assertEqual('/');
-      expect((model['summary'] as Record<string, Object>)['text']).assertEqual('已获取 1 项真实结果。');
+      const summary = model['summary'] as Record<string, Object>;
+      expect(summary['text']).assertEqual('已获取 1 组真实数据。');
+      expect(summary['dataLabel']).assertEqual('uiLabResultSets');
       expect((nestedData['details'] as Record<string, Object>)['items'] !== undefined).assertTrue();
       expect((nestedData['slash/key'] as Record<string, Object>)['til~de']).assertEqual('保留转义键');
 
@@ -387,6 +536,16 @@ export default function uiAgentLabTest() {
       expect(prompt).assertContain('动态标题');
       expect(prompt).assertContain('Choose presentation by the meaning and shape');
       expect(prompt).assertContain('do not prescribe a chart type');
+      expect(prompt).assertContain('MUST output exactly one HeroBanner');
+      expect(prompt).assertContain('Do not fabricate a HeroBanner summary for an error or no-display-data baseline');
+      expect(prompt).assertContain('always the first visible element in the main content container');
+      expect(prompt).assertContain('SurfaceRoot.child must reference a Column');
+      expect(prompt).assertContain('HeroBanner id must be Column.children[0]');
+      expect(prompt).assertContain('leaving sibling components disconnected');
+      expect(prompt).assertContain('/summary/count and /summary/text describe the number of DataResult sets');
+      expect(prompt).assertContain('not the number of business entities');
+      expect(prompt).assertContain('result.data explicitly labels a scalar as count or total');
+      expect(prompt).assertContain('result.data.summary text explicitly supports it');
       expect(prompt.indexOf('mock.travel')).assertEqual(-1);
       expect(uiAgentLabDataPaths(snapshot).indexOf('/results/0/data/count') >= 0).assertTrue();
     });

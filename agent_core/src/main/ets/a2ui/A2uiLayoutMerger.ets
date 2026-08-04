@@ -1,7 +1,12 @@
 import { ActionOffer } from '../agent/action/ActionOfferTypes';
 import { AIPHONE_COMPONENT_CATALOG_JSON } from '../aiphone/runtime/A2uiComponentCatalogConst';
 import {
+  A2UI_COMPONENT_HERO_BANNER,
   A2UI_COMPONENT_LIST,
+  A2UI_COMPONENT_MATRIX_HEATMAP,
+  A2UI_COMPONENT_METRIC_GRID,
+  A2UI_COMPONENT_MULTI_SERIES_LINE_CHART,
+  A2UI_COMPONENT_SEGMENTED_RING_CHART,
   A2uiAction,
   A2uiComponent,
   A2uiEnvelope
@@ -197,6 +202,26 @@ function validComponentFields(record: JsonRecord): boolean {
   return true;
 }
 
+const UI_LAB_CHART_COMPONENTS: string[] = [
+  A2UI_COMPONENT_METRIC_GRID,
+  A2UI_COMPONENT_SEGMENTED_RING_CHART,
+  A2UI_COMPONENT_MULTI_SERIES_LINE_CHART,
+  A2UI_COMPONENT_MATRIX_HEATMAP
+];
+
+function validUiLabPresentationShape(record: JsonRecord): boolean {
+  if (record['component'] === A2UI_COMPONENT_HERO_BANNER) {
+    return allowedKeys(record, ['body', 'component', 'id', 'text', 'title']) &&
+      typeof record['title'] === 'string' && (record['title'] as string).trim().length > 0;
+  }
+  if (typeof record['component'] !== 'string' ||
+    UI_LAB_CHART_COMPONENTS.indexOf(record['component'] as string) < 0) {
+    return true;
+  }
+  return allowedKeys(record, ['body', 'component', 'dataPath', 'id', 'text', 'title']) &&
+    typeof record['dataPath'] === 'string' && (record['dataPath'] as string).trim().length > 0;
+}
+
 function offerMap(offers: ActionOffer[]): Map<string, ActionOffer> | null {
   const mapped: Map<string, ActionOffer> = new Map<string, ActionOffer>();
   for (let index = 0; index < offers.length; index++) {
@@ -280,12 +305,18 @@ function candidateComponents(
   const listTemplateIds: Set<string> = new Set<string>();
   const output: A2uiComponent[] = [];
   const usedOffers: Set<string> = new Set<string>();
+  let heroCount: number = 0;
   for (let index = 0; index < rawComponents.length; index++) {
     const record = objectRecord(rawComponents[index]);
     if (record === null || !allowedKeys(record, COMPONENT_KEYS) || !validComponentFields(record) ||
+      !validUiLabPresentationShape(record) ||
       typeof record['id'] !== 'string' || (record['id'] as string).length === 0 ||
       typeof record['component'] !== 'string' || !catalog.has(record['component'] as string)) {
       return null;
+    }
+    if (record['component'] === A2UI_COMPONENT_HERO_BANNER) {
+      heroCount++;
+      if (heroCount > 1) return null;
     }
     const id = record['id'] as string;
     if (byId.has(id)) {
@@ -334,7 +365,8 @@ function candidateComponents(
   const listIds: string[] = [];
   listTemplateIds.forEach((templateId: string) => {
     const template = byId.get(templateId);
-    if (template === undefined || template['component'] === A2UI_COMPONENT_LIST || template['actions'] !== undefined) {
+    if (template === undefined || template['component'] === A2UI_COMPONENT_LIST ||
+      template['component'] === A2UI_COMPONENT_HERO_BANNER || template['actions'] !== undefined) {
       listIds.push('');
     }
   });
@@ -357,7 +389,7 @@ function candidateComponents(
       checked.add(descendantId);
       const descendant = byId.get(descendantId);
       if (descendant === undefined || descendant['component'] === A2UI_COMPONENT_LIST ||
-        descendant['actions'] !== undefined) {
+        descendant['component'] === A2UI_COMPONENT_HERO_BANNER || descendant['actions'] !== undefined) {
         return null;
       }
       const grandchildren = childrenById.get(descendantId) ?? [];

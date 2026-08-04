@@ -200,9 +200,9 @@ export function buildUiAgentLabSnapshot(task: CreateUiTaskPayload, data: DataRes
   }
   let snapshot: UiLabSnapshot = {
     summary: {
-      text: '已获取 ' + data.length.toString() + ' 项真实结果。',
+      text: '已获取 ' + data.length.toString() + ' 组真实数据。',
       toolName: data.length === 1 ? data[0].toolId : 'multi-agent',
-      dataLabel: 'uiLab',
+      dataLabel: 'uiLabResultSets',
       count: data.length
     },
     results
@@ -571,6 +571,10 @@ export function uiAgentLabLayoutPrompt(
   );
   return ('Lay out a useful mobile UI from all verified DataResult values.\n' +
     'Choose presentation by the meaning and shape of the actual values. Do not assume a business schema and do not prescribe a chart type.\n' +
+    'For every normal non-error UI Lab result with displayable verified data, you MUST output exactly one HeroBanner. Do not fabricate a HeroBanner summary for an error or no-display-data baseline. HeroBanner is always the first visible element in the main content container. If any other visible component exists, SurfaceRoot.child must reference a Column and the HeroBanner id must be Column.children[0]. Never connect root only to HeroBanner while leaving sibling components disconnected. If HeroBanner is the only visible component, SurfaceRoot.child may reference it directly. Its title is required; use text as a kicker and body to naturally synthesize all verified results without mechanically listing toolId values.\n' +
+    '/summary/count and /summary/text describe the number of DataResult sets, not the number of business entities. HeroBanner must never present them as an entity total.\n' +
+    'Never infer a total from a sampled array length. State a business count only when result.data explicitly labels a scalar as count or total, or when result.data.summary text explicitly supports it.\n' +
+    'For chart components, bind the narrowest matching dataPath. Never output SVG, path, points, rect, viewBox, coordinates, dimensions, geometry, stroke settings, or colors; the renderer owns them.\n' +
     'Use only the UI Lab component catalog.\n' +
     'Use only exact allowedDataPaths. Actions may contain only an offered offerId; never output action arguments.\n' +
     'intent=' + JSON.stringify(task.intent) + '\n' +

@@ -24,14 +24,37 @@ export function buildA2uiLayoutSystemPrompt(
   surfaceId: string,
   componentCatalogJson: string
 ): string {
-  const outputExample =
+  const isUiLabCatalog = componentCatalogJson.indexOf('"name":"HeroBanner"') >= 0;
+  const outputExample = isUiLabCatalog ?
     `{"version":"${A2UI_VERSION}","updateComponents":{"surfaceId":"${surfaceId}","components":[` +
-    '{"id":"root","component":"SurfaceRoot","child":"content"},' +
-    '{"id":"content","component":"Column","children":["summary","project-list"]},' +
-    '{"id":"summary","component":"Text","dataPath":"/summary/text"},' +
-    '{"id":"project-list","component":"List","children":{"path":"/results/0/data/projects","componentId":"project-card"}},' +
-    '{"id":"project-card","component":"ExpandableCard"}' +
-    ']}}';
+      '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+      '{"id":"content","component":"Column","children":["hero","info","result-list"]},' +
+      '{"id":"hero","component":"HeroBanner",' +
+      '"title":"REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS"},' +
+      '{"id":"info","component":"InfoRows","dataPath":"/summary"},' +
+      '{"id":"result-list","component":"List","children":' +
+      '{"path":"/results","componentId":"result-card"}},' +
+      '{"id":"result-card","component":"ExpandableCard"}' +
+      ']}}' :
+    `{"version":"${A2UI_VERSION}","updateComponents":{"surfaceId":"${surfaceId}","components":[` +
+      '{"id":"root","component":"SurfaceRoot","child":"summary"},' +
+      '{"id":"summary","component":"Text","dataPath":"/summary/text"}' +
+      ']}}';
+  const uiLabRules = isUiLabCatalog ?
+    '- For every normal non-error UI Lab result with displayable verified data, you MUST output exactly one ' +
+      'HeroBanner. Do not fabricate a HeroBanner summary for an error or no-display-data baseline. HeroBanner is ' +
+      'always the first visible element in the main content container. If any other visible component exists, ' +
+      'SurfaceRoot.child must reference a Column and the HeroBanner id must be Column.children[0]. Never connect ' +
+      'root only to HeroBanner while leaving sibling components disconnected. If HeroBanner is the only visible ' +
+      'component, SurfaceRoot.child may reference it directly. HeroBanner requires title, uses text ' +
+      'as its kicker and body as a natural synthesis of all verified results, and must not mechanically list toolId values.\n' +
+      '- /summary/count and /summary/text describe how many DataResult sets were collected, never the total number ' +
+      'of business entities. HeroBanner must not present either value as an entity total. Never infer a total from ' +
+      'a sampled array length. A business count may appear only when result.data explicitly labels a scalar as count ' +
+      'or total, or when result.data.summary text explicitly supports it.\n' +
+      '- MetricGrid, SegmentedRingChart, MultiSeriesLineChart, and MatrixHeatmap require dataPath. Choose them from ' +
+      'the meaning and shape of the data; output no SVG, path, points, rect, viewBox, coordinates, dimensions, arc ' +
+      'geometry, stroke settings, or colors. The renderer owns all chart geometry and styling.\n' : '';
   return `You plan one constrained A2UI ${A2UI_VERSION} component layout for a mobile UI renderer.\n` +
     'Rules:\n' +
     '- Output exactly one compact JSON line. No markdown or explanation.\n' +
@@ -41,16 +64,20 @@ export function buildA2uiLayoutSystemPrompt(
     '- Bind content only through dataPath values explicitly listed in the user task.\n' +
     '- Prefer the narrowest allowed path whose value shape matches the component. Never bind a whole result object ' +
     'when a relevant child array is available.\n' +
+    uiLabRules +
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
     '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
-    'component rendered once per item; it may omit dataPath (or use "/") to read the current item scope. Do not ' +
+    'component rendered once per item. For repeated entity results, use List with one ExpandableCard template so ' +
+    'each result gets its own card. The template may omit dataPath (or use "/") to read the current item scope. Do not ' +
     'replace this dynamic children object with a static children array.\n' +
     '- An action slot contains only {"offerId":"an offered id"}; never invent or alter an offer.\n' +
     '- Component names and properties are direct members of each component object. Use "component", never "type", ' +
     'and never place properties inside a nested "props" object.\n' +
-    '- The following is a complete protocol-shape example only. Copy only its protocol shape; choose any added ' +
+    '- The following is a complete protocol-shape example only. In the UI Lab example, /summary and /results are ' +
+    'stable protocol-level snapshot paths, not assumptions about a business schema. Copy only its protocol shape; choose any added ' +
     'components, properties, and dataPath values strictly from the actual allowedDataPaths and component catalog ' +
-    'in the current task:\n' +
+    'in the current task. Every HeroBanner visible string must be rewritten from the current verified results; ' +
+    'never copy the REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS placeholder into output:\n' +
     outputExample + '\n' +
     '- Keep at most 24 components. Use only this catalog:\n' +
     componentCatalogJson;

@@ -37,6 +37,11 @@ export const A2UI_COMPONENT_MEDIA_SLIDER: string = 'MediaSlider';
 export const A2UI_COMPONENT_SCENE_TABS: string = 'SceneTabs';
 export const A2UI_COMPONENT_MASONRY_GRID: string = 'MasonryGrid';
 export const A2UI_COMPONENT_LIST: string = 'List';
+export const A2UI_COMPONENT_HERO_BANNER: string = 'HeroBanner';
+export const A2UI_COMPONENT_METRIC_GRID: string = 'MetricGrid';
+export const A2UI_COMPONENT_SEGMENTED_RING_CHART: string = 'SegmentedRingChart';
+export const A2UI_COMPONENT_MULTI_SERIES_LINE_CHART: string = 'MultiSeriesLineChart';
+export const A2UI_COMPONENT_MATRIX_HEATMAP: string = 'MatrixHeatmap';
 
 export interface A2uiAction {
   id: string;
