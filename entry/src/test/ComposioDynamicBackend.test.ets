@@ -78,6 +78,7 @@ class RecordingComposioSearchExecuteClient implements ComposioSearchExecuteClien
   executionObservation: string;
   searchedUseCases: string[] = [];
   executedSlugs: string[] = [];
+  executedArgs: Object[] = [];
 
   constructor(searchObservation: string, executionObservation: string) {
     this.searchObservation = searchObservation;
@@ -89,8 +90,9 @@ class RecordingComposioSearchExecuteClient implements ComposioSearchExecuteClien
     return this.searchObservation;
   }
 
-  async execute(toolSlug: string, _args: Object): Promise<string> {
+  async execute(toolSlug: string, args: Object): Promise<string> {
     this.executedSlugs.push(toolSlug);
+    this.executedArgs.push(args);
     return this.executionObservation;
   }
 }
@@ -112,6 +114,144 @@ function successfulExecutionObservation(): string {
 
 export default function composioDynamicBackendTest() {
   describe('composioDynamicBackend', () => {
+    it('passes structured dynamic query through a full GitHub user-events discovery and execute', 0, async () => {
+      const slug = 'GITHUB_LIST_EVENTS_FOR_USER';
+      const schema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"},"page":{"type":"integer"},"per_page":{"type":"integer"}}}';
+      const client = new RecordingComposioSearchExecuteClient(
+        searchObservationForTool(slug, schema),
+        successfulExecutionObservation()
+      );
+      await callComposioSearchAndExecute(
+        client,
+        '请汇总这个 GitHub 账号的公开资料、仓库和最近动态',
+        looseObject('{"query":"sindresorhus","platforms":["github"]}')
+      );
+      const args = client.executedArgs[0] as Record<string, Object | string | number | boolean | null | undefined>;
+      expect(client.executedSlugs[0]).assertEqual(slug);
+      expect(args['username']).assertEqual('sindresorhus');
+      expect(args['page']).assertEqual(1);
+      expect(args['per_page']).assertEqual(10);
+    });
+
+    it('maps structured query only for the GitHub user-read allowlist', 0, () => {
+      const slugs: string[] = [
+        'GITHUB_LIST_EVENTS_FOR_USER',
+        'GITHUB_GET_A_USER',
+        'GITHUB_LIST_REPOSITORIES_FOR_A_USER'
+      ];
+      const schema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"},"page":{"type":"integer"},"per_page":{"type":"integer"}}}';
+      for (let index = 0; index < slugs.length; index++) {
+        const tool = composioTool('{"toolSlug":' + JSON.stringify(slugs[index]) + ',"inputSchema":' +
+          JSON.stringify(schema) + '}');
+        const args = composioArgumentsForTool(
+          tool,
+          '请汇总这个 GitHub 账号的公开资料、仓库和最近动态',
+          '',
+          null,
+          looseObject('{"query":"sindresorhus","platforms":["github"]}')
+        ) as Record<string, Object | string | number | boolean | null | undefined>;
+        expect(args['username']).assertEqual('sindresorhus');
+        expect(args['page']).assertEqual(1);
+        expect(args['per_page']).assertEqual(10);
+      }
+    });
+
+    it('extracts only an explicit GitHub user login when structured query is absent', 0, () => {
+      const schema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"},"page":{"type":"integer"},"per_page":{"type":"integer"}}}';
+      const tool = composioTool('{"toolSlug":"GITHUB_LIST_EVENTS_FOR_USER","inputSchema":' +
+        JSON.stringify(schema) + '}');
+      const explicit = composioArgumentsForTool(
+        tool,
+        '请查看 GitHub 用户 sindresorhus 的最近公开活动',
+        '',
+        null,
+        looseObject('{"platforms":["github"]}')
+      ) as Record<string, Object | string | number | boolean | null | undefined>;
+      const ambiguous = composioArgumentsForTool(
+        tool,
+        '请在 GitHub 上找一位活跃开发者并查看最近公开活动',
+        '',
+        null,
+        looseObject('{"platforms":["github"]}')
+      ) as Record<string, Object | string | number | boolean | null | undefined>;
+
+      expect(explicit['username']).assertEqual('sindresorhus');
+      expect(ambiguous['username'] === undefined).assertTrue();
+      expect(JSON.stringify(ambiguous).indexOf('请在 GitHub')).assertEqual(-1);
+    });
+
+    it('validates the complete explicit GitHub login token without prefix truncation', 0, () => {
+      const schema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"}}}';
+      const tool = composioTool('{"toolSlug":"GITHUB_GET_A_USER","inputSchema":' +
+        JSON.stringify(schema) + '}');
+      const invalid: string[] = [
+        'foo_bar',
+        'a--b',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        '-leading',
+        'trailing-'
+      ];
+      for (let index = 0; index < invalid.length; index++) {
+        const args = composioArgumentsForTool(
+          tool,
+          '请查看 GitHub 用户 ' + invalid[index] + ' 的公开资料',
+          '',
+          null,
+          looseObject('{"platforms":["github"]}')
+        ) as Record<string, Object | string | number | boolean | null | undefined>;
+        expect(args['username'] === undefined).assertTrue();
+      }
+      const valid = composioArgumentsForTool(
+        tool,
+        '请查看 GitHub User foo-bar 的公开资料',
+        '',
+        null,
+        looseObject('{"platforms":["github"]}')
+      ) as Record<string, Object | string | number | boolean | null | undefined>;
+      expect(valid['username']).assertEqual('foo-bar');
+    });
+
+    it('fails closed for a sentence-shaped dynamic query and omits undeclared pagination', 0, () => {
+      const usernameOnlySchema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"}}}';
+      const usernameOnlyTool = composioTool('{"toolSlug":"GITHUB_LIST_EVENTS_FOR_USER","inputSchema":' +
+        JSON.stringify(usernameOnlySchema) + '}');
+      const usernameOnly = composioArgumentsForTool(
+        usernameOnlyTool,
+        '请汇总这个 GitHub 账号的公开资料、仓库和最近动态',
+        '',
+        null,
+        looseObject('{"query":"sindresorhus","platforms":["github"]}')
+      ) as Record<string, Object | string | number | boolean | null | undefined>;
+      const noSchemaTool = composioTool('{"toolSlug":"GITHUB_LIST_REPOSITORIES_FOR_A_USER","inputSchema":"{}"}');
+      const noSchema = composioArgumentsForTool(
+        noSchemaTool,
+        '请汇总这个 GitHub 账号的公开资料、仓库和最近动态',
+        '',
+        null,
+        looseObject('{"query":"sindresorhus","platforms":["github"]}')
+      ) as Record<string, Object | string | number | boolean | null | undefined>;
+      const sentenceQuery = composioArgumentsForTool(
+        usernameOnlyTool,
+        '请汇总这个 GitHub 账号的公开资料、仓库和最近动态',
+        '',
+        null,
+        looseObject('{"query":"请查看 sindresorhus 的 GitHub 活动","platforms":["github"]}')
+      ) as Record<string, Object | string | number | boolean | null | undefined>;
+
+      expect(usernameOnly['username']).assertEqual('sindresorhus');
+      expect(usernameOnly['page'] === undefined).assertTrue();
+      expect(usernameOnly['per_page'] === undefined).assertTrue();
+      expect(noSchema['username']).assertEqual('sindresorhus');
+      expect(noSchema['page'] === undefined).assertTrue();
+      expect(noSchema['per_page'] === undefined).assertTrue();
+      expect(sentenceQuery['username'] === undefined).assertTrue();
+    });
+
     it('pins restored social community reads to exact provider slugs', 0, () => {
       expect(composioExactToolSlugForFixedTool('social.x.community.search'))
         .assertEqual('TWITTER_RECENT_SEARCH');

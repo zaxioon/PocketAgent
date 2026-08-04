@@ -343,6 +343,42 @@ function ownerNameFromPrompt(prompt: string): string {
   return '';
 }
 
+const GITHUB_USER_SCOPED_READ_TOOLS: string[] = [
+  'github_list_events_for_user',
+  'github_get_a_user',
+  'github_list_repositories_for_a_user'
+];
+
+function isGitHubUserScopedReadTool(toolSlug: string): boolean {
+  return GITHUB_USER_SCOPED_READ_TOOLS.indexOf(toolSlug.trim().toLowerCase()) >= 0;
+}
+
+function validGitHubLogin(value: string): string {
+  const login = value.trim();
+  if (login.length === 0 || login.length > 39 || login.startsWith('-') || login.endsWith('-') ||
+    login.indexOf('--') >= 0) {
+    return '';
+  }
+  return /^[A-Za-z0-9-]+$/.test(login) ? login : '';
+}
+
+function structuredDynamicQuery(args: Object | null): string {
+  const query = argumentRecord(args)['query'];
+  return typeof query === 'string' ? validGitHubLogin(query) : '';
+}
+
+function explicitGitHubUsernameFromPrompt(prompt: string): string {
+  const chinese = prompt.match(/github\s*用户\s*[:：]?\s*([^\s,，。；;：:、!?！？/\\()\[\]{}<>"']+)/i);
+  if (chinese !== null && chinese.length > 1) {
+    return validGitHubLogin(chinese[1]);
+  }
+  const english = prompt.match(/github\s+user\s*[:：]?\s*([^\s,，。；;：:、!?！？/\\()\[\]{}<>"']+)/i);
+  if (english !== null && english.length > 1) {
+    return validGitHubLogin(english[1]);
+  }
+  return '';
+}
+
 export function normalizedComposioUseCase(prompt: string, fixedToolId: string = ''): string {
   const keyword = promptSearchKeyword(prompt);
   const toolkit = composioToolkitFromPrompt(prompt);
@@ -1125,10 +1161,29 @@ function driveQueryFor(keyword: string): string {
   return "name contains '" + escaped + "' and trashed = false";
 }
 
-function specialArgumentsForTool(toolSlug: string, prompt: string, schema: ComposioInputSchema): Record<string, Object | string | number | boolean> {
+function specialArgumentsForTool(
+  toolSlug: string,
+  prompt: string,
+  schema: ComposioInputSchema,
+  dynamicArgs: Object | null
+): Record<string, Object | string | number | boolean> {
   const lower = toolSlug.toLowerCase();
   const keyword = promptSearchKeyword(prompt);
   const args: Record<string, Object | string | number | boolean> = {};
+  if (isGitHubUserScopedReadTool(lower)) {
+    const structured = structuredDynamicQuery(dynamicArgs);
+    const username = structured.length > 0 ? structured : explicitGitHubUsernameFromPrompt(prompt);
+    if (username.length > 0) {
+      setIfSupported(args, schema, 'username', username);
+    }
+    if (hasProperty(schema, 'page')) {
+      args['page'] = 1;
+    }
+    if (hasProperty(schema, 'per_page')) {
+      args['per_page'] = 10;
+    }
+    return args;
+  }
   if (lower === 'github_find_pull_requests') {
     setIfSupported(args, schema, 'owner', ownerNameFromPrompt(prompt));
     setIfSupported(args, schema, 'repo', repoNameFromPrompt(prompt));
@@ -1252,11 +1307,12 @@ export function composioArgumentsForTool(
   tool: ComposioSearchTool,
   prompt: string,
   fixedToolId: string = '',
-  fixedArgs: Object | null = null
+  fixedArgs: Object | null = null,
+  dynamicArgs: Object | null = null
 ): Object {
   const schema = parsedInputSchema(textOf(tool.inputSchema));
   const slug = textOf(tool.toolSlug).trim();
-  const args = specialArgumentsForTool(slug, prompt, schema);
+  const args = specialArgumentsForTool(slug, prompt, schema, dynamicArgs);
   mergeFixedArguments(args, schema, fixedToolId, fixedArgs);
   const properties = schema.properties ?? {};
   const names = propertyNames(schema);
@@ -1281,6 +1337,9 @@ export function composioArgumentsForTool(
       return;
     }
     if (args[name] === undefined && isOpaqueIdentifierName(name)) {
+      return;
+    }
+    if (args[name] === undefined && isGitHubUserScopedReadTool(slug) && name.toLowerCase() === 'username') {
       return;
     }
     if (args[name] === undefined && properties[name] !== undefined) {
@@ -2304,7 +2363,7 @@ async function callComposioSearchAndExecuteParsed(
   if (fixedToolId === 'x.post.search' && !isXPostReadSlug(slug)) {
     return xDiscoveryFailure(prompt, searchObservation);
   }
-  const args = composioArgumentsForTool(tool, prompt, fixedToolId, parsed.fixedArgs ?? null);
+  const args = composioArgumentsForTool(tool, prompt, fixedToolId, parsed.fixedArgs ?? null, parsed as Object);
   const authorizationMessage = selectedSlugAuthorizationMessage(slug, fixedToolId, allowFixedContract);
   if (authorizationMessage.length > 0) {
     return blockedSelectedSlugResult(slug, authorizationMessage);
