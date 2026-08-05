@@ -167,6 +167,7 @@ import {
 import {
   callComposioDynamic,
   callComposioDynamicWithProviderData,
+  callComposioGithubOperationTarget,
   callComposioFixedDynamic,
   callComposioFixedRaw,
   composioDynamicResultFromObservation,
@@ -6570,7 +6571,7 @@ function genericResultSource(result: DynamicGenericToolResult): DataSource {
 }
 
 function genericResultHasData(result: DynamicGenericToolResult): boolean {
-  if (result.status !== 'success') {
+  if (result.status !== 'success' && result.status !== 'partial') {
     return false;
   }
   if (mediaVideoPlaybackUrl(result as A2uiGenericToolResultData).length > 0) {
@@ -6588,7 +6589,7 @@ function genericResultHasData(result: DynamicGenericToolResult): boolean {
 }
 
 function genericResultIsFailure(result: DynamicGenericToolResult): boolean {
-  return result.status !== 'success' && result.status !== 'empty';
+  return result.status !== 'success' && result.status !== 'partial' && result.status !== 'empty';
 }
 
 function firstGenericFailure(results: DynamicGenericToolResult[]): string {
@@ -6610,6 +6611,7 @@ export function genericStructuredDataResult(
   const warnings: string[] = [];
   let dataCount = 0;
   let failureCount = 0;
+  let partialCount = 0;
   results.forEach((result: DynamicGenericToolResult) => {
     if (genericResultHasData(result)) {
       dataCount += 1;
@@ -6618,12 +6620,16 @@ export function genericStructuredDataResult(
       failureCount += 1;
       warnings.push(result.sourceTag + '：' + (result.summary.length > 0 ? result.summary : result.title));
     }
+    if (result.status === 'partial') {
+      partialCount += 1;
+      warnings.push(result.sourceTag + '：' + (result.summary.length > 0 ? result.summary : result.title));
+    }
     if (!sourceAlreadyIncluded(sources, result.sourceTag, result.toolName)) {
       sources.push(genericResultSource(result));
     }
   });
   if (dataCount > 0) {
-    return failureCount > 0 ?
+    return failureCount > 0 || partialCount > 0 ?
       partialDataResult(toolId, outputSchema, data, sources, warnings) :
       successfulDataResult(toolId, outputSchema, data, sources);
   }
@@ -10970,6 +10976,8 @@ interface DynamicReadRequestArgs {
   operation?: Object | string | number | boolean | null;
   qualifiedName?: Object | string | number | boolean | null;
   toolSlug?: Object | string | number | boolean | null;
+  query?: Object | string | number | boolean | null;
+  operationTarget?: Object | string | number | boolean | null;
 }
 
 function dynamicReadRequestArgs(args: Object | null): DynamicReadRequestArgs {
@@ -11176,7 +11184,24 @@ async function defaultDynamicReadExecutor(
   args: Object | null,
   profile?: DynamicReadExecutionProfile
 ): Promise<DynamicReadExecution> {
-  const selected = dynamicQualifiedName(dynamicReadRequestArgs(args));
+  const request = dynamicReadRequestArgs(args);
+  const operationTarget = textOf(request.operationTarget).trim();
+  if (profile?.allowTrustedOperationTargets === true && operationTarget.length > 0) {
+    const targeted = await callComposioGithubOperationTarget(
+      operationTarget, textOf(request.query).trim(), prompt
+    );
+    const providedRegistration = targeted.registration;
+    const metadata = providedRegistration ?? dynamicRegistration(
+      targeted.sourceTag,
+      targeted.toolName,
+      new Object(),
+      new Object(),
+      dynamicReceiptFromProviderPayload(targeted.rawPreview)
+    );
+    targeted.registration = undefined;
+    return dynamicExecutionResult(targeted, metadata);
+  }
+  const selected = dynamicQualifiedName(request);
   if (selected.length > 0) {
     const selectedManifest = selectedDynamicManifest(selected);
     if (selectedManifest !== null) {
@@ -11243,7 +11268,7 @@ function dynamicStructuredDataResult(
     code = 'DYNAMIC_UNSUPPORTED_TRANSPORT';
   } else if (status === 'no_tool_found') {
     code = 'DYNAMIC_NO_PROVIDER';
-  } else if (status !== 'success' && status !== 'empty') {
+  } else if (status !== 'success' && status !== 'partial' && status !== 'empty') {
     code = 'DYNAMIC_PROVIDER_ERROR';
   }
   if (code.length > 0) {
@@ -11262,6 +11287,15 @@ async function callStructuredDynamicTool(
   args: Object | null,
   profile?: DynamicReadExecutionProfile
 ): Promise<DataResult> {
+  const operationTarget = textOf(dynamicReadRequestArgs(args).operationTarget).trim();
+  if (operationTarget.length > 0 && profile?.allowTrustedOperationTargets !== true) {
+    return errorDataResult(
+      'dynamic.search',
+      'dynamicToolConnect',
+      'DYNAMIC_TRUSTED_TARGET_NOT_ALLOWED',
+      'Trusted dynamic operationTarget values are available only to an authorized host profile.'
+    );
+  }
   const authorizationMessage = dynamicReadAuthorizationMessage(args);
   if (authorizationMessage.length > 0) {
     return errorDataResult(
@@ -15554,7 +15588,10 @@ export async function callStructuredToolForUiLab(
   args: Object | null
 ): Promise<DataResult> {
   if (toolId === 'dynamic.search') {
-    const profile: DynamicReadExecutionProfile = { preserveProviderData: true };
+    const profile: DynamicReadExecutionProfile = {
+      preserveProviderData: true,
+      allowTrustedOperationTargets: true
+    };
     return callStructuredDynamicTool(prompt, args, profile);
   }
   return callStructuredTool(toolId, prompt, args);

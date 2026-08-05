@@ -1,6 +1,6 @@
 # 当前工具能力总表
 
-更新时间：2026-07-27
+更新时间：2026-08-05
 
 来源：`agent_core/src/main/ets/aiphone/AiphoneToolDefinitions.ets`、`agent_core/src/main/ets/aiphone/runtime/ToolDefinitionRegistry.ets`、`entry/src/main/ets/pages/A2uiHome/agent/MultiAgentRuntime.ets`、`entry/src/main/ets/pages/A2uiHome/agent/MultiAgentCanaryRuntime.ets`、`agent_core/src/main/ets/aiphone/runtime/AggregateSearchClient.ets`、`agent_core/src/main/ets/aiphone/runtime/ComposioDynamicBackend.ets`、`scripts/aiphone-device-smoke.mjs`、支付/Composio 相关单测。
 
@@ -9,6 +9,8 @@
 授权页统一显示 app 名称。Slack、X 的读取和授权统一走当前用户的 Composio connected account；用户确认发送 Slack 回复时固定执行 `SLACK_CHAT_POST_MESSAGE`，X 回复仍不支持。QQ 邮箱、瑞幸、滴滴继续使用当前默认凭证和原有 provider 逻辑，授权页只新增各自官方授权/开发者页面入口，不会把网页登录结果自动写回 App。
 
 Firecrawl 六个固定工具由 HAP 携带 `FIRECRAWL_API_KEY`，直接连接 Firecrawl Hosted MCP；这是当前产品配置选择，不依赖 Mac gateway，也不会在手机上运行 Chromium。Credit、Monitor 检查和套餐计费均由 Firecrawl 账号/Provider 管理。Monitor 是退出 App 后仍保留的 Firecrawl 云状态；此版本没有 HarmonyOS 原生推送。
+
+UI Lab 的 GitHub 用户看板是 `dynamic.search` 的宿主受信 profile，不是新的模型工具。Leader 只提交一次 `github.user.dashboard` target；宿主依次将它映射到 `GITHUB_GET_A_USER`、`GITHUB_LIST_REPOSITORIES_FOR_A_USER`、`GITHUB_LIST_EVENTS_FOR_USER`，并要求每次 search 都返回精确 slug 和完整可验证的输入 schema 后才执行。看板允许分区部分失败，三个分区全失败时整体失败；近期 events 不是贡献日历，仓库计数/Star/Fork 只统计 Provider 当前返回页。普通首页和旧 `dynamic.search` 入口不会获得该受信 target 权限。
 
 ## multi-Agent smoke 证据边界
 
@@ -131,6 +133,7 @@ Firecrawl 六个固定工具由 HAP 携带 `FIRECRAWL_API_KEY`，直接连接 Fi
 | 数字分身 | `memory.update` | `我只喝瑞幸咖啡` | 更新当前分身 memory，显示记忆更新卡；不同时搜索 | `draft` | 无 | 不需要 | 否 | 默认 smoke |
 | 动态工具/本地 | `dynamic.search` | `帮我查明天深圳天气` | 本地 catalog 命中 `weather.query`；找不到就 `no_tool_found` | `read` | 本地 catalog 凭据；天气通常走高德 key | 高德天气通常不需要 VPN | 否 | `--dynamic-tools` |
 | Composio/GitHub | `dynamic.search` | `帮我在 GitHub 里找 Appless-Phone 最近的 pr` | Composio GitHub 结果；优先 `GITHUB_FIND_PULL_REQUESTS`，展示 Appless-Phone PR | `read` | `COMPOSIO_API_KEY` + `COMPOSIO_USER_ID` + GitHub connected account | 通常需要外网/VPN | 是 | `--composio-tools` |
+| Composio/GitHub UI Lab | `dynamic.search` + host-only `operationTarget` | `为 GitHub 用户 sindresorhus 生成资料、仓库和近期动态看板` | 一次 `github.user.dashboard` 任务聚合真实公开资料、当前页仓库统计和近期事件；分区失败显式标注来源，不生成贡献日历 | `read` | `COMPOSIO_API_KEY` + `COMPOSIO_USER_ID` + GitHub connected account；仅 UI Lab trusted profile | 通常需要外网/VPN | 是 | Hypium；UI Lab 真机 `manual-only` |
 | Composio/Google Drive | `dynamic.search` | `帮我在 Google Drive 里找专利交底书` | Composio Google Drive 结果；优先 `GOOGLEDRIVE_FIND_FILE`，查文件名/内容 | `read` | Composio 配置 + Google Drive connected account | 通常需要外网/VPN | 是 | `--composio-tools` |
 | Composio/Google Docs | `dynamic.search` | `帮我在 Google Docs 里找 AIPhoneDemo 设计文档` | Composio Google Docs 结果；优先 `GOOGLEDOCS_SEARCH_DOCUMENTS` | `read` | Composio 配置 + Google Docs connected account | 通常需要外网/VPN | 是 | `--composio-tools` |
 | Composio/Linear | `dynamic.search` | `帮我查 Linear 里分配给我的高优先级 bug` | Composio Linear 工具结果或真实授权/无结果 | `read` | Composio 配置 + Linear connected account | 通常需要外网/VPN | 是 | `--composio-tools` |

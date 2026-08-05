@@ -853,6 +853,7 @@ export class UiAgentLabHarness {
       opener: new RejectUiLabUriOpener(),
       uiRenderer: new UiAgentLabRenderer(planner),
       structuredToolCall: callStructuredToolForUiLab,
+      allowTrustedOperationTargets: true,
       surfaceDocumentProjector: projectUiAgentLabSurface,
       currentHostSurface: (): A2uiSurfaceState | null =>
         this.currentSurface === null ? null : cloneSurface(this.currentSurface),

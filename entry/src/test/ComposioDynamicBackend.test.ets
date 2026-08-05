@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
   callComposioDynamic,
+  callComposioGithubOperationTargetForTest,
   callComposioFixedSearchAndExecuteForTest,
   callComposioSearchAndExecute,
   composioDynamicMissingConfigResult,
@@ -101,6 +102,38 @@ class RecordingComposioSearchExecuteClient implements ComposioSearchExecuteClien
   }
 }
 
+class QueuedComposioSearchExecuteClient implements ComposioSearchExecuteClient {
+  searchObservations: string[];
+  executionObservations: string[];
+  searchIndex: number = 0;
+  executionIndex: number = 0;
+  searchedUseCases: string[] = [];
+  executedSlugs: string[] = [];
+  executedArgs: Object[] = [];
+
+  constructor(searchObservations: string[], executionObservations: string[]) {
+    this.searchObservations = searchObservations;
+    this.executionObservations = executionObservations;
+  }
+
+  async search(useCase: string): Promise<string> {
+    this.searchedUseCases.push(useCase);
+    const observation = this.searchIndex < this.searchObservations.length ?
+      this.searchObservations[this.searchIndex] : '';
+    this.searchIndex++;
+    return observation;
+  }
+
+  async execute(toolSlug: string, args: Object): Promise<string> {
+    this.executedSlugs.push(toolSlug);
+    this.executedArgs.push(args);
+    const observation = this.executionIndex < this.executionObservations.length ?
+      this.executionObservations[this.executionIndex] : '';
+    this.executionIndex++;
+    return observation;
+  }
+}
+
 function searchObservationForTool(
   slug: string,
   inputSchema: string = '{}',
@@ -118,6 +151,145 @@ function successfulExecutionObservation(): string {
 
 export default function composioDynamicBackendTest() {
   describe('composioDynamicBackend', () => {
+    it('aggregates the trusted GitHub dashboard from three exact read-only provider tools', 0, async () => {
+      const schema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"},"page":{"type":"integer"},"per_page":{"type":"integer"}}}';
+      const client = new QueuedComposioSearchExecuteClient(
+        [
+          searchObservationForTool('GITHUB_GET_A_USER', schema),
+          searchObservationForTool('GITHUB_LIST_REPOSITORIES_FOR_A_USER', schema),
+          searchObservationForTool('GITHUB_LIST_EVENTS_FOR_USER', schema)
+        ],
+        [
+          '{"data":{"login":"sindresorhus","name":"Sindre","bio":"Open source",' +
+            '"avatar_url":"https://avatars.example/sindre","html_url":"https://github.com/sindresorhus",' +
+            '"followers":10,"following":2,"public_repos":3}}',
+          '{"data":{"repositories":[' +
+            '{"name":"alpha","full_name":"sindresorhus/alpha","html_url":"https://github.com/sindresorhus/alpha",' +
+            '"language":"TypeScript","stargazers_count":7,"forks_count":2,"updated_at":"2026-07-01T00:00:00Z",' +
+            '"pushed_at":"2026-07-02T00:00:00Z"},' +
+            '{"name":"beta","full_name":"sindresorhus/beta","html_url":"https://github.com/sindresorhus/beta",' +
+            '"language":"TypeScript","stargazers_count":5,"forks_count":1,"updated_at":"2026-06-01T00:00:00Z"}' +
+            ']}}',
+          '{"data":{"events":[{"type":"PushEvent","created_at":"2026-08-01T00:00:00Z",' +
+            '"repo":{"name":"sindresorhus/alpha"},"payload":{"ref":"refs/heads/main","size":2},"public":true}]}}'
+        ]
+      );
+
+      const result = await callComposioGithubOperationTargetForTest(
+        client, 'github.user.dashboard', 'sindresorhus'
+      );
+      const dashboard = result.providerData as Record<string, Object | string | number | boolean>;
+      const metrics = dashboard['repositoryMetrics'] as Record<string, number>;
+      const languages = dashboard['languages'] as Object[];
+      const activity = dashboard['recentActivity'] as Object[];
+
+      expect(result.status).assertEqual('success');
+      expect(result.toolName).assertEqual('github.user.dashboard');
+      expect(result.registration?.qualifiedName).assertEqual('github.user.dashboard');
+      expect(client.executedSlugs.join(',')).assertEqual(
+        'GITHUB_GET_A_USER,GITHUB_LIST_REPOSITORIES_FOR_A_USER,GITHUB_LIST_EVENTS_FOR_USER'
+      );
+      expect(client.executedArgs.length).assertEqual(3);
+      expect(JSON.stringify(client.executedArgs[0])).assertContain('"username":"sindresorhus"');
+      expect(dashboard['partial']).assertFalse();
+      expect(metrics['returnedRepositoryCount']).assertEqual(2);
+      expect(metrics['returnedStars']).assertEqual(12);
+      expect(metrics['returnedForks']).assertEqual(3);
+      expect(languages.length).assertEqual(1);
+      expect(activity.length).assertEqual(1);
+      expect(JSON.stringify(activity[0])).assertContain('"kind":"push"');
+      expect(JSON.stringify(dashboard).indexOf('contributions')).assertEqual(-1);
+    });
+
+    it('fails closed before execute for absent malformed oversized or expanded GitHub schemas', 0, async () => {
+      const validPrefix = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string","description":"';
+      const invalidSchemas: string[] = [
+        '{}',
+        '{not-json',
+        validPrefix + 'x'.repeat(3100) + '"}}',
+        '{"type":"object","required":["username","installation_id"],"properties":{' +
+          '"username":{"type":"string"},"installation_id":{"type":"string"}}}'
+      ];
+      for (let index = 0; index < invalidSchemas.length; index++) {
+        const client = new RecordingComposioSearchExecuteClient(
+          searchObservationForTool('GITHUB_GET_A_USER', invalidSchemas[index]),
+          '{"data":{"login":"must-not-execute"}}'
+        );
+        const result = await callComposioGithubOperationTargetForTest(
+          client, 'github.profile', 'sindresorhus'
+        );
+        expect(result.status).assertEqual('error');
+        expect(client.executedSlugs.length).assertEqual(0);
+      }
+    });
+
+    it('reports partial dashboard provenance and fails only when every section fails', 0, async () => {
+      const schema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"}}}';
+      const partialClient = new QueuedComposioSearchExecuteClient(
+        [
+          searchObservationForTool('GITHUB_GET_A_USER', schema),
+          searchObservationForTool('GITHUB_LIST_REPOSITORIES_FOR_A_USER', schema),
+          searchObservationForTool('GITHUB_LIST_EVENTS_FOR_USER', '{}')
+        ],
+        [
+          '{"data":{"login":"sindresorhus","followers":10,"deep":' +
+            '{"next":'.repeat(20) + '{"value":1}' + '}'.repeat(20) + '}}',
+          '{"error":{"message":"repositories unavailable"}}'
+        ]
+      );
+      const partial = await callComposioGithubOperationTargetForTest(
+        partialClient, 'github.user.dashboard', 'sindresorhus'
+      );
+      const partialData = partial.providerData as Record<string, Object | string | number | boolean>;
+      const partialMeta = partial.providerDataMeta as Record<string, Object | string | number | boolean>;
+      expect(partial.status).assertEqual('partial');
+      expect(partialData['partial']).assertTrue();
+      expect(partialMeta['truncated']).assertTrue();
+      expect(JSON.stringify(partialData['sections'])).assertContain('"status":"error"');
+      expect(partialData['profile'] === undefined).assertFalse();
+      expect(partialClient.executedSlugs.length).assertEqual(2);
+
+      const missing = '{"source":"Composio","authorizedToolkits":["github"],"tools":[]}';
+      const failedClient = new QueuedComposioSearchExecuteClient([missing, missing, missing], []);
+      const failed = await callComposioGithubOperationTargetForTest(
+        failedClient, 'github.user.dashboard', 'sindresorhus'
+      );
+      expect(failed.status).assertEqual('error');
+      expect((failed.providerData as Record<string, boolean>)['partial']).assertTrue();
+      expect(failedClient.executedSlugs.length).assertEqual(0);
+    });
+
+    it('normalizes single target identity and rejects unknown targets or invalid usernames without search', 0, async () => {
+      const schema = '{"type":"object","required":["username"],"properties":{' +
+        '"username":{"type":"string"}}}';
+      const profileClient = new RecordingComposioSearchExecuteClient(
+        searchObservationForTool('github_get_a_user', schema),
+        '{"data":{"login":"sindresorhus","public_repos":3}}'
+      );
+      const profile = await callComposioGithubOperationTargetForTest(
+        profileClient, 'github.profile', 'sindresorhus'
+      );
+      expect(profile.status).assertEqual('success');
+      expect(profile.toolName).assertEqual('GITHUB_GET_A_USER');
+      expect(profile.registration?.qualifiedName).assertEqual('GITHUB_GET_A_USER');
+      expect(profileClient.executedSlugs[0]).assertEqual('GITHUB_GET_A_USER');
+
+      const rejectedClient = new QueuedComposioSearchExecuteClient([], []);
+      const unknown = await callComposioGithubOperationTargetForTest(
+        rejectedClient, 'github.delete', 'sindresorhus'
+      );
+      const invalidUser = await callComposioGithubOperationTargetForTest(
+        rejectedClient, 'github.profile', 'bad_user'
+      );
+      expect(unknown.status).assertEqual('unsafe_action_blocked');
+      expect(invalidUser.status).assertEqual('error');
+      expect(rejectedClient.searchedUseCases.length).assertEqual(0);
+      expect(rejectedClient.executedSlugs.length).assertEqual(0);
+    });
+
     it('passes structured dynamic query through a full GitHub user-events discovery and execute', 0, async () => {
       const slug = 'GITHUB_LIST_EVENTS_FOR_USER';
       const schema = '{"type":"object","required":["username"],"properties":{' +

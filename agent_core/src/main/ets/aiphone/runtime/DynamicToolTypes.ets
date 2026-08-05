@@ -189,6 +189,8 @@ export interface DynamicReadExecution extends GenericStructuredData {
 
 export interface DynamicReadExecutionProfile {
   preserveProviderData: boolean;
+  /** Host-only capability. Model-generated args cannot enable trusted operation targets. */
+  allowTrustedOperationTargets?: boolean;
 }
 
 export type DynamicReadExecutor = (
