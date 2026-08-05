@@ -7,6 +7,7 @@ import {
   composioArgumentsForTool,
   composioDynamicResultFromObservation,
   composioProviderDataFromObservation,
+  githubUserEventsNormalizedOutputSchema,
   limitComposioObservation,
   preservedComposioExecutionFromResponse,
   composioPreferredToolScore,
@@ -1036,12 +1037,26 @@ export default function composioDynamicBackendTest() {
       expect(JSON.stringify(result.rows).indexOf('Add Composio dynamic backend')).assertLarger(-1);
     });
 
-    it('preserves nested GitHub event fields only for the schema-preserving execution profile', 0, () => {
-      const observation = '{"data":{"events":[{' +
-        '"type":"PushEvent","created_at":"2026-08-04T00:58:39Z",' +
+    it('normalizes GitHub push star release issue comment and unknown events only for UI Lab', 0, () => {
+      const observation = '{"data":{"events":[' +
+        '{"type":"PushEvent","public":false,"created_at":"2026-08-04T00:58:39Z",' +
         '"repo":{"id":7,"name":"xojs/eslint-config-xo"},' +
-        '"actor":{"id":8,"login":"sindresorhus"},' +
-        '"payload":{"action":"published","commits":[{"sha":"abc123"}]}}]}}';
+        '"actor":{"id":8,"login":"sindresorhus","avatar_url":"https://avatar"},' +
+        '"payload":{"ref":"refs/heads/main","distinct_size":2,"commits":[' +
+        '{"sha":"abc123","message":"fix parser"},{"sha":"def456","message":"add tests"}]}}' +
+        ',{"type":"WatchEvent","public":true,"created_at":"2026-08-04T01:00:00Z",' +
+        '"repo":{"name":"thesysdev/openui"},"payload":{"action":"started"}}' +
+        ',{"type":"ReleaseEvent","created_at":"2026-08-04T02:00:00Z",' +
+        '"repo":{"name":"xojs/eslint-config-xo"},"payload":{"action":"published",' +
+        '"release":{"tag_name":"v1.0.0","name":"First release","html_url":"https://github.com/x/r/1"}}}' +
+        ',{"type":"IssuesEvent","created_at":"2026-08-04T03:00:00Z",' +
+        '"repo":{"name":"owner/issues"},"payload":{"action":"closed",' +
+        '"issue":{"number":12,"title":"Bug","state":"closed","html_url":"https://github.com/i/12"}}}' +
+        ',{"type":"IssueCommentEvent","created_at":"2026-08-04T04:00:00Z",' +
+        '"repo":{"name":"owner/comments"},"payload":{"action":"created",' +
+        '"issue":{"number":13,"title":"Question"},"comment":{"body":"large raw body","html_url":"https://github.com/c/13"}}}' +
+        ',{"type":"MysteryEvent","created_at":"2026-08-04T05:00:00Z",' +
+        '"repo":{"name":"owner/mystery"},"payload":{"action":"moved","secret":"do-not-show"}}]}}';
       const legacy = composioDynamicResultFromObservation(
         'execute', observation, 'GITHUB_LIST_EVENTS_FOR_USER', 'GitHub user activity'
       );
@@ -1050,18 +1065,131 @@ export default function composioDynamicBackendTest() {
       );
       const provider = preserved.providerData as Record<string, Object>;
       const events = provider['events'] as Object[];
-      const event = events[0] as Record<string, Object | string>;
-      const repo = event['repo'] as Record<string, Object | string>;
-      const actor = event['actor'] as Record<string, Object | string>;
+      const push = events[0] as Record<string, Object | string>;
+      const pushDetails = push['details'] as Record<string, Object | string | number>;
+      const star = events[1] as Record<string, Object | string>;
+      const release = events[2] as Record<string, Object | string>;
+      const issue = events[3] as Record<string, Object | string>;
+      const comment = events[4] as Record<string, Object | string>;
+      const fallback = events[5] as Record<string, Object | string>;
+      const metadata = provider['metadata'] as Record<string, Object | string | boolean>;
 
       expect(legacy.providerData === undefined).assertTrue();
       expect(preserved.providerData === undefined).assertFalse();
-      expect(event['type']).assertEqual('PushEvent');
-      expect(event['created_at']).assertEqual('2026-08-04T00:58:39Z');
-      expect(repo['name']).assertEqual('xojs/eslint-config-xo');
-      expect(actor['login']).assertEqual('sindresorhus');
+      expect(provider['count'] as number).assertEqual(6);
+      expect(metadata['schemaVersion']).assertEqual('github-user-events.v1');
+      expect(push['kind']).assertEqual('push');
+      expect(push['visibility']).assertEqual('private');
+      expect(push['title']).assertEqual('更新了 xojs/eslint-config-xo');
+      expect(push['summary']).assertContain('main 分支推送了 2 个提交');
+      expect(pushDetails['commitCount']).assertEqual(2);
+      expect(star['kind']).assertEqual('star');
+      expect(star['visibility']).assertEqual('public');
+      expect(star['summary']).assertContain('点了 Star');
+      expect(release['kind']).assertEqual('release');
+      expect(release['visibility']).assertEqual('unknown');
+      expect(release['title']).assertContain('v1.0.0');
+      expect(issue['kind']).assertEqual('issue');
+      expect(issue['title']).assertContain('关闭了');
+      expect(comment['kind']).assertEqual('issue_comment');
+      expect(comment['title']).assertContain('Issue #13');
+      expect(fallback['kind']).assertEqual('other');
+      expect(fallback['summary']).assertContain('MysteryEvent');
       expect(JSON.stringify(preserved.providerData).indexOf('结果 1')).assertEqual(-1);
+      expect(JSON.stringify(preserved.providerData).indexOf('sindresorhus')).assertEqual(-1);
+      expect(JSON.stringify(preserved.providerData).indexOf('abc123')).assertEqual(-1);
+      expect(JSON.stringify(preserved.providerData).indexOf('large raw body')).assertEqual(-1);
+      expect(JSON.stringify(preserved.providerData).indexOf('do-not-show')).assertEqual(-1);
       expect(JSON.stringify(legacy.rows).indexOf('结果 1')).assertLarger(-1);
+    });
+
+    it('distinguishes pull request issue comments and maps secondary GitHub event families', 0, () => {
+      const observation = '{"data":{"events":[' +
+        '{"type":"IssueCommentEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"action":"edited","issue":{"number":8,"pull_request":{"url":"api"}},' +
+        '"comment":{"html_url":"comment"}}}' +
+        ',{"type":"PullRequestReviewEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"action":"submitted","pull_request":{"number":9,"title":"PR","html_url":"pr"},' +
+        '"review":{"state":"approved","html_url":"review"}}}' +
+        ',{"type":"PullRequestReviewCommentEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"action":"deleted","pull_request":{"number":9},' +
+        '"comment":{"html_url":"review-comment"}}}' +
+        ',{"type":"CommitCommentEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"comment":{"commit_id":"secret-sha","html_url":"commit-comment","body":"raw body"}}}' +
+        ',{"type":"DeleteEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"ref_type":"branch","ref":"old"}}' +
+        ',{"type":"DiscussionEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"action":"created","discussion":{"number":2,"title":"Ideas","html_url":"discussion"}}}' +
+        ',{"type":"GollumEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"pages":[{"title":"Home","sha":"wiki-sha"}]}}' +
+        ',{"type":"MemberEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"action":"added","member":{"login":"alice","avatar_url":"avatar"}}}' +
+        ',{"type":"PublicEvent","repo":{"name":"o/r"},"created_at":"2026-08-04","payload":{}}' +
+        ',{"type":"WatchEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"action":"stopped"}}' +
+        ',{"type":"PullRequestEvent","repo":{"name":"o/r"},"created_at":"2026-08-04",' +
+        '"payload":{"action":"closed","number":10,"pull_request":{"number":10,"merged":true}}}]}}';
+      const provider = composioProviderDataFromObservation(
+        observation, 'GITHUB_LIST_EVENTS_FOR_USER'
+      ) as Record<string, Object>;
+      const events = provider['events'] as Array<Record<string, Object | string>>;
+      const encoded = JSON.stringify(provider);
+
+      expect(events[0]['kind']).assertEqual('pull_request_comment');
+      expect(events[1]['kind']).assertEqual('pull_request_review');
+      expect(events[2]['kind']).assertEqual('pull_request_review_comment');
+      expect(events[3]['kind']).assertEqual('commit_comment');
+      expect(events[4]['kind']).assertEqual('delete');
+      expect(events[5]['kind']).assertEqual('discussion');
+      expect(events[6]['kind']).assertEqual('wiki');
+      expect(events[7]['kind']).assertEqual('member');
+      expect(events[8]['kind']).assertEqual('public');
+      expect(events[0]['title']).assertContain('编辑了评论');
+      expect(events[2]['title']).assertContain('删除了评论');
+      expect(events[9]['kind']).assertEqual('other');
+      expect(events[9]['summary']).assertContain('WatchEvent');
+      expect(events[10]['kind']).assertEqual('pull_request');
+      expect(events[10]['title']).assertContain('合并了');
+      expect((events[10]['title'] as string).indexOf('关闭了')).assertEqual(-1);
+      expect(encoded.indexOf('secret-sha')).assertEqual(-1);
+      expect(encoded.indexOf('raw body')).assertEqual(-1);
+      expect(encoded.indexOf('wiki-sha')).assertEqual(-1);
+      expect(encoded.indexOf('avatar')).assertEqual(-1);
+    });
+
+    it('publishes the normalized GitHub events output contract and accepts a direct event array', 0, () => {
+      const schema = githubUserEventsNormalizedOutputSchema();
+      const normalized = composioProviderDataFromObservation(
+        '{"data":[{"type":"WatchEvent","repo":{"name":"owner/repo"},' +
+        '"created_at":"2026-08-05T00:00:00Z","payload":{"action":"started"}}]}',
+        'GITHUB_LIST_EVENTS_FOR_USER'
+      ) as Record<string, Object | number>;
+      const events = normalized['events'] as Array<Record<string, Object | string>>;
+
+      expect(JSON.stringify(schema)).assertContain('WatchEvent=star');
+      expect(JSON.stringify(schema)).assertContain('not an all-time total');
+      expect(JSON.stringify(schema)).assertContain('visibility');
+      expect(normalized['count'] as number).assertEqual(1);
+      expect(events[0]['kind']).assertEqual('star');
+      expect(events[0]['title']).assertContain('owner/repo');
+    });
+
+    it('keeps the provider output schema unchanged on the legacy dynamic execution path', 0, async () => {
+      const rawOutputSchema = '{"type":"object","properties":{"events":{' +
+        '"type":"array","description":"raw-provider-schema"}}}';
+      const client = new RecordingComposioSearchExecuteClient(
+        searchObservationForTool('GITHUB_LIST_EVENTS_FOR_USER', '{}', rawOutputSchema),
+        '{"data":{"events":[{"type":"PushEvent","public":false,"repo":{"name":"private/repo"}}]}}'
+      );
+      const result = await callComposioSearchAndExecute(
+        client, 'GitHub user events', looseObject('{"query":"sindresorhus"}')
+      );
+      const registration = result.registration as DynamicRegistrationMetadata;
+      const encoded = JSON.stringify(registration.outputSchema);
+
+      expect(encoded).assertContain('raw-provider-schema');
+      expect(encoded.indexOf('github-user-events.v1')).assertEqual(-1);
+      expect(result.providerData === undefined).assertTrue();
     });
 
     it('preserves common provider arrays and strings while redacting binary blobs', 0, () => {
@@ -1075,7 +1203,7 @@ export default function composioDynamicBackendTest() {
         JSON.stringify(entries) + '},"logs":[{"blob":' + JSON.stringify('B'.repeat(4000)) + '}]}},' +
         '"error":null}';
       const preserved = composioDynamicResultFromObservation(
-        'execute', observation, 'GITHUB_LIST_EVENTS_FOR_USER', 'GitHub events', true
+        'execute', observation, 'GITHUB_LIST_REPOSITORIES_FOR_A_USER', 'GitHub repositories', true
       );
       const provider = preserved.providerData as Record<string, Object>;
       const meta = preserved.providerDataMeta as Record<string, Object | string | number | boolean>;

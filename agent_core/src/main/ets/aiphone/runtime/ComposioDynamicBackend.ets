@@ -16,10 +16,14 @@ import {
 import { DynamicGenericToolResult, dynamicReceiptFromProviderPayload } from './DynamicToolTypes';
 import {
   composioProviderDataFromObservation,
-  extractComposioProviderData
+  extractComposioProviderData,
+  githubUserEventsNormalizedOutputSchema
 } from '../../composio/ComposioProviderData';
 
-export { composioProviderDataFromObservation } from '../../composio/ComposioProviderData';
+export {
+  composioProviderDataFromObservation,
+  githubUserEventsNormalizedOutputSchema
+} from '../../composio/ComposioProviderData';
 
 interface ComposioExecuteArgs {
   operation?: string;
@@ -2280,7 +2284,7 @@ export function composioDynamicResultFromObservation(
         providerPhase: 'execution'
       };
       if (preserveProviderData) {
-        const extracted = extractComposioProviderData(observation);
+        const extracted = extractComposioProviderData(observation, toolSlug);
         if (extracted.data !== null) {
           result.providerData = extracted.data;
           result.providerDataMeta = extracted.meta as Object;
@@ -2343,7 +2347,7 @@ async function executeComposioObservation(
   const observation = await current.execute(toolSlug, args);
   const result: ComposioExecutionObservation = { observation: observation };
   if (preserveProviderData) {
-    const extracted = extractComposioProviderData(observation);
+    const extracted = extractComposioProviderData(observation, toolSlug);
     if (extracted.data !== null) {
       result.providerData = extracted.data;
       result.providerDataMeta = extracted.meta as Object;
@@ -2432,7 +2436,8 @@ async function callComposioSearchAndExecuteParsed(
     provider: 'Composio',
     qualifiedName: slug,
     inputSchema: composioToolSchema(tool.inputSchema),
-    outputSchema: composioToolSchema(tool.outputSchema),
+    outputSchema: preserveProviderData && slug.trim().toUpperCase() === 'GITHUB_LIST_EVENTS_FOR_USER' ?
+      githubUserEventsNormalizedOutputSchema() : composioToolSchema(tool.outputSchema),
     receipt: dynamicReceiptFromProviderPayload(executionObservation)
   };
   return result;

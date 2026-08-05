@@ -666,6 +666,12 @@ const DYNAMIC_SEARCH_PLANNING_DESCRIPTION: string =
   'the same round even when their toolId is identical. Each task.goal must name exactly one operation target, and ' +
   'structured input.query must carry only the exact entity or keyword, such as a GitHub username. Do not combine ' +
   'GitHub profile, repositories, and recent events in one goal. ' +
+  'GITHUB_LIST_EVENTS_FOR_USER schema-preserving results normalize raw GitHub events into ' +
+  'events[{kind,title,summary,repo{name,url?},occurredAt,details,visibility}], count, and metadata. Authenticated ' +
+  'self-queries may include private events; retain them and use visibility=private. Kinds include push, star ' +
+  '(raw WatchEvent), release, issue, issue_comment or pull_request_comment, fork, pull_request, ' +
+  'pull_request_review, pull_request_review_comment, create, delete, discussion, wiki, member, public, and other. ' +
+  'Prefer these readable fields over raw provider payloads. ' +
   'Do not use Composio for payment, Gmail, Calendar, SocialHub, Maps, Food, Travel, World Cup page/schedule requests, or ' +
   'other fixed-tool domains unless the user explicitly asks for an unsupported external app/toolkit. For ferry or ' +
   'boat ticket requests, use dynamic.search; fixed travel tools only cover train and flight options, and ' +

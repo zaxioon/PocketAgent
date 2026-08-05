@@ -166,8 +166,11 @@ export function limitComposioObservation(text: string): string {
   return JSON.stringify(truncated);
 }
 
-export function preservedComposioExecutionFromResponse(text: string): ComposioPreservedExecution {
-  const extracted = extractComposioProviderData(text);
+export function preservedComposioExecutionFromResponse(
+  text: string,
+  toolSlug: string = ''
+): ComposioPreservedExecution {
+  const extracted = extractComposioProviderData(text, toolSlug);
   return {
     observation: limitComposioObservation(text),
     providerData: extracted.data,
@@ -314,7 +317,7 @@ export class ComposioSessionClient {
   }
 
   async executePreservingProviderData(toolSlug: string, args: Object): Promise<ComposioPreservedExecution> {
-    return preservedComposioExecutionFromResponse(await this.executeResponseText(toolSlug, args));
+    return preservedComposioExecutionFromResponse(await this.executeResponseText(toolSlug, args), toolSlug);
   }
 
   private async executeResponseText(toolSlug: string, args: Object): Promise<string> {
