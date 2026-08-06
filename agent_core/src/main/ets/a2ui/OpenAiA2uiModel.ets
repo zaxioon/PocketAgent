@@ -52,18 +52,24 @@ export function buildA2uiLayoutSystemPrompt(
       'of business entities. HeroBanner must not present either value as an entity total. Never infer a total from ' +
       'a sampled array length. A business count may appear only when result.data explicitly labels a scalar as count ' +
       'or total, or when result.data.summary text explicitly supports it.\n' +
-      '- MetricGrid, SegmentedRingChart, MultiSeriesLineChart, and MatrixHeatmap require dataPath. Choose them from ' +
-      'the meaning and shape of the data; output no SVG, path, points, rect, viewBox, coordinates, dimensions, arc ' +
+      '- Choose chart fields only from each catalog schema. MetricGrid may use legacy dataPath or direct items; ' +
+      'SegmentedRingChart may use legacy dataPath or direct segments. Other charts keep their declared legacy dataPath. ' +
+      'Choose them from the meaning and shape of the data; output no SVG, path, points, rect, viewBox, coordinates, dimensions, arc ' +
       'geometry, stroke settings, or colors. The renderer owns all chart geometry and styling.\n' : '';
+  const dataPathRules = isUiLabCatalog ?
+    '- Derive every binding path only from the exact structure present in dataSnapshot in the user task. The host ' +
+      'checks that each path exists in that sampled snapshot. Prefer the narrowest path whose value shape matches ' +
+      'the component; never bind a whole result object when a relevant child value is available.\n' :
+    '- Bind content only through exact paths explicitly listed in the user task. A listed parent path does not allow ' +
+      'an unlisted descendant path. Prefer the narrowest allowed path whose value shape matches the component. Never ' +
+      'bind a whole result object when a relevant child array is available.\n';
   return `You plan one constrained A2UI ${A2UI_VERSION} component layout for a mobile UI renderer.\n` +
     'Rules:\n' +
     '- Output exactly one compact JSON line. No markdown or explanation.\n' +
     `- The only envelope is updateComponents for surfaceId "${surfaceId}".\n` +
     '- Never output createSurface, updateDataModel, deleteSurface, provider facts, action IDs, or action args.\n' +
     '- The root component id must be "root" and all children must form one connected acyclic tree.\n' +
-    '- Bind content only through dataPath values explicitly listed in the user task.\n' +
-    '- Prefer the narrowest allowed path whose value shape matches the component. Never bind a whole result object ' +
-    'when a relevant child array is available.\n' +
+    dataPathRules +
     uiLabRules +
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
     '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
@@ -71,11 +77,16 @@ export function buildA2uiLayoutSystemPrompt(
     'each result gets its own card. The template may omit dataPath (or use "/") to read the current item scope. Do not ' +
     'replace this dynamic children object with a static children array.\n' +
     '- An action slot contains only {"offerId":"an offered id"}; never invent or alter an offer.\n' +
+    '- The catalog schema is the only field and value-policy authority. Output only fields declared for that component. ' +
+    'For valuePolicy "literal-or-path", output either a literal of the declared type or exactly {"path":"/an/exact/path"}. ' +
+    'Never output a data path string as literal visible content. ' +
+    'For "path-only", output only that exact one-key binding object: never output a numeric literal, numeric string, ' +
+    'expression, FunctionCall, or binding with extra keys. For literal arrays and objects, follow their nested fields recursively.\n' +
     '- Component names and properties are direct members of each component object. Use "component", never "type", ' +
-    'and never place properties inside a nested "props" object.\n' +
+    'and never place properties inside a nested "props" or "properties" object.\n' +
     '- The following is a complete protocol-shape example only. In the UI Lab example, /summary and /results are ' +
     'stable protocol-level snapshot paths, not assumptions about a business schema. Copy only its protocol shape; choose any added ' +
-    'components, properties, and dataPath values strictly from the actual allowedDataPaths and component catalog ' +
+    'components, properties, and dataPath values strictly from the actual dataSnapshot and component catalog ' +
     'in the current task. Every HeroBanner visible string must be rewritten from the current verified results; ' +
     'never copy the REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS placeholder into output:\n' +
     outputExample + '\n' +

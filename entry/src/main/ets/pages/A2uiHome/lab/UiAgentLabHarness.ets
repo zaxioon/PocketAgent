@@ -1,6 +1,7 @@
 import {
   ActionOffer,
   A2uiAction,
+  A2uiComponentCatalogSchema,
   A2uiAgentRunner,
   A2uiComponent,
   A2uiSurfaceState,
@@ -26,8 +27,9 @@ import { HtmlHomeAction, HtmlHomeBlock, HtmlHomeDocument } from '../html/HtmlHom
 
 const UI_LAB_LAYOUT_TIMEOUT_MS: number = 60000;
 const UI_LAB_SNAPSHOT_LIMIT: number = 12000;
-const UI_LAB_PATH_LIMIT: number = 96;
 const UI_LAB_LAYOUT_PROMPT_LIMIT: number = 24000;
+const UI_LAB_CATALOG_SCHEMA: A2uiComponentCatalogSchema | null =
+  A2uiComponentCatalogSchema.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON);
 
 type UiLabJsonValue = Object | string | number | boolean | null | undefined;
 export type UiLabRecord = Record<string, UiLabJsonValue>;
@@ -57,11 +59,6 @@ export interface UiLabSummary {
 export interface UiLabSnapshot {
   summary: UiLabSummary;
   results: UiLabResultSnapshot[];
-}
-
-interface UiLabPathValue {
-  path: string;
-  value: UiLabJsonValue;
 }
 
 interface UiLabUpdateComponents {
@@ -393,6 +390,12 @@ function arrayCandidatePathsOfMergedLayout(jsonl: string, surfaceId: string): st
     for (let componentIndex = 0; componentIndex < components.length; componentIndex++) {
       const component = recordOf(components[componentIndex]);
       if (component === null) continue;
+      if (UI_LAB_CATALOG_SCHEMA !== null && typeof component['component'] === 'string') {
+        const bindingPaths = UI_LAB_CATALOG_SCHEMA.bindingPaths(component['component'] as string, component as Object);
+        for (let pathIndex = 0; pathIndex < bindingPaths.length; pathIndex++) {
+          if (paths.indexOf(bindingPaths[pathIndex]) < 0) paths.push(bindingPaths[pathIndex]);
+        }
+      }
       if (typeof component['dataPath'] === 'string') {
         const dataPath = component['dataPath'] as string;
         if (paths.indexOf(dataPath) < 0) paths.push(dataPath);
@@ -410,7 +413,7 @@ function arrayCandidatePathsOfMergedLayout(jsonl: string, surfaceId: string): st
 }
 
 function collectSampledArrayPaths(value: UiLabJsonValue, path: string, output: string[]): void {
-  if (output.length >= UI_LAB_PATH_LIMIT || value === null || value === undefined) return;
+  if (value === null || value === undefined) return;
   if (Array.isArray(value)) {
     if (output.indexOf(path) < 0) output.push(path);
     return;
@@ -418,7 +421,7 @@ function collectSampledArrayPaths(value: UiLabJsonValue, path: string, output: s
   const source = recordOf(value);
   if (source === null) return;
   const keys = Object.keys(source);
-  for (let index = 0; index < keys.length && output.length < UI_LAB_PATH_LIMIT; index++) {
+  for (let index = 0; index < keys.length; index++) {
     collectSampledArrayPaths(source[keys[index]], path + '/' + pointerToken(keys[index]), output);
   }
 }
@@ -471,7 +474,8 @@ export function hydrateUiAgentLabMergedJsonl(
 ): string {
   const hydrated = hydrateUiAgentLabSnapshotForMergedLayout(snapshot, data, mergedJsonl, surfaceId);
   const lines = mergedJsonl.trim().split(/\r?\n/);
-  for (let index = lines.length - 1; index >= 0; index--) {
+  let replaced = false;
+  for (let index = 0; index < lines.length; index++) {
     let envelope: UiLabRecord;
     try {
       envelope = JSON.parse(lines[index]) as UiLabRecord;
@@ -479,37 +483,21 @@ export function hydrateUiAgentLabMergedJsonl(
       continue;
     }
     const update = recordOf(envelope['updateDataModel']);
-    if (update === null || update['surfaceId'] !== surfaceId || update['path'] !== '/') continue;
-    update['value'] = hydrated as Object;
-    lines[index] = JSON.stringify(envelope);
-    return lines.join('\n') + '\n';
-  }
-  return mergedJsonl;
-}
-
-function collectPaths(value: UiLabJsonValue, path: string, output: UiLabPathValue[]): void {
-  if (output.length >= UI_LAB_PATH_LIMIT) return;
-  output.push({ path, value });
-  if (value === null || value === undefined || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    const values = value as UiLabJsonValue[];
-    for (let index = 0; index < values.length && output.length < UI_LAB_PATH_LIMIT; index++) {
-      collectPaths(values[index], path + '/' + index.toString(), output);
+    if (update === null || update['surfaceId'] !== surfaceId || typeof update['path'] !== 'string') continue;
+    const path = update['path'] as string;
+    if (path === '/summary') {
+      update['value'] = hydrated.summary as Object;
+    } else if (path === '/results') {
+      update['value'] = hydrated.results as Object;
+    } else if (path === '/') {
+      update['value'] = hydrated as Object;
+    } else {
+      continue;
     }
-    return;
+    lines[index] = JSON.stringify(envelope);
+    replaced = true;
   }
-  const source = value as UiLabRecord;
-  const keys = Object.keys(source);
-  for (let index = 0; index < keys.length && output.length < UI_LAB_PATH_LIMIT; index++) {
-    collectPaths(source[keys[index]], path + '/' + pointerToken(keys[index]), output);
-  }
-}
-
-export function uiAgentLabDataPaths(snapshot: UiLabSnapshot): string[] {
-  const values: UiLabPathValue[] = [];
-  collectPaths(snapshot.summary as Object, '/summary', values);
-  collectPaths(snapshot.results as Object, '/results', values);
-  return values.map((value: UiLabPathValue): string => value.path);
+  return replaced ? lines.join('\n') + '\n' : mergedJsonl;
 }
 
 function envelopeLine(value: Object): string {
@@ -535,32 +523,9 @@ function surfaceShell(surfaceId: string, status: string, components: A2uiCompone
 }
 
 export function uiAgentLabDataJsonl(surfaceId: string, snapshot: UiLabSnapshot): string {
-  const values: UiLabPathValue[] = [];
-  collectPaths(snapshot.summary as Object, '/summary', values);
-  collectPaths(snapshot.results as Object, '/results', values);
-  let jsonl = '';
-  for (let index = 0; index < values.length; index++) {
-    const pathUpdate: UiLabUpdateDataModel = {
-      surfaceId,
-      path: values[index].path,
-      value: values[index].value
-    };
-    const pathEnvelope: UiLabDataEnvelope = {
-      version: 'v0.9.1',
-      updateDataModel: pathUpdate
-    };
-    jsonl += envelopeLine(pathEnvelope);
-  }
-  const rootUpdate: UiLabUpdateDataModel = {
-    surfaceId,
-    path: '/',
-    value: snapshot as Object
-  };
-  const rootEnvelope: UiLabDataEnvelope = {
-    version: 'v0.9.1',
-    updateDataModel: rootUpdate
-  };
-  return jsonl + envelopeLine(rootEnvelope);
+  const rootUpdate: UiLabUpdateDataModel = { surfaceId, path: '/', value: snapshot as Object };
+  const rootEnvelope: UiLabDataEnvelope = { version: 'v0.9.1', updateDataModel: rootUpdate };
+  return envelopeLine(rootEnvelope);
 }
 
 function offerSourceToolId(offer: ActionOffer, data: DataResult[]): string {
@@ -591,7 +556,7 @@ function actionOf(offer: ActionOffer, sourceToolId: string): A2uiAction {
 function baselineComponents(data: DataResult[], offers: ActionOffer[]): A2uiComponent[] {
   const children: string[] = ['summary'];
   const components: A2uiComponent[] = [
-    { id: 'root', component: 'SurfaceRoot', child: 'content', title: 'UI Agent Lab', status: 'ready' },
+    { id: 'root', component: 'SurfaceRoot', child: 'content' },
     { id: 'content', component: 'Column', children },
     { id: 'summary', component: 'Text', dataPath: '/summary/text' }
   ];
@@ -657,13 +622,16 @@ export function uiAgentLabLayoutPrompt(
     'For every normal non-error UI Lab result with displayable verified data, you MUST output exactly one HeroBanner. Do not fabricate a HeroBanner summary for an error or no-display-data baseline. HeroBanner is always the first visible element in the main content container. If any other visible component exists, SurfaceRoot.child must reference a Column and the HeroBanner id must be Column.children[0]. Never connect root only to HeroBanner while leaving sibling components disconnected. If HeroBanner is the only visible component, SurfaceRoot.child may reference it directly. Its title is required; use text as a kicker and body to naturally synthesize all verified results without mechanically listing toolId values.\n' +
     '/summary/count and /summary/text describe the number of DataResult sets, not the number of business entities. HeroBanner must never present them as an entity total.\n' +
     'Never infer a total from a sampled array length. State a business count only when result.data explicitly labels a scalar as count or total, or when result.data.summary text explicitly supports it.\n' +
-    'For chart components, bind the narrowest matching dataPath. Never output SVG, path, points, rect, viewBox, coordinates, dimensions, geometry, stroke settings, or colors; the renderer owns them.\n' +
+    'For chart components, bind the narrowest matching snapshot paths through fields allowed by the catalog. Never output SVG, path, points, rect, viewBox, coordinates, dimensions, geometry, stroke settings, or colors; the renderer owns them.\n' +
+    'If originalUserInput explicitly asks for a dashboard or 数据看板 and dataSnapshot contains explicit numeric metrics, you MUST include at least one suitable chart component. When the snapshot also contains a categorical distribution with category labels and numeric values, prefer adding SegmentedRingChart. Every numeric chart value must use a path-only binding from dataSnapshot; never calculate it or write it as a numeric literal.\n' +
     'Use only the UI Lab component catalog.\n' +
-    'Use only exact allowedDataPaths. Actions may contain only an offered offerId; never output action arguments.\n' +
-    'intent=' + JSON.stringify(task.intent) + '\n';
+    'Derive every binding path only from the exact structure present in dataSnapshot. The host rejects paths that do not exist in this sampled snapshot.\n' +
+    'Author-composed text and labels may be literals where the catalog allows them. When binding snapshot data, use the exact one-key object {"path":"/exact/path/from/dataSnapshot"}. Never print a path string such as "/results/0/data/value" as literal UI text.\n' +
+    'Actions may contain only an offered offerId; never output action arguments.\n' +
+    'Honor the original user request when choosing the presentation; intent is a shorter Leader summary.\n' +
+    'intent=' + JSON.stringify(task.intent) + '\n' +
+    'originalUserInput=' + JSON.stringify(task.originalUserInput === undefined ? '' : task.originalUserInput) + '\n';
   const verifiedOffers = 'verifiedOffers=' + JSON.stringify(promptOffers) + '\n';
-  const originalPaths = uiAgentLabDataPaths(snapshot);
-  let retainedPaths = originalPaths.slice();
   const compactResults = snapshot.results.map((item: UiLabResultSnapshot): UiLabResultSnapshot => {
     return {
       dataTaskId: item.dataTaskId, toolId: item.toolId, outputSchema: item.outputSchema,
@@ -682,20 +650,13 @@ export function uiAgentLabLayoutPrompt(
   const omittedSnapshot: UiLabSnapshot = { summary: snapshot.summary, results: omittedResults };
   const snapshots: UiLabSnapshot[] = [snapshot, compactSnapshot, omittedSnapshot];
   const completeMarker = '\ndataSnapshotComplete=true';
-  while (retainedPaths.length > 0) {
-    const pathsSection = 'allowedDataPaths=' + JSON.stringify(retainedPaths) + '\n' +
-      'allowedDataPathsComplete=' + (retainedPaths.length === originalPaths.length).toString() + '\n';
-    const prefix = instructions + pathsSection + verifiedOffers + 'dataSnapshot=';
-    for (let index = 0; index < snapshots.length; index++) {
-      const encodedSnapshot = JSON.stringify(snapshots[index]);
-      const candidate = prefix + encodedSnapshot + completeMarker;
-      if (candidate.length <= UI_LAB_LAYOUT_PROMPT_LIMIT) return candidate;
-    }
-    retainedPaths.pop();
+  const prefix = instructions + verifiedOffers + 'dataSnapshot=';
+  for (let index = 0; index < snapshots.length; index++) {
+    const encodedSnapshot = JSON.stringify(snapshots[index]);
+    const candidate = prefix + encodedSnapshot + completeMarker;
+    if (candidate.length <= UI_LAB_LAYOUT_PROMPT_LIMIT) return candidate;
   }
-  const fallbackPrefix = instructions + 'allowedDataPaths=[]\nallowedDataPathsComplete=false\n' +
-    verifiedOffers + 'dataSnapshot=';
-  return fallbackPrefix + JSON.stringify(omittedSnapshot) + completeMarker;
+  return prefix + JSON.stringify(omittedSnapshot) + completeMarker;
 }
 
 class UiAgentLabRenderer implements UiTaskRenderer {
@@ -708,7 +669,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
   skeleton(task: CreateUiTaskPayload, surfaceId: string): Promise<UiRenderResult> {
     const rendered: UiRenderResult = {
       jsonl: surfaceShell(surfaceId, 'calling_tool', [
-        { id: 'root', component: 'SurfaceRoot', child: 'thinking', status: 'calling_tool' },
+        { id: 'root', component: 'SurfaceRoot', child: 'thinking' },
         { id: 'thinking', component: 'ThinkingCard', title: '正在获取真实数据', body: task.intent, status: 'calling_tool' }
       ])
     };
@@ -763,7 +724,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
   error(_task: CreateUiTaskPayload, message: string, surfaceId: string): Promise<UiRenderResult> {
     const rendered: UiRenderResult = {
       jsonl: surfaceShell(surfaceId, 'error', [
-        { id: 'root', component: 'SurfaceRoot', child: 'error', status: 'error' },
+        { id: 'root', component: 'SurfaceRoot', child: 'error' },
         { id: 'error', component: 'ErrorNotice', title: '请求未完成', body: message.substring(0, 300), status: 'error' }
       ])
     };
@@ -855,6 +816,7 @@ export class UiAgentLabHarness {
       structuredToolCall: callStructuredToolForUiLab,
       allowTrustedOperationTargets: true,
       surfaceDocumentProjector: projectUiAgentLabSurface,
+      a2uiParserProfile: 'ui-lab',
       currentHostSurface: (): A2uiSurfaceState | null =>
         this.currentSurface === null ? null : cloneSurface(this.currentSurface),
       currentHostGeneration: (): number => this.generation,

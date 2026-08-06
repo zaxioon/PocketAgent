@@ -13,7 +13,10 @@ import {
 } from '@loop/agent-core';
 import {
   createUiAgentLabHtmlShell,
+  resolveUiAgentLabCatalogFieldsJsonForModel,
   resolveUiAgentLabDataPath,
+  resolveUiAgentLabSurfaceJson,
+  strictUiAgentLabFiniteNumber,
   uiAgentLabSurfaceScript,
   uiAgentLabStatusScript
 } from '../main/ets/pages/A2uiHome/lab/UiAgentLabHtml';
@@ -27,7 +30,6 @@ import {
   hydrateUiAgentLabMergedJsonl,
   hydrateUiAgentLabSnapshotForMergedLayout,
   uiAgentLabDataJsonl,
-  uiAgentLabDataPaths,
   uiAgentLabLayoutPrompt,
 } from '../main/ets/pages/A2uiHome/lab/UiAgentLabHarness';
 
@@ -175,6 +177,109 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('.textContent=');
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
       expect(html).assertContain("return safeError('不支持的组件'");
+    });
+
+    it('pre-resolves exact catalog bindings into real MetricGrid and ring inputs', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+      const metricFields = '{"title":{"path":"/dashboard/title"},"items":[' +
+        '{"id":"stars","label":{"path":"/dashboard/metricLabel"},' +
+        '"value":{"path":"/dashboard/stars"},"unit":"stars"}]}';
+      const ringFields = '{"title":"Languages","segments":[' +
+        '{"label":{"path":"/dashboard/ringLabel"},"value":{"path":"/dashboard/arkts"}}]}';
+      const modelJson = '{"dashboard":{"title":"Repository","metricLabel":"Stars","stars":42,' +
+        '"ringLabel":"ArkTS","arkts":8}}';
+      const surfaceJson = '{"surfaceId":"binding-behavior","rootId":"metrics","components":[' +
+        '{"id":"metrics","component":"MetricGrid","catalogFieldsJson":' +
+          JSON.stringify(metricFields) + '},' +
+        '{"id":"ring","component":"SegmentedRingChart","catalogFieldsJson":' +
+          JSON.stringify(ringFields) + '}],"dataModelJson":' + JSON.stringify(modelJson) + '}';
+      const resolved = JSON.parse(resolveUiAgentLabSurfaceJson(surfaceJson)) as Record<string, Object>;
+      const components = resolved['components'] as Object[];
+      const metric = components[0] as Record<string, Object | string | undefined>;
+      const ring = components[1] as Record<string, Object | string | undefined>;
+      const metricItem = (metric['items'] as Object[])[0] as Record<string, Object | string | number>;
+      const ringItem = (ring['segments'] as Object[])[0] as Record<string, Object | string | number>;
+
+      expect(metric['title']).assertEqual('Repository');
+      expect(metricItem['label']).assertEqual('Stars');
+      expect(metricItem['value']).assertEqual(42);
+      expect(ringItem['label']).assertEqual('ArkTS');
+      expect(ringItem['value']).assertEqual(8);
+      expect(metric['catalogFieldsJson'] === undefined).assertTrue();
+      expect(ring['catalogFieldsJson'] === undefined).assertTrue();
+      expect(html).assertContain('var UI_AGENT_LAB_COMPONENT_CATALOG = ');
+      expect(html).assertContain("typeof component.catalogFieldsJson==='string'");
+      expect(html).assertContain('function resolveCatalogValue');
+      expect(html.indexOf('eval(')).assertEqual(-1);
+      expect(html.indexOf('new Function')).assertEqual(-1);
+    });
+
+    it('keeps List template fields for item scope and resolves each item independently', 0, () => {
+      const fieldsJson = '{"title":{"path":"/kind"},"body":{"path":"/summary"}}';
+      const surfaceJson = '{"surfaceId":"item-bindings","rootId":"items","components":[' +
+        '{"id":"items","component":"List","dataPath":"/events","child":"event-card"},' +
+        '{"id":"event-card","component":"ExpandableCard","catalogFieldsJson":' +
+        JSON.stringify(fieldsJson) + '}],"dataModelJson":"{\\"events\\":[' +
+        '{\\"kind\\":\\"PushEvent\\",\\"summary\\":\\"Pushed commits\\"},' +
+        '{\\"kind\\":\\"IssueEvent\\",\\"summary\\":\\"Opened issue\\"}]}"}';
+      const resolvedSurface = JSON.parse(resolveUiAgentLabSurfaceJson(surfaceJson)) as Record<string, Object>;
+      const template = (resolvedSurface['components'] as Object[])[1] as Record<string, Object | string>;
+      const firstJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'ExpandableCard', fieldsJson, '{"kind":"PushEvent","summary":"Pushed commits"}'
+      );
+      const secondJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'ExpandableCard', fieldsJson, '{"kind":"IssueEvent","summary":"Opened issue"}'
+      );
+      const first = JSON.parse(firstJson as string) as Record<string, string>;
+      const second = JSON.parse(secondJson as string) as Record<string, string>;
+      const html = createUiAgentLabHtmlShell();
+
+      expect(typeof template['catalogFieldsJson']).assertEqual('string');
+      expect(template['title'] === undefined).assertTrue();
+      expect(first['title']).assertEqual('PushEvent');
+      expect(first['body']).assertEqual('Pushed commits');
+      expect(second['title']).assertEqual('IssueEvent');
+      expect(second['body']).assertEqual('Opened issue');
+      expect(JSON.stringify(first).indexOf('/kind')).assertEqual(-1);
+      expect(JSON.stringify(second).indexOf('[object Object]')).assertEqual(-1);
+      expect(html).assertContain('function resolveCatalogFields(component,context)');
+      expect(html).assertContain('context.hasItemScope===true?context.itemScope:context.model');
+      expect(html.indexOf('eval(')).assertEqual(-1);
+      expect(html.indexOf('new Function')).assertEqual(-1);
+    });
+
+    it('rejects numeric strings and non-exact path objects during executable catalog resolution', 0, () => {
+      const invalidFields: string[] = [
+        '{"items":[{"label":"Stars","value":{"path":"/dashboard/stars"}}]}',
+        '{"items":[{"label":"Stars","value":{"path":"/dashboard/count","fallback":0}}]}'
+      ];
+      const models: string[] = [
+        '{"dashboard":{"stars":"42"}}',
+        '{"dashboard":{"count":42}}'
+      ];
+      for (let index = 0; index < invalidFields.length; index++) {
+        const source = '{"surfaceId":"invalid-binding","rootId":"metrics","components":[' +
+          '{"id":"metrics","component":"MetricGrid","catalogFieldsJson":' +
+          JSON.stringify(invalidFields[index]) + '}],"dataModelJson":' + JSON.stringify(models[index]) + '}';
+        const resolved = JSON.parse(resolveUiAgentLabSurfaceJson(source)) as Record<string, Object>;
+        const component = (resolved['components'] as Object[])[0] as Record<string, Object | string>;
+        expect(typeof component['catalogFieldsJson']).assertEqual('string');
+        expect(component['items'] === undefined).assertTrue();
+      }
+    });
+
+    it('rejects numeric strings and preserves direct-first legacy-fallback renderer markers', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+      expect(strictUiAgentLabFiniteNumber(42)).assertEqual(42);
+      expect(strictUiAgentLabFiniteNumber('42')).assertNull();
+      expect(strictUiAgentLabFiniteNumber(Number.POSITIVE_INFINITY)).assertNull();
+      expect(html).assertContain("return typeof value==='number'&&Number.isFinite(value)?value:null");
+      expect(html.indexOf('var next=Number(value)')).assertEqual(-1);
+      expect(html).assertContain('Array.isArray(component.items)?component.items:');
+      expect(html).assertContain("itemArray(value,'items')");
+      expect(html).assertContain('Array.isArray(component.segments)?component.segments:');
+      expect(html).assertContain("itemArray(value,'segments')");
+      expect(html).assertContain('componentValue(component,context)');
     });
 
     it('renders dynamic dashboard components with bounded renderer-owned geometry', 0, () => {
@@ -365,6 +470,7 @@ export default function uiAgentLabTest() {
         sources: [],
         warnings: [],
         data: JSON.parse('{"title":"动态标题","details":{"items":[{"label":"第一项"}]},' +
+          '"providerData":{"repositoryMetrics":{"repositoryCount":2}},' +
           '"slash/key":{"til~de":"保留转义键"}}') as Object
       };
       const snapshot = buildUiAgentLabSnapshot(task, [data]);
@@ -384,14 +490,14 @@ export default function uiAgentLabTest() {
       parsed.envelopes.forEach(envelope => {
         if (envelope.updateDataModel !== undefined) paths.push(envelope.updateDataModel.path);
       });
-      expect(paths.indexOf('/results/0/facts') >= 0).assertTrue();
-      expect(paths.indexOf('/results/0/data/details/items/0/label') >= 0).assertTrue();
-      expect(paths.indexOf('/results/0/data/slash~1key/til~0de') >= 0).assertTrue();
-      expect(paths[paths.length - 1]).assertEqual('/');
+      expect(paths.length).assertEqual(1);
+      expect(paths[0]).assertEqual('/');
       const summary = model['summary'] as Record<string, Object>;
       expect(summary['text']).assertEqual('已获取 1 组真实数据。');
       expect(summary['dataLabel']).assertEqual('uiLabResultSets');
       expect((nestedData['details'] as Record<string, Object>)['items'] !== undefined).assertTrue();
+      expect(((nestedData['providerData'] as Record<string, Object>)['repositoryMetrics'] as
+        Record<string, Object>)['repositoryCount']).assertEqual(2);
       expect((nestedData['slash/key'] as Record<string, Object>)['til~de']).assertEqual('保留转义键');
 
       const baseline =
@@ -418,7 +524,7 @@ export default function uiAgentLabTest() {
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       );
-      const mergedParsed = parseA2uiJsonl(merged.jsonl);
+      const mergedParsed = parseA2uiJsonl(merged.jsonl, 'ui-lab');
       const mergedStore = new A2uiSurfaceStore();
       mergedParsed.envelopes.forEach(envelope => mergedStore.apply(envelope));
       const mergedModel = JSON.parse(mergedStore.getSurface().dataModelJson) as Record<string, Object>;
@@ -501,7 +607,7 @@ export default function uiAgentLabTest() {
         snapshot,
         [data]
       );
-      const hydratedParsed = parseA2uiJsonl(hydratedJsonl);
+      const hydratedParsed = parseA2uiJsonl(hydratedJsonl, 'ui-lab');
       const hydratedStore = new A2uiSurfaceStore();
       hydratedParsed.envelopes.forEach(envelope => hydratedStore.apply(envelope));
       const hydratedModel = JSON.parse(hydratedStore.getSurface().dataModelJson) as Record<string, Object>;
@@ -546,7 +652,6 @@ export default function uiAgentLabTest() {
       const snapshot = buildUiAgentLabSnapshot(task, [data]);
       const visible = snapshot.results[0].data as Record<string, Object>;
       const sampledProvider = visible['providerData'] as Record<string, Object>;
-      const paths = uiAgentLabDataPaths(snapshot);
       const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
 
       expect(Object.keys(visible).length).assertEqual(1);
@@ -556,9 +661,8 @@ export default function uiAgentLabTest() {
       const sampledSeries = sampledChart['series'] as Object[];
       const sampledFirstSeries = sampledSeries[0] as Record<string, Object>;
       expect((sampledFirstSeries['values'] as number[]).length).assertEqual(8);
-      expect(paths.indexOf('/results/0/data/providerData/events') >= 0).assertTrue();
-      expect(paths.indexOf('/results/0/data/results') >= 0).assertFalse();
       expect(prompt).assertContain('Prefer paths below providerData');
+      expect(prompt).assertContain('"events"');
       expect(prompt.indexOf('结果 1')).assertEqual(-1);
 
       const mergedJsonl = '{"version":"v0.9.1","updateComponents":{' +
@@ -591,6 +695,7 @@ export default function uiAgentLabTest() {
         dataTaskIds: ['data-1'],
         skillId: 'dynamic',
         intent: '展示真实结果',
+        originalUserInput: '查询 GitHub 用户并整理成数据看板',
         expectedOutputSchema: 'custom.v1'
       };
       const data: DataResult = {
@@ -604,6 +709,10 @@ export default function uiAgentLabTest() {
       const snapshot = buildUiAgentLabSnapshot(task, [data]);
       const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
       expect(prompt).assertContain('intent="展示真实结果"');
+      expect(prompt).assertContain('originalUserInput="查询 GitHub 用户并整理成数据看板"');
+      expect(prompt).assertContain('MUST include at least one suitable chart component');
+      expect(prompt).assertContain('prefer adding SegmentedRingChart');
+      expect(prompt).assertContain('Every numeric chart value must use a path-only binding');
       expect(prompt).assertContain('/results/0/data/headline');
       expect(prompt).assertContain('动态标题');
       expect(prompt).assertContain('Choose presentation by the meaning and shape');
@@ -619,7 +728,8 @@ export default function uiAgentLabTest() {
       expect(prompt).assertContain('result.data explicitly labels a scalar as count or total');
       expect(prompt).assertContain('result.data.summary text explicitly supports it');
       expect(prompt.indexOf('mock.travel')).assertEqual(-1);
-      expect(uiAgentLabDataPaths(snapshot).indexOf('/results/0/data/count') >= 0).assertTrue();
+      expect(prompt).assertContain('"count":3');
+      expect(prompt.indexOf('allowedDataPaths')).assertEqual(-1);
     });
 
     it('keeps every prompt JSON section parseable under long paths and a near-budget snapshot', 0, () => {
@@ -639,19 +749,14 @@ export default function uiAgentLabTest() {
       longData['zz_payload'] = 'p'.repeat(11000);
       snapshot.results[0].data = longData as Object;
       const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
-      const pathsPrefix = 'allowedDataPaths=';
-      const pathsStart = prompt.indexOf(pathsPrefix) + pathsPrefix.length;
-      const pathsEnd = prompt.indexOf('\n', pathsStart);
       const snapshotPrefix = 'dataSnapshot=';
       const snapshotStart = prompt.indexOf(snapshotPrefix) + snapshotPrefix.length;
       const completeMarker = '\ndataSnapshotComplete=true';
       const snapshotEnd = prompt.indexOf(completeMarker, snapshotStart);
-      const parsedPaths = JSON.parse(prompt.substring(pathsStart, pathsEnd)) as string[];
       const parsedSnapshot = JSON.parse(prompt.substring(snapshotStart, snapshotEnd)) as Object;
 
       expect(prompt.length).assertLess(24001);
-      expect(pathsStart).assertLarger(pathsPrefix.length - 1);
-      expect(parsedPaths.length).assertLarger(0);
+      expect(prompt.indexOf('allowedDataPaths')).assertEqual(-1);
       expect(snapshotEnd).assertLarger(snapshotStart);
       expect(parsedSnapshot === null).assertFalse();
       expect(prompt.endsWith('dataSnapshotComplete=true')).assertTrue();

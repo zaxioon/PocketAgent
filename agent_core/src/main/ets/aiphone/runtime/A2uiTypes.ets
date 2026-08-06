@@ -333,6 +333,7 @@ export interface A2uiDataBinding {
 export interface A2uiComponent {
   id: string;
   component: string;
+  catalogFieldsJson?: string;
   child?: string;
   children?: string[];
   title?: string;

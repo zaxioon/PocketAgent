@@ -3,14 +3,11 @@ import { AIPHONE_COMPONENT_CATALOG_JSON } from '../aiphone/runtime/A2uiComponent
 import {
   A2UI_COMPONENT_HERO_BANNER,
   A2UI_COMPONENT_LIST,
-  A2UI_COMPONENT_MATRIX_HEATMAP,
-  A2UI_COMPONENT_METRIC_GRID,
-  A2UI_COMPONENT_MULTI_SERIES_LINE_CHART,
-  A2UI_COMPONENT_SEGMENTED_RING_CHART,
   A2uiAction,
   A2uiComponent,
   A2uiEnvelope
 } from '../aiphone/runtime/A2uiTypes';
+import { A2uiComponentCatalogSchema } from './A2uiComponentCatalogSchema';
 
 type JsonValue = Object | string | number | boolean | null | undefined;
 type JsonRecord = Record<string, JsonValue>;
@@ -26,6 +23,7 @@ interface LayoutBaseline {
   componentEnvelope: A2uiEnvelope;
   rootId: string;
   dataPaths: string[];
+  dataValues: Map<string, JsonValue>;
 }
 
 export interface A2uiLayoutMergeResult {
@@ -70,6 +68,8 @@ function baselineOf(lines: string[], surfaceId: string): LayoutBaseline | null {
   let componentEnvelope: A2uiEnvelope | null = null;
   let rootId: string = '';
   const dataPaths: string[] = [];
+  const dataValues: Map<string, JsonValue> = new Map<string, JsonValue>();
+  const updatePaths: string[] = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index].trim();
     if (line.length === 0) {
@@ -96,14 +96,16 @@ function baselineOf(lines: string[], surfaceId: string): LayoutBaseline | null {
     }
     const data = objectRecord(record['updateDataModel']);
     if (data !== null) {
-      if (data['surfaceId'] !== surfaceId || typeof data['path'] !== 'string') {
+      if (data['surfaceId'] !== surfaceId || typeof data['path'] !== 'string' ||
+        Object.keys(data).indexOf('value') < 0) {
         return null;
       }
       const path = data['path'] as string;
-      if (path.length === 0 || dataPaths.indexOf(path) >= 0) {
+      if (path.length === 0 || updatePaths.indexOf(path) >= 0) {
         return null;
       }
-      dataPaths.push(path);
+      updatePaths.push(path);
+      collectExistingPaths(data['value'], path, dataPaths, dataValues);
     }
   }
   if (componentLineIndex < 0 || componentEnvelope === null || rootId.length === 0 || dataPaths.length === 0) {
@@ -113,32 +115,13 @@ function baselineOf(lines: string[], surfaceId: string): LayoutBaseline | null {
     componentLineIndex: componentLineIndex,
     componentEnvelope: componentEnvelope,
     rootId: rootId,
-    dataPaths: dataPaths
+    dataPaths: dataPaths,
+    dataValues: dataValues
   };
 }
 
-function catalogNames(componentCatalogJson: string): Set<string> {
-  const names: Set<string> = new Set<string>();
-  try {
-    const items = JSON.parse(componentCatalogJson) as Object[];
-    for (let index = 0; index < items.length; index++) {
-      const record = objectRecord(items[index]);
-      if (record !== null && typeof record['name'] === 'string') {
-        names.add(record['name'] as string);
-      }
-    }
-  } catch (_error) {
-  }
-  return names;
-}
-
 function validDataPath(path: string, baselinePaths: string[]): boolean {
-  for (let index = 0; index < baselinePaths.length; index++) {
-    if (path === baselinePaths[index] || path.startsWith(baselinePaths[index] + '/')) {
-      return true;
-    }
-  }
-  return false;
+  return baselinePaths.indexOf(path) >= 0;
 }
 
 function listChildren(record: JsonRecord): JsonRecord | null {
@@ -152,6 +135,53 @@ function listChildren(record: JsonRecord): JsonRecord | null {
     return null;
   }
   return children;
+}
+
+function pointerToken(value: string): string {
+  return value.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+function childPath(path: string, token: string): string {
+  return path === '/' ? '/' + token : path + '/' + token;
+}
+
+function collectExistingPaths(
+  value: JsonValue,
+  path: string,
+  output: string[],
+  pathValues?: Map<string, JsonValue>
+): void {
+  if (output.indexOf(path) < 0) output.push(path);
+  if (pathValues !== undefined) pathValues.set(path, value);
+  if (value === null || value === undefined || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    const items = value as JsonValue[];
+    for (let index = 0; index < items.length; index++) {
+      collectExistingPaths(items[index], childPath(path, index.toString()), output, pathValues);
+    }
+    return;
+  }
+  const source = value as JsonRecord;
+  const keys = Object.keys(source);
+  for (let index = 0; index < keys.length; index++) {
+    collectExistingPaths(source[keys[index]], childPath(path, pointerToken(keys[index])), output, pathValues);
+  }
+}
+
+function listItemScopePaths(value: JsonValue): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const items = value as JsonValue[];
+  if (items.length === 0) return ['/'];
+  const paths: string[] = [];
+  collectExistingPaths(items[0], '/', paths);
+  for (let index = 1; index < items.length; index++) {
+    const itemPaths: string[] = [];
+    collectExistingPaths(items[index], '/', itemPaths);
+    for (let pathIndex = paths.length - 1; pathIndex >= 0; pathIndex--) {
+      if (itemPaths.indexOf(paths[pathIndex]) < 0) paths.splice(pathIndex, 1);
+    }
+  }
+  return paths;
 }
 
 function childIds(record: JsonRecord): string[] | null {
@@ -200,26 +230,6 @@ function validComponentFields(record: JsonRecord): boolean {
     }
   }
   return true;
-}
-
-const UI_LAB_CHART_COMPONENTS: string[] = [
-  A2UI_COMPONENT_METRIC_GRID,
-  A2UI_COMPONENT_SEGMENTED_RING_CHART,
-  A2UI_COMPONENT_MULTI_SERIES_LINE_CHART,
-  A2UI_COMPONENT_MATRIX_HEATMAP
-];
-
-function validUiLabPresentationShape(record: JsonRecord): boolean {
-  if (record['component'] === A2UI_COMPONENT_HERO_BANNER) {
-    return allowedKeys(record, ['body', 'component', 'id', 'text', 'title']) &&
-      typeof record['title'] === 'string' && (record['title'] as string).trim().length > 0;
-  }
-  if (typeof record['component'] !== 'string' ||
-    UI_LAB_CHART_COMPONENTS.indexOf(record['component'] as string) < 0) {
-    return true;
-  }
-  return allowedKeys(record, ['body', 'component', 'dataPath', 'id', 'text', 'title']) &&
-    typeof record['dataPath'] === 'string' && (record['dataPath'] as string).trim().length > 0;
 }
 
 function offerMap(offers: ActionOffer[]): Map<string, ActionOffer> | null {
@@ -284,6 +294,7 @@ function candidateComponents(
   value: JsonValue,
   rootId: string,
   baselinePaths: string[],
+  baselineValues: Map<string, JsonValue>,
   offers: ActionOffer[],
   componentCatalogJson: string
 ): A2uiComponent[] | null {
@@ -294,9 +305,9 @@ function candidateComponents(
   if (rawComponents.length === 0 || rawComponents.length > MAX_LAYOUT_COMPONENTS) {
     return null;
   }
-  const catalog = catalogNames(componentCatalogJson);
+  const catalog = A2uiComponentCatalogSchema.parse(componentCatalogJson);
   const availableOffers = offerMap(offers);
-  if (catalog.size === 0 || availableOffers === null) {
+  if (catalog === null || availableOffers === null) {
     return null;
   }
   const byId: Map<string, JsonRecord> = new Map<string, JsonRecord>();
@@ -308,10 +319,14 @@ function candidateComponents(
   let heroCount: number = 0;
   for (let index = 0; index < rawComponents.length; index++) {
     const record = objectRecord(rawComponents[index]);
-    if (record === null || !allowedKeys(record, COMPONENT_KEYS) || !validComponentFields(record) ||
-      !validUiLabPresentationShape(record) ||
-      typeof record['id'] !== 'string' || (record['id'] as string).length === 0 ||
+    if (record === null || typeof record['id'] !== 'string' || (record['id'] as string).length === 0 ||
       typeof record['component'] !== 'string' || !catalog.has(record['component'] as string)) {
+      return null;
+    }
+    const componentName = record['component'] as string;
+    if ((catalog.usesWireSchema() && !catalog.validatesSyntax(componentName, record)) ||
+      (!catalog.usesWireSchema() &&
+        (!allowedKeys(record, COMPONENT_KEYS) || !validComponentFields(record)))) {
       return null;
     }
     if (record['component'] === A2UI_COMPONENT_HERO_BANNER) {
@@ -322,17 +337,13 @@ function candidateComponents(
     if (byId.has(id)) {
       return null;
     }
-    if (record['dataPath'] !== undefined &&
-      (typeof record['dataPath'] !== 'string' ||
-        (record['dataPath'] !== '/' && !validDataPath(record['dataPath'] as string, baselinePaths)))) {
-      return null;
-    }
     if (record['component'] === A2UI_COMPONENT_LIST) {
       if (record['actions'] !== undefined) {
         return null;
       }
       const dynamicChildren = listChildren(record);
-      if (dynamicChildren === null || !validDataPath(dynamicChildren['path'] as string, baselinePaths)) {
+      if (dynamicChildren === null ||
+        !validDataPath(dynamicChildren['path'] as string, baselinePaths)) {
         return null;
       }
       listTemplateIds.add(dynamicChildren['componentId'] as string);
@@ -363,6 +374,7 @@ function candidateComponents(
     return null;
   }
   const listIds: string[] = [];
+  const itemScopePathsById: Map<string, string[]> = new Map<string, string[]>();
   listTemplateIds.forEach((templateId: string) => {
     const template = byId.get(templateId);
     if (template === undefined || template['component'] === A2UI_COMPONENT_LIST ||
@@ -379,6 +391,11 @@ function candidateComponents(
     }
   });
   for (let index = 0; index < listIds.length; index++) {
+    const listRecord = byId.get(listIds[index]);
+    const dynamicChildren = listRecord === undefined ? null : listChildren(listRecord);
+    const scopePaths = dynamicChildren === null ? null :
+      listItemScopePaths(baselineValues.get(dynamicChildren['path'] as string));
+    if (scopePaths === null) return null;
     const descendants: string[] = (childrenById.get(listIds[index]) ?? []).slice();
     const checked: Set<string> = new Set<string>();
     while (descendants.length > 0) {
@@ -387,6 +404,7 @@ function candidateComponents(
         return null;
       }
       checked.add(descendantId);
+      itemScopePathsById.set(descendantId, scopePaths);
       const descendant = byId.get(descendantId);
       if (descendant === undefined || descendant['component'] === A2UI_COMPONENT_LIST ||
         descendant['component'] === A2UI_COMPONENT_HERO_BANNER || descendant['actions'] !== undefined) {
@@ -400,7 +418,18 @@ function candidateComponents(
   }
   for (let index = 0; index < output.length; index++) {
     const component = output[index];
-    if (component.dataPath === '/' && !listTemplateIds.has(component.id)) {
+    const record = byId.get(component.id);
+    const allowedPaths = itemScopePathsById.get(component.id) ?? baselinePaths;
+    if (record === undefined ||
+      (catalog.usesWireSchema() && !catalog.validates(component.component, record, allowedPaths))) {
+      return null;
+    }
+    if (component.dataPath !== undefined &&
+      (typeof component.dataPath !== 'string' ||
+        (component.dataPath !== '/' && !validDataPath(component.dataPath, allowedPaths)))) {
+      return null;
+    }
+    if (component.dataPath === '/' && !itemScopePathsById.has(component.id)) {
       return null;
     }
   }
@@ -466,6 +495,7 @@ function candidateEnvelope(
     update['components'],
     baseline.rootId,
     baseline.dataPaths,
+    baseline.dataValues,
     offers,
     componentCatalogJson
   );

@@ -2,6 +2,7 @@ import localUnitTest from './LocalUnit.test';
 import conversationContextTest from './ConversationContext.test';
 import agentCorePublicContractTest from './AgentCorePublicContract.test';
 import a2uiParserTest from './A2uiParser.test';
+import a2uiSurfaceStoreTest from './A2uiSurfaceStore.test';
 import localModelClientTest from './LocalModelClient.test';
 import toolGatewayClientTest from './ToolGatewayClient.test';
 import a2uiHomeStateTest from './A2uiHomeState.test';
@@ -106,6 +107,7 @@ export default function testsuite() {
   conversationContextTest();
   agentCorePublicContractTest();
   a2uiParserTest();
+  a2uiSurfaceStoreTest();
   localModelClientTest();
   toolGatewayClientTest();
   a2uiHomeStateTest();

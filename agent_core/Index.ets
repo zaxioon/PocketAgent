@@ -97,6 +97,14 @@ export {
   mergeA2uiLayout,
   mergeA2uiLayoutWithStatus
 } from './src/main/ets/a2ui/A2uiLayoutMerger';
+export {
+  A2UI_CATALOG_RESERVED_COMPONENT_FIELDS,
+  A2uiCatalogFieldSchema,
+  A2uiCatalogValuePolicy,
+  A2uiCatalogValueType,
+  A2uiComponentCatalogSchema,
+  A2uiComponentWireSchema
+} from './src/main/ets/a2ui/A2uiComponentCatalogSchema';
 export { buildA2uiLayoutSystemPrompt, OpenAiA2uiModel } from './src/main/ets/a2ui/OpenAiA2uiModel';
 export {
   AIPHONE_COMPONENT_CATALOG_JSON,

@@ -8,6 +8,7 @@ import {
   ActionValidationResult,
   A2uiAction,
   A2uiRuntimeDataModel,
+  A2uiParserProfile,
   A2uiSurfaceStore,
   A2uiSurfaceState,
   CalendarEventArgs,
@@ -185,6 +186,7 @@ export interface MultiAgentCanaryOptions {
   uiLayoutPlanner?: UiLayoutPlanner;
   uiRenderer?: UiTaskRenderer;
   surfaceDocumentProjector?: (surface: A2uiSurfaceState) => HtmlHomeDocument;
+  a2uiParserProfile?: A2uiParserProfile;
   settingsFingerprint?: string;
   submitTimeoutMs?: number;
   actionTimeoutMs?: number;
@@ -1549,7 +1551,8 @@ export class MultiAgentCanaryRuntime {
       this.authority,
       visibility,
       true,
-      options.surfaceDocumentProjector
+      options.surfaceDocumentProjector,
+      options.a2uiParserProfile
     );
     this.surfaceWriter = writer;
     const structuredRenderer = new StructuredToolUiRenderer(

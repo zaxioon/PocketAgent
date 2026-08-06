@@ -42,6 +42,22 @@ const BENTO_CANDIDATE: string =
 interface ComponentCatalogEntry {
   name: string;
   usage: string;
+  schema: ComponentWireSchema;
+}
+
+interface ComponentFieldSchema {
+  type: string;
+  valuePolicy: string;
+  required?: boolean;
+  maxItems?: number;
+  fields?: Record<string, ComponentFieldSchema>;
+  items?: ComponentFieldSchema;
+}
+
+interface ComponentWireSchema {
+  fields: Record<string, ComponentFieldSchema>;
+  requireAny?: string[][];
+  exactlyOne?: string[][];
 }
 
 const LAB_COMPONENT_NAMES: string[] = [
@@ -125,10 +141,16 @@ export default function a2uiLayoutMergerTest() {
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/summary","value":{}}}\n' +
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/results","value":[]}}\n';
       expect(prompt.includes(example)).assertTrue();
-      expect(prompt.includes('actual allowedDataPaths and component catalog')).assertTrue();
+      expect(prompt.includes('actual dataSnapshot and component catalog')).assertTrue();
       expect(prompt.includes('Use "component", never "type"')).assertTrue();
-      expect(prompt.includes('nested "props" object')).assertTrue();
-      expect(prompt.includes('Prefer the narrowest allowed path')).assertTrue();
+      expect(prompt.includes('nested "props" or "properties" object')).assertTrue();
+      expect(prompt.includes('Derive every binding path only from the exact structure present in dataSnapshot')).assertTrue();
+      expect(prompt.includes('checks that each path exists in that sampled snapshot')).assertTrue();
+      expect(prompt.includes('Never output a data path string as literal visible content')).assertTrue();
+      expect(prompt.includes('valuePolicy "literal-or-path"')).assertTrue();
+      expect(prompt.includes('For "path-only"')).assertTrue();
+      expect(prompt.includes('never output a numeric literal, numeric string')).assertTrue();
+      expect(prompt.includes('MetricGrid may use legacy dataPath or direct items')).assertTrue();
       expect(prompt.includes('current item scope')).assertTrue();
       expect(prompt.includes('MUST output exactly one HeroBanner')).assertTrue();
       expect(prompt.includes('Do not fabricate a HeroBanner summary for an error or no-display-data baseline')).assertTrue();
@@ -194,6 +216,7 @@ export default function a2uiLayoutMergerTest() {
       }
       let heroUsage: string = '';
       for (let index = 0; index < catalog.length; index++) {
+        expect(Object.keys(catalog[index].schema.fields).length > 1).assertTrue();
         if (catalog[index].name === 'HeroBanner') heroUsage = catalog[index].usage;
       }
       expect(heroUsage.includes('主内容容器中的第一个可见元素')).assertTrue();
@@ -203,6 +226,22 @@ export default function a2uiLayoutMergerTest() {
       expect(heroUsage.includes('Column.children[0]')).assertTrue();
       expect(heroUsage.includes('不得让 root 只连接 HeroBanner 而留下孤立组件')).assertTrue();
       expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes('"name":"BentoGrid"')).assertFalse();
+      const metric = catalog[17].schema;
+      const metricItems = metric.fields['items'];
+      const metricItemFields = metricItems.items?.fields;
+      const ringSegments = catalog[18].schema.fields['segments'];
+      const ringItemFields = ringSegments.items?.fields;
+      expect(metric.requireAny?.[0].join(',')).assertEqual('dataPath,items');
+      expect(metric.exactlyOne?.[0].join(',')).assertEqual('dataPath,items');
+      expect(metricItems.maxItems).assertEqual(6);
+      expect(metricItems.valuePolicy).assertEqual('literal');
+      expect(metricItemFields?.['label'].valuePolicy).assertEqual('literal-or-path');
+      expect(metricItemFields?.['value'].type).assertEqual('number');
+      expect(metricItemFields?.['value'].valuePolicy).assertEqual('path-only');
+      expect(ringItemFields?.['label'].valuePolicy).assertEqual('literal-or-path');
+      expect(ringItemFields?.['value'].valuePolicy).assertEqual('path-only');
+      expect(catalog[18].schema.exactlyOne?.[0].join(',')).assertEqual('dataPath,segments');
+      expect(ringSegments.maxItems).assertEqual(8);
       for (let index = 16; index < LAB_COMPONENT_NAMES.length; index++) {
         expect(AIPHONE_COMPONENT_CATALOG_JSON.includes('"name":"' + LAB_COMPONENT_NAMES[index] + '"')).assertFalse();
       }
@@ -260,6 +299,119 @@ export default function a2uiLayoutMergerTest() {
           UI_AGENT_LAB_COMPONENT_CATALOG_JSON
         )).assertEqual(BASELINE);
       }
+    });
+
+    it('validates direct chart fields recursively from the catalog and exact host paths', 0, () => {
+      const bindingBaseline = BASELINE +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/summary/text","value":"Verified"}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/metrics/followers","value":42}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/metrics/stars","value":7}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/metrics/starLabel","value":"Stars"}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/languages/typescript","value":80}}\n';
+      const valid =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["hero","metrics","ring"]},' +
+        '{"id":"hero","component":"HeroBanner","title":{"path":"/summary/text"}},' +
+        '{"id":"metrics","component":"MetricGrid","title":"Repository metrics","items":[' +
+        '{"id":"followers","label":"Followers","value":{"path":"/metrics/followers"}},' +
+        '{"id":"stars","label":{"path":"/metrics/starLabel"},"value":{"path":"/metrics/stars"}}]},' +
+        '{"id":"ring","component":"SegmentedRingChart","segments":[' +
+        '{"id":"typescript","label":"TypeScript","value":{"path":"/languages/typescript"}}]}' +
+        ']}}';
+      const merged = mergeA2uiLayout(
+        bindingBaseline,
+        valid,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(merged === bindingBaseline).assertFalse();
+      expect(merged.includes('"items"')).assertTrue();
+      expect(merged.includes('"segments"')).assertTrue();
+      expect(merged.includes('"title":{"path":"/summary/text"}')).assertTrue();
+      expect(merged.includes('"properties"')).assertFalse();
+
+      const invalid: string[] = [
+        valid.replace('{"path":"/metrics/followers"}', '42'),
+        valid.replace('{"path":"/metrics/followers"}', '"42"'),
+        valid.replace('{"path":"/metrics/followers"}', '{"expression":"metrics.followers"}'),
+        valid.replace('{"path":"/metrics/followers"}', '{"FunctionCall":{"name":"read"}}'),
+        valid.replace('{"path":"/metrics/followers"}', '{"path":"/metrics/followers","fallback":0}'),
+        valid.replace('"label":"Followers"', '"label":12'),
+        valid.replace('"label":"Followers"', '"label":"Followers","color":"red"'),
+        valid.replace('"component":"MetricGrid","title"',
+          '"component":"MetricGrid","dataPath":"/genericToolResults","title"'),
+        valid.replace('"component":"SegmentedRingChart","segments"',
+          '"component":"SegmentedRingChart","dataPath":"/genericToolResults","segments"'),
+        valid.replace('{"path":"/summary/text"}', '{"path":"/summary/private"}'),
+        valid.replace('"component":"MetricGrid","title"', '"component":"MetricGrid","properties":{},"title"')
+      ];
+      for (let index = 0; index < invalid.length; index++) {
+        expect(mergeA2uiLayout(
+          bindingBaseline,
+          invalid[index],
+          SURFACE_ID,
+          [],
+          UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+        )).assertEqual(bindingBaseline);
+      }
+      const dataModelCandidate =
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test",' +
+        '"path":"/metrics/followers","value":42}}';
+      expect(mergeA2uiLayout(
+        bindingBaseline,
+        dataModelCandidate,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(bindingBaseline);
+    });
+
+    it('derives exact binding paths recursively from parent data values', 0, () => {
+      const parentValueBaseline = BASELINE +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test",' +
+        '"path":"/results","value":[{"data":{"profile":{"name":"Octocat"},' +
+        '"slash/key":{"til~de":"escaped"}}}]}}\n';
+      const valid =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"hero"},' +
+        '{"id":"hero","component":"HeroBanner",' +
+        '"title":{"path":"/results/0/data/slash~1key/til~0de"}}]}}';
+      const missingSibling = valid.replace(
+        '/results/0/data/slash~1key/til~0de',
+        '/results/0/data/profile/missing'
+      );
+      const componentOnlyBaseline = parentValueBaseline.replace(
+        '"dataPath":"/genericToolResults"',
+        '"dataPath":"/component-only"'
+      );
+      const componentOnlyPath = valid.replace(
+        '/results/0/data/slash~1key/til~0de',
+        '/component-only'
+      );
+
+      expect(mergeA2uiLayout(
+        parentValueBaseline,
+        valid,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === parentValueBaseline).assertFalse();
+      expect(mergeA2uiLayout(
+        parentValueBaseline,
+        missingSibling,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(parentValueBaseline);
+      expect(mergeA2uiLayout(
+        componentOnlyBaseline,
+        componentOnlyPath,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(componentOnlyBaseline);
     });
 
     it('accepts an official List template and rejects unbound or invalid scoped layouts', 0, () => {
@@ -328,6 +480,37 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(scopeBaseline, rootScope, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(scopeBaseline);
     });
 
+    it('validates List template catalog bindings against each array item scope', 0, () => {
+      const itemBaseline = BASELINE +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/","value":' +
+        '{"summary":{"text":"Recent activity"},"results":[{"data":{"providerData":{"recentActivity":[' +
+        '{"kind":"PushEvent","summary":"Pushed commits"},' +
+        '{"kind":"IssueEvent","summary":"Opened issue"}]}}}]}}}\n';
+      const valid =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"items"},' +
+        '{"id":"items","component":"List","children":{' +
+        '"path":"/results/0/data/providerData/recentActivity","componentId":"item-column"}},' +
+        '{"id":"item-column","component":"Column","children":["item-card"]},' +
+        '{"id":"item-card","component":"ExpandableCard",' +
+        '"title":{"path":"/kind"},"body":{"path":"/summary"}}]}}';
+      const missing = valid.replace('{"path":"/summary"}', '{"path":"/missing"}');
+      const absoluteInItem = valid.replace('{"path":"/kind"}',
+        '{"path":"/results/0/data/providerData/recentActivity/0/kind"}');
+
+      const merged = mergeA2uiLayout(
+        itemBaseline, valid, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(merged === itemBaseline).assertFalse();
+      expect(merged).assertContain('"title":{"path":"/kind"}');
+      expect(mergeA2uiLayout(
+        itemBaseline, missing, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+      expect(mergeA2uiLayout(
+        itemBaseline, absoluteInItem, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+    });
+
     it('rejects business components when the UI Lab catalog is selected', 0, () => {
       expect(mergeA2uiLayout(
         BASELINE,
@@ -356,6 +539,12 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(
         BASELINE,
         VALID_CANDIDATE.replace('/genericToolResults', '/secret'),
+        SURFACE_ID,
+        offers()
+      )).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(
+        BASELINE,
+        VALID_CANDIDATE.replace('/genericToolResults', '/genericToolResults/private'),
         SURFACE_ID,
         offers()
       )).assertEqual(BASELINE);

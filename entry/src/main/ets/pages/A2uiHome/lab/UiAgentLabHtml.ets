@@ -1,3 +1,9 @@
+import {
+  A2UI_CATALOG_RESERVED_COMPONENT_FIELDS,
+  A2uiComponentCatalogSchema,
+  UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+} from '@loop/agent-core';
+
 export type UiAgentLabStatus = 'ready' | 'loading' | 'success' | 'error';
 
 export interface UiAgentLabStatusPayload {
@@ -8,6 +14,9 @@ export interface UiAgentLabStatusPayload {
 
 type UiAgentLabDataValue = Object | string | number | boolean | null | undefined;
 type UiAgentLabDataRecord = Record<string, UiAgentLabDataValue>;
+
+const UI_AGENT_LAB_CATALOG_SCHEMA: A2uiComponentCatalogSchema | null =
+  A2uiComponentCatalogSchema.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON);
 
 function uiAgentLabDataRecord(value: UiAgentLabDataValue): UiAgentLabDataRecord | null {
   if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) {
@@ -59,7 +68,102 @@ export function uiAgentLabStatusScript(payload: UiAgentLabStatusPayload): string
 }
 
 export function uiAgentLabSurfaceScript(surfaceJson: string): string {
-  return 'window.__applyUiAgentLabSurface(JSON.parse(' + scriptString(surfaceJson) + '));';
+  return 'window.__applyUiAgentLabSurface(JSON.parse(' +
+    scriptString(resolveUiAgentLabSurfaceJson(surfaceJson)) + '));';
+}
+
+export function strictUiAgentLabFiniteNumber(value: UiAgentLabDataValue): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+export function resolveUiAgentLabCatalogFieldsJsonForModel(
+  componentName: string,
+  presentationFieldsJson: string,
+  modelJson: string
+): string | null {
+  return UI_AGENT_LAB_CATALOG_SCHEMA === null ? null :
+    UI_AGENT_LAB_CATALOG_SCHEMA.resolvePresentationFieldsJson(
+      componentName,
+      presentationFieldsJson,
+      modelJson
+    );
+}
+
+function uiAgentLabListTemplateDescendants(components: UiAgentLabDataValue[]): Set<string> {
+  const byId: Map<string, UiAgentLabDataRecord> = new Map<string, UiAgentLabDataRecord>();
+  for (let index = 0; index < components.length; index++) {
+    const component = uiAgentLabDataRecord(components[index]);
+    if (component !== null && typeof component['id'] === 'string') {
+      byId.set(component['id'] as string, component);
+    }
+  }
+  const descendants: Set<string> = new Set<string>();
+  byId.forEach((component: UiAgentLabDataRecord) => {
+    if (component['component'] !== 'List' || typeof component['child'] !== 'string') return;
+    const queue: string[] = [component['child'] as string];
+    while (queue.length > 0) {
+      const id = queue.shift();
+      if (id === undefined || descendants.has(id)) continue;
+      descendants.add(id);
+      const child = byId.get(id);
+      if (child === undefined) continue;
+      if (typeof child['child'] === 'string') queue.push(child['child'] as string);
+      if (Array.isArray(child['children'])) {
+        const childIds = child['children'] as UiAgentLabDataValue[];
+        for (let index = 0; index < childIds.length; index++) {
+          if (typeof childIds[index] === 'string') queue.push(childIds[index] as string);
+        }
+      }
+    }
+  });
+  return descendants;
+}
+
+export function resolveUiAgentLabSurfaceJson(surfaceJson: string): string {
+  if (UI_AGENT_LAB_CATALOG_SCHEMA === null) {
+    return surfaceJson;
+  }
+  try {
+    const surface = uiAgentLabDataRecord(JSON.parse(surfaceJson) as Object);
+    if (surface === null || !Array.isArray(surface['components']) ||
+      typeof surface['dataModelJson'] !== 'string') {
+      return surfaceJson;
+    }
+    const components = surface['components'] as UiAgentLabDataValue[];
+    const itemScopedIds = uiAgentLabListTemplateDescendants(components);
+    const modelJson = surface['dataModelJson'] as string;
+    for (let index = 0; index < components.length; index++) {
+      const component = uiAgentLabDataRecord(components[index]);
+      if (component === null || typeof component['component'] !== 'string' ||
+        typeof component['catalogFieldsJson'] !== 'string' ||
+        (component['catalogFieldsJson'] as string).length === 0) {
+        continue;
+      }
+      if (typeof component['id'] === 'string' && itemScopedIds.has(component['id'] as string)) {
+        continue;
+      }
+      const resolvedJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        component['component'] as string,
+        component['catalogFieldsJson'] as string,
+        modelJson
+      );
+      if (resolvedJson === null) {
+        continue;
+      }
+      const resolved = uiAgentLabDataRecord(JSON.parse(resolvedJson) as Object);
+      if (resolved === null) {
+        continue;
+      }
+      const keys = Object.keys(resolved);
+      for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+        component[keys[keyIndex]] = resolved[keys[keyIndex]];
+      }
+      component['catalogFieldsJson'] = undefined;
+    }
+    return JSON.stringify(surface);
+  } catch (_error) {
+    return surfaceJson;
+  }
 }
 
 export function createUiAgentLabHtmlShell(): string {
@@ -246,6 +350,12 @@ export function createUiAgentLabHtmlShell(): string {
     (function(){
       'use strict';
       var UI_AGENT_LAB_COMPONENT_REGISTRY = Object.create(null);
+      var UI_AGENT_LAB_COMPONENT_CATALOG = ${UI_AGENT_LAB_COMPONENT_CATALOG_JSON};
+      var UI_AGENT_LAB_SCHEMA_BY_NAME = Object.create(null);
+      UI_AGENT_LAB_COMPONENT_CATALOG.forEach(function(entry){
+        if(entry&&typeof entry.name==='string'&&record(entry.schema))UI_AGENT_LAB_SCHEMA_BY_NAME[entry.name]=entry.schema;
+      });
+      var UI_AGENT_LAB_RESERVED_FIELDS = ${JSON.stringify(A2UI_CATALOG_RESERVED_COMPONENT_FIELDS)};
       var surfaceHost=document.getElementById('surface');
       var toast=document.getElementById('toast'),toastTimer=0;
       var bridge=function(message){
@@ -292,6 +402,40 @@ export function createUiAgentLabHtmlShell(): string {
         }
         return current;
       }
+      function exactBinding(value){
+        var source=record(value),keys=source?Object.keys(source):[];
+        return source&&keys.length===1&&keys[0]==='path'&&typeof source.path==='string'&&source.path.charAt(0)==='/'?source.path:null;
+      }
+      function resolveCatalogValue(value,schema,model,depth){
+        if(!record(schema)||depth>12)return {ok:false};
+        var policy=schema.valuePolicy,binding=exactBinding(value),candidate=value;
+        if(policy==='path-only'||(policy==='literal-or-path'&&binding!==null)){
+          if(binding===null)return {ok:false};
+          candidate=pointer(model,binding);
+          if(candidate===undefined)return {ok:false};
+        }else if(policy!=='literal'&&policy!=='literal-or-path')return {ok:false};
+        if(schema.type==='string')return typeof candidate==='string'&&(schema.minLength===undefined||candidate.trim().length>=schema.minLength)?{ok:true,value:candidate}:{ok:false};
+        if(schema.type==='number')return typeof candidate==='number'&&Number.isFinite(candidate)?{ok:true,value:candidate}:{ok:false};
+        if(schema.type==='boolean')return typeof candidate==='boolean'?{ok:true,value:candidate}:{ok:false};
+        if(schema.type==='array'){
+          if(!Array.isArray(candidate)||!record(schema.items)||(schema.minItems!==undefined&&candidate.length<schema.minItems)||(schema.maxItems!==undefined&&candidate.length>schema.maxItems))return {ok:false};
+          var output=[];for(var index=0;index<candidate.length;index++){var item=resolveCatalogValue(candidate[index],schema.items,model,depth+1);if(!item.ok)return {ok:false};output.push(item.value);}return {ok:true,value:output};
+        }
+        if(schema.type==='object'){
+          var source=record(candidate),fields=record(schema.fields);if(!source||!fields)return {ok:false};
+          var names=Object.keys(fields);for(var requiredIndex=0;requiredIndex<names.length;requiredIndex++){if(fields[names[requiredIndex]].required===true&&!Object.prototype.hasOwnProperty.call(source,names[requiredIndex]))return {ok:false};}
+          var keys=Object.keys(source),result=Object.create(null);for(var keyIndex=0;keyIndex<keys.length;keyIndex++){var key=keys[keyIndex],field=fields[key];if(!record(field))return {ok:false};var resolved=resolveCatalogValue(source[key],field,model,depth+1);if(!resolved.ok)return {ok:false};result[key]=resolved.value;}return {ok:true,value:result};
+        }
+        return {ok:false};
+      }
+      function resolveCatalogFields(component,context){
+        var schema=UI_AGENT_LAB_SCHEMA_BY_NAME[component.component],fields=record(schema&&schema.fields),source=null;
+        try{source=record(JSON.parse(component.catalogFieldsJson));}catch(_error){return null;}
+        if(!fields||!source)return null;
+        var model=context.hasItemScope===true?context.itemScope:context.model,output=Object.assign({},component),keys=Object.keys(source);
+        for(var index=0;index<keys.length;index++){var key=keys[index];if(UI_AGENT_LAB_RESERVED_FIELDS.indexOf(key)>=0||!record(fields[key]))return null;var resolved=resolveCatalogValue(source[key],fields[key],model,0);if(!resolved.ok)return null;output[key]=resolved.value;}
+        delete output.catalogFieldsJson;return output;
+      }
       function componentValue(component,context){
         if(context.hasItemScope===true){
           if(typeof component.dataPath!=='string'||component.dataPath.length===0||component.dataPath==='/')return context.itemScope;
@@ -323,8 +467,7 @@ export function createUiAgentLabHtmlShell(): string {
         return next;
       }
       function finiteNumber(value){
-        if(value===null||value===undefined||typeof value==='boolean'||(typeof value==='string'&&value.trim().length===0))return null;
-        var next=Number(value);return Number.isFinite(next)?next:null;
+        return typeof value==='number'&&Number.isFinite(value)?value:null;
       }
       function numericField(source){
         if(!source)return null;
@@ -417,7 +560,7 @@ export function createUiAgentLabHtmlShell(): string {
       UI_AGENT_LAB_COMPONENT_REGISTRY.MetricGrid=function(component,context){
         var value=componentValue(component,context),wrapper=node('section','lab-card viz-card'),grid=node('div','metric-grid');
         appendVisualHeader(wrapper,component,value);
-        var items=Array.isArray(value)?value:itemArray(value,'items'),rendered=0;
+        var items=Array.isArray(component.items)?component.items:(Array.isArray(value)?value:itemArray(value,'items')),rendered=0;
         items.slice(0,6).forEach(function(item){
           var source=record(item),field=numericField(source);if(!source||field===null)return;
           var label=nonEmptyText(source.label,source.name);if(!label)return;
@@ -432,7 +575,7 @@ export function createUiAgentLabHtmlShell(): string {
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.SegmentedRingChart=function(component,context){
         var value=componentValue(component,context),source=record(value),wrapper=node('section','lab-card viz-card');appendVisualHeader(wrapper,component,value);
-        var items=Array.isArray(value)?value:itemArray(value,'segments'),segments=[],total=0;
+        var items=Array.isArray(component.segments)?component.segments:(Array.isArray(value)?value:itemArray(value,'segments')),segments=[],total=0;
         items.slice(0,8).forEach(function(item){
           var source=record(item),field=numericField(source);if(!source||field===null||field.value<0)return;
           var label=nonEmptyText(source.label,source.name);if(!label)return;
@@ -717,6 +860,12 @@ export function createUiAgentLabHtmlShell(): string {
         if(trail.indexOf(id)>=0)return safeError('组件循环引用','组件 '+text(id)+' 无法渲染。');
         var component=context.byId[id];
         if(!component)return safeError('组件缺失','找不到组件 '+text(id)+'。');
+        if(!UI_AGENT_LAB_SCHEMA_BY_NAME[component.component])return safeError('不支持的组件','UI Lab catalog 不包含 '+text(component.component)+'。');
+        if(typeof component.catalogFieldsJson==='string'&&component.catalogFieldsJson.length>0){
+          var resolvedComponent=resolveCatalogFields(component,context);
+          if(!resolvedComponent)return safeError('组件属性无效',text(component.component)+' 的 catalog 属性无法安全解析。');
+          component=resolvedComponent;
+        }
         var renderer=UI_AGENT_LAB_COMPONENT_REGISTRY[component.component];
         if(typeof renderer!=='function')return safeError('不支持的组件','UI Lab catalog 不包含 '+text(component.component)+'。');
         try{return renderer(component,context,trail.concat([id]));}catch(_error){return safeError('组件渲染失败',text(component.component)+' 未能安全渲染。');}

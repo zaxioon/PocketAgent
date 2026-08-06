@@ -32,7 +32,8 @@ export default function a2uiParserTest() {
         '{"id":"ring","component":"SegmentedRingChart","dataPath":"/results/0/data"},' +
         '{"id":"line","component":"MultiSeriesLineChart","dataPath":"/results/0/data"},' +
         '{"id":"heat","component":"MatrixHeatmap","body":"Activity","dataPath":"/results/0/data"}' +
-        ']}}'
+        ']}}',
+        'ui-lab'
       );
 
       expect(parsed.updateComponents !== undefined).assertTrue();
@@ -43,6 +44,91 @@ export default function a2uiParserTest() {
         expect(parsed.updateComponents.components[7].component).assertEqual('HeroBanner');
         expect(parsed.updateComponents.components[11].component).assertEqual('MatrixHeatmap');
       }
+    });
+
+    it('preserves catalog-declared direct presentation fields after parsing', 0, () => {
+      const parsed = parseA2uiEnvelope(
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab-bindings","components":[' +
+        '{"id":"metrics","component":"MetricGrid","title":{"path":"/dashboard/title"},"items":[' +
+        '{"id":"stars","label":{"path":"/dashboard/label"},"value":{"path":"/dashboard/stars"},' +
+        '"unit":"stars"}]},' +
+        '{"id":"ring","component":"SegmentedRingChart","segments":[' +
+        '{"label":"ArkTS","value":{"path":"/dashboard/arkts"}}]}]}}',
+        'ui-lab'
+      );
+
+      expect(parsed.updateComponents !== undefined).assertTrue();
+      if (parsed.updateComponents !== undefined) {
+        const metrics = parsed.updateComponents.components[0];
+        const ring = parsed.updateComponents.components[1];
+        const metricFields = JSON.parse(metrics.catalogFieldsJson as string) as Record<string, Object | string>;
+        const ringFields = JSON.parse(ring.catalogFieldsJson as string) as Record<string, Object>;
+        const metricItems = metricFields['items'] as Object[];
+        const firstMetric = metricItems[0] as Record<string, Object | string>;
+        const ringItems = ringFields['segments'] as Object[];
+        expect((metricFields['title'] as Record<string, string>)['path']).assertEqual('/dashboard/title');
+        expect((firstMetric['value'] as Record<string, string>)['path']).assertEqual('/dashboard/stars');
+        expect((ringItems[0] as Record<string, Object>)['value'] !== undefined).assertTrue();
+        expect(metrics.catalogFieldsJson?.indexOf('properties')).assertEqual(-1);
+        expect(metrics.catalogFieldsJson?.indexOf('props')).assertEqual(-1);
+      }
+    });
+
+    it('rejects unknown fields and every malformed action in runtime catalog components', 0, () => {
+      const validAction = '{"id":"card.open","label":"Open","prompt":"Open","variant":"primary","kind":"prompt"}';
+      const invalidComponents: string[] = [
+        '{"id":"card","component":"ExpandableCard","title":"Card","properties":{},"actions":[' +
+          validAction + ']}',
+        '{"id":"card","component":"ExpandableCard","title":"Card","actions":[' + validAction + ',' +
+          '{"id":"card.close","label":"Close","variant":"secondary","kind":"prompt"}]}'
+      ];
+      let rejected: number = 0;
+      for (let index = 0; index < invalidComponents.length; index++) {
+        try {
+          parseA2uiEnvelope('{"updateComponents":{"surfaceId":"lab-runtime","components":[' +
+            invalidComponents[index] + ']}}', 'ui-lab');
+        } catch (_error) {
+          rejected++;
+        }
+      }
+      expect(rejected).assertEqual(invalidComponents.length);
+    });
+
+    it('keeps legacy shared components compatible but rejects them in the explicit UI Lab profile', 0, () => {
+      const actionBar = '{"updateComponents":{"surfaceId":"profile","components":[' +
+        '{"id":"actions","component":"ActionBar","properties":{},"actions":[' +
+        '{"id":"card.open","label":"Open","prompt":"Open","variant":"primary","kind":"prompt"}]}]}}';
+      const legacy = parseA2uiEnvelope(actionBar);
+      let strictRejected: boolean = false;
+      try {
+        parseA2uiEnvelope(actionBar, 'ui-lab');
+      } catch (_error) {
+        strictRejected = true;
+      }
+      expect(legacy.updateComponents?.components[0].actions?.[0].id).assertEqual('card.open');
+      expect(strictRejected).assertTrue();
+    });
+
+    it('forwards the UI Lab profile through JSONL and streaming chunk parsers', 0, () => {
+      const actionBar = '{"updateComponents":{"surfaceId":"profile-jsonl","components":[' +
+        '{"id":"actions","component":"ActionBar","properties":{},"actions":[' +
+        '{"id":"card.open","label":"Open","prompt":"Open","variant":"primary","kind":"prompt"}]}]}}\n';
+      const jsonl = parseA2uiJsonl(actionBar, 'ui-lab');
+      const chunk = parseA2uiJsonlChunk(actionBar, '', 'ui-lab');
+      expect(jsonl.error.length > 0).assertTrue();
+      expect(chunk.error.length > 0).assertTrue();
+      expect(chunk.remainder).assertEqual('');
+    });
+
+    it('preserves action sourceSectionId in the explicit UI Lab profile', 0, () => {
+      const parsed = parseA2uiEnvelope(
+        '{"updateComponents":{"surfaceId":"action-source","components":[' +
+        '{"id":"actions","component":"ActionBar","actions":[' +
+        '{"id":"card.open","label":"Open","prompt":"Open","variant":"primary","kind":"prompt",' +
+        '"sourceSectionId":"tool.github"}]}]}}',
+        'ui-lab'
+      );
+      expect(parsed.updateComponents?.components[0].actions?.[0].sourceSectionId).assertEqual('tool.github');
     });
 
     it('rejects invalid HeroBanner and chart component shapes', 0, () => {
@@ -59,7 +145,8 @@ export default function a2uiParserTest() {
         try {
           parseA2uiEnvelope(
             '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab","components":[' +
-            invalidComponents[index] + ']}}'
+            invalidComponents[index] + ']}}',
+            'ui-lab'
           );
         } catch (_error) {
           rejected++;
@@ -73,7 +160,8 @@ export default function a2uiParserTest() {
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab-list","components":[' +
         '{"id":"root","component":"SurfaceRoot","child":"items"},' +
         '{"id":"items","component":"List","children":{"path":"/results/0/data/items","componentId":"item-card"}},' +
-        '{"id":"item-card","component":"ExpandableCard"}]}}'
+        '{"id":"item-card","component":"ExpandableCard"}]}}',
+        'ui-lab'
       );
 
       expect(parsed.updateComponents !== undefined).assertTrue();
