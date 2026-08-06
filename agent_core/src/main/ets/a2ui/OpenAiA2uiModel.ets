@@ -25,21 +25,17 @@ export function buildA2uiLayoutSystemPrompt(
   componentCatalogJson: string
 ): string {
   const isUiLabCatalog = componentCatalogJson.indexOf('"name":"HeroBanner"') >= 0;
-  const outputExample = isUiLabCatalog ?
-    `{"version":"${A2UI_VERSION}","updateComponents":{"surfaceId":"${surfaceId}","components":[` +
-      '{"id":"root","component":"SurfaceRoot","child":"content"},' +
-      '{"id":"content","component":"Column","children":["hero","info","result-list"]},' +
-      '{"id":"hero","component":"HeroBanner",' +
-      '"title":"REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS"},' +
-      '{"id":"info","component":"InfoRows","dataPath":"/summary"},' +
-      '{"id":"result-list","component":"List","children":' +
-      '{"path":"/results","componentId":"result-card"}},' +
-      '{"id":"result-card","component":"ExpandableCard"}' +
-      ']}}' :
+  const outputExample =
     `{"version":"${A2UI_VERSION}","updateComponents":{"surfaceId":"${surfaceId}","components":[` +
       '{"id":"root","component":"SurfaceRoot","child":"summary"},' +
       '{"id":"summary","component":"Text","dataPath":"/summary/text"}' +
       ']}}';
+  const outputExampleSection = isUiLabCatalog ?
+    '- Protocol envelope schema skeleton only; replace [...] with the actual component objects and never output the ellipsis literally:\n' +
+      `{"version":"${A2UI_VERSION}","updateComponents":{"surfaceId":"${surfaceId}","components":[...]}}\n` :
+    '- The following is a complete protocol-shape example only. Copy only its protocol shape; choose components, ' +
+      'properties, and dataPath values strictly from the current task and catalog:\n' +
+      outputExample + '\n';
   const uiLabRules = isUiLabCatalog ?
     '- For every normal non-error UI Lab result with displayable verified data, you MUST output exactly one ' +
       'HeroBanner. Do not fabricate a HeroBanner summary for an error or no-display-data baseline. HeroBanner is ' +
@@ -55,7 +51,11 @@ export function buildA2uiLayoutSystemPrompt(
       '- Choose chart fields only from each catalog schema. MetricGrid may use legacy dataPath or direct items; ' +
       'SegmentedRingChart may use legacy dataPath or direct segments. Other charts keep their declared legacy dataPath. ' +
       'Choose them from the meaning and shape of the data; output no SVG, path, points, rect, viewBox, coordinates, dimensions, arc ' +
-      'geometry, stroke settings, or colors. The renderer owns all chart geometry and styling.\n' : '';
+      'geometry, stroke settings, or colors. The renderer owns all chart geometry and styling.\n' +
+      '- When originalUserInput explicitly requests a dashboard and the verified data meaningfully supports visualization, ' +
+      'make charts the main body of the layout and use as many different chart component types as the data can meaningfully ' +
+      'support. Every chart must add a distinct view. Do not repeat the same metric, invent or calculate values, or force ' +
+      'a specific chart type.\n' : '';
   const dataPathRules = isUiLabCatalog ?
     '- Derive every binding path only from the exact structure present in dataSnapshot in the user task. The host ' +
       'checks that each path exists in that sampled snapshot. Prefer the narrowest path whose value shape matches ' +
@@ -63,6 +63,19 @@ export function buildA2uiLayoutSystemPrompt(
     '- Bind content only through exact paths explicitly listed in the user task. A listed parent path does not allow ' +
       'an unlisted descendant path. Prefer the narrowest allowed path whose value shape matches the component. Never ' +
       'bind a whole result object when a relevant child array is available.\n';
+  const repeatedCollectionRules = isUiLabCatalog ?
+    '- For repeated array items, use the official A2UI v0.9 List shape ' +
+      '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
+      'component rendered once per item; never replace this dynamic children object with a static children array. ' +
+      'Choose the simplest template that expresses each entity. If a presentation-ready Array<{label,value,time?}> path ' +
+      'exists, prefer one InfoRows binding over List or ExpandableCard. Otherwise, when summary or description is sufficient, ' +
+      'use a compact Text template bound only to that field. Use ExpandableCard only when each item has additional details ' +
+      'worth revealing or an offered action to carry. Never bind a whole provider object merely to expose its raw fields.\n' :
+    '- For repeated array items, use the official A2UI v0.9 List shape ' +
+      '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
+      'component rendered once per item. For repeated entity results, use List with one ExpandableCard template so ' +
+      'each result gets its own card. The template may omit dataPath (or use "/") to read the current item scope. Do not ' +
+      'replace this dynamic children object with a static children array.\n';
   return `You plan one constrained A2UI ${A2UI_VERSION} component layout for a mobile UI renderer.\n` +
     'Rules:\n' +
     '- Output exactly one compact JSON line. No markdown or explanation.\n' +
@@ -71,11 +84,7 @@ export function buildA2uiLayoutSystemPrompt(
     '- The root component id must be "root" and all children must form one connected acyclic tree.\n' +
     dataPathRules +
     uiLabRules +
-    '- For repeated array items, use the official A2UI v0.9 List shape ' +
-    '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
-    'component rendered once per item. For repeated entity results, use List with one ExpandableCard template so ' +
-    'each result gets its own card. The template may omit dataPath (or use "/") to read the current item scope. Do not ' +
-    'replace this dynamic children object with a static children array.\n' +
+    repeatedCollectionRules +
     '- An action slot contains only {"offerId":"an offered id"}; never invent or alter an offer.\n' +
     '- The catalog schema is the only field and value-policy authority. Output only fields declared for that component. ' +
     'For valuePolicy "literal-or-path", output either a literal of the declared type or exactly {"path":"/an/exact/path"}. ' +
@@ -84,12 +93,7 @@ export function buildA2uiLayoutSystemPrompt(
     'expression, FunctionCall, or binding with extra keys. For literal arrays and objects, follow their nested fields recursively.\n' +
     '- Component names and properties are direct members of each component object. Use "component", never "type", ' +
     'and never place properties inside a nested "props" or "properties" object.\n' +
-    '- The following is a complete protocol-shape example only. In the UI Lab example, /summary and /results are ' +
-    'stable protocol-level snapshot paths, not assumptions about a business schema. Copy only its protocol shape; choose any added ' +
-    'components, properties, and dataPath values strictly from the actual dataSnapshot and component catalog ' +
-    'in the current task. Every HeroBanner visible string must be rewritten from the current verified results; ' +
-    'never copy the REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS placeholder into output:\n' +
-    outputExample + '\n' +
+    outputExampleSection +
     '- Keep at most 24 components. Use only this catalog:\n' +
     componentCatalogJson;
 }

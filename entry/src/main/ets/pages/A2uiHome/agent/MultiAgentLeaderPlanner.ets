@@ -1872,9 +1872,9 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       'LeaderDecision schema: {"personaId":"string","skillId":"string",' +
         '"requestedCapabilityIds":["registered tool or action ID"],' +
         '"roundAction":"execute|answer|clarify","continuationMode":"complete|dependency|sequence",' +
-        '"dataTasks":[' +
+        '"dataTasks":[<appless_tool>' +
         '{"localId":"string","goal":"string","allowedToolIds":["string"],' +
-        '"toolId":"string","input":{},"required":true}],"uiIntent":{' +
+        '"toolId":"string","input":{},"required":true}</appless_tool>],"uiIntent":{' +
         '"purpose":"string","preferredDensity":"string","requiredSections":["string"]},' +
         '"actionIntent":{"goal":"string","allowedActionIds":["string"]} optional,' +
         '"answer":"required non-empty string for answer|clarify; omit for execute"}.',

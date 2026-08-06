@@ -1105,7 +1105,15 @@ export default function multiAgentLeaderPlannerTest() {
       expect(streamed[0].task.toolId).assertEqual('flight.search');
       expect(streamed[1].task.toolId).assertEqual('train.search');
       expect(decision.dataTasks.length).assertEqual(2);
-      expect(model.prompts[0].indexOf('<appless_tool>')).assertLarger(-1);
+      expect(model.prompts[0].indexOf(
+        '"dataTasks":[<appless_tool>{"localId":"string","goal":"string",' +
+          '"allowedToolIds":["string"],"toolId":"string","input":{},"required":true}' +
+          '</appless_tool>]'
+      )).assertLarger(-1);
+      expect(model.prompts[0].indexOf(
+        '"dataTasks":[{"localId":"string","goal":"string","allowedToolIds":["string"],' +
+          '"toolId":"string","input":{},"required":true}]'
+      )).assertEqual(-1);
     });
 
     it('passes the trusted single-task GitHub dashboard contract into the Leader prompt', 0, async () => {

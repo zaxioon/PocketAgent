@@ -169,10 +169,12 @@ export default function composioDynamicBackendTest() {
             '"language":"TypeScript","stargazers_count":7,"forks_count":2,"updated_at":"2026-07-01T00:00:00Z",' +
             '"pushed_at":"2026-07-02T00:00:00Z"},' +
             '{"name":"beta","full_name":"sindresorhus/beta","html_url":"https://github.com/sindresorhus/beta",' +
-            '"language":"TypeScript","stargazers_count":5,"forks_count":1,"updated_at":"2026-06-01T00:00:00Z"}' +
+            '"language":"TypeScript","stargazers_count":5,"forks_count":1,"updated_at":"2026-06-01T00:00:00Z"},' +
+            '{"name":"gamma","full_name":"sindresorhus/gamma","html_url":"https://github.com/sindresorhus/gamma",' +
+            '"language":"Python","stargazers_count":3,"forks_count":0,"updated_at":"2026-05-01T00:00:00Z"}' +
             ']}}',
           '{"data":{"events":[{"type":"PushEvent","created_at":"2026-08-01T00:00:00Z",' +
-            '"repo":{"name":"sindresorhus/alpha"},"payload":{"ref":"refs/heads/main","size":2},"public":true}]}}'
+            '"repo":{"name":"sindresorhus/alpha"},"payload":{"ref":"refs/heads/main"},"public":true}]}}'
         ]
       );
 
@@ -182,7 +184,7 @@ export default function composioDynamicBackendTest() {
       const dashboard = result.providerData as Record<string, Object | string | number | boolean>;
       const metrics = dashboard['repositoryMetrics'] as Record<string, number>;
       const languages = dashboard['languages'] as Object[];
-      const activity = dashboard['recentActivity'] as Object[];
+      const activityRows = dashboard['recentActivityRows'] as Array<Record<string, string>>;
 
       expect(result.status).assertEqual('success');
       expect(result.toolName).assertEqual('github.user.dashboard');
@@ -193,12 +195,39 @@ export default function composioDynamicBackendTest() {
       expect(client.executedArgs.length).assertEqual(3);
       expect(JSON.stringify(client.executedArgs[0])).assertContain('"username":"sindresorhus"');
       expect(dashboard['partial']).assertFalse();
-      expect(metrics['returnedRepositoryCount']).assertEqual(2);
-      expect(metrics['returnedStars']).assertEqual(12);
+      expect(metrics['returnedRepositoryCount']).assertEqual(3);
+      expect(metrics['returnedStars']).assertEqual(15);
       expect(metrics['returnedForks']).assertEqual(3);
-      expect(languages.length).assertEqual(1);
-      expect(activity.length).assertEqual(1);
-      expect(JSON.stringify(activity[0])).assertContain('"kind":"push"');
+      expect(languages.length).assertEqual(2);
+      const primaryLanguage = languages[0] as Record<string, Object | string | number>;
+      const secondaryLanguage = languages[1] as Record<string, Object | string | number>;
+      expect(primaryLanguage['language']).assertEqual('TypeScript');
+      expect(primaryLanguage['repositoryCount']).assertEqual(2);
+      expect(primaryLanguage['ratio']).assertEqual(2 / 3);
+      expect(secondaryLanguage['language']).assertEqual('Python');
+      expect(secondaryLanguage['repositoryCount']).assertEqual(1);
+      expect(secondaryLanguage['ratio']).assertEqual(1 / 3);
+      const dashboardOutputSchema = JSON.stringify(result.registration?.outputSchema);
+      expect(dashboardOutputSchema).assertContain('"ratio":{"type":"number"}');
+      expect(dashboardOutputSchema).assertContain(
+        '"required":["label","value","time"]'
+      );
+      expect(dashboardOutputSchema).assertContain(
+        '"label":{"type":"string"},"value":{"type":"string"},"time":{"type":"string"}'
+      );
+      expect(dashboardOutputSchema.indexOf('"recentActivity"')).assertEqual(-1);
+      expect(dashboardOutputSchema.indexOf('"activityMetadata"')).assertEqual(-1);
+      expect(activityRows.length).assertEqual(1);
+      expect(activityRows[0]['label']).assertEqual('更新了 sindresorhus/alpha');
+      expect(activityRows[0]['value']).assertEqual('向 sindresorhus/alpha 的 main 分支执行了推送');
+      expect(activityRows[0]['value'].indexOf('0 个提交')).assertEqual(-1);
+      expect(activityRows[0]['time']).assertEqual('2026-08-01T00:00:00Z');
+      expect(dashboard['recentActivity'] === undefined).assertTrue();
+      expect(dashboard['activityMetadata'] === undefined).assertTrue();
+      expect(JSON.stringify(activityRows[0]).indexOf('kind')).assertEqual(-1);
+      expect(JSON.stringify(activityRows[0]).indexOf('repo')).assertEqual(-1);
+      expect(JSON.stringify(activityRows[0]).indexOf('details')).assertEqual(-1);
+      expect(JSON.stringify(activityRows[0]).indexOf('visibility')).assertEqual(-1);
       expect(JSON.stringify(dashboard).indexOf('contributions')).assertEqual(-1);
     });
 
@@ -1273,6 +1302,31 @@ export default function composioDynamicBackendTest() {
       expect(JSON.stringify(preserved.providerData).indexOf('large raw body')).assertEqual(-1);
       expect(JSON.stringify(preserved.providerData).indexOf('do-not-show')).assertEqual(-1);
       expect(JSON.stringify(legacy.rows).indexOf('结果 1')).assertLarger(-1);
+    });
+
+    it('distinguishes unknown and explicit zero GitHub push commit counts', 0, () => {
+      const observation = '{"data":{"events":[' +
+        '{"type":"PushEvent","created_at":"2026-08-04T06:00:00Z",' +
+        '"repo":{"name":"owner/unknown"},"payload":{"ref":"refs/heads/main"}},' +
+        '{"type":"PushEvent","created_at":"2026-08-04T07:00:00Z",' +
+        '"repo":{"name":"owner/zero"},"payload":{"ref":"refs/heads/release","distinct_size":0}}]}}';
+      const preserved = composioDynamicResultFromObservation(
+        'execute', observation, 'GITHUB_LIST_EVENTS_FOR_USER', 'GitHub user activity', true
+      );
+      const provider = preserved.providerData as Record<string, Object>;
+      const events = provider['events'] as Array<Record<string, Object | string>>;
+      const unknown = events[0];
+      const explicitZero = events[1];
+      const unknownDetails = unknown['details'] as Record<string, Object | string | number>;
+      const zeroDetails = explicitZero['details'] as Record<string, Object | string | number>;
+
+      expect(unknown['summary']).assertEqual('向 owner/unknown 的 main 分支执行了推送');
+      expect(unknownDetails['commitCount'] === undefined).assertTrue();
+      expect((unknown['summary'] as string).indexOf('0 个提交')).assertEqual(-1);
+      expect(explicitZero['summary']).assertEqual(
+        '向 owner/zero 的 release 分支执行了推送（未包含新提交）'
+      );
+      expect(zeroDetails['commitCount']).assertEqual(0);
     });
 
     it('distinguishes pull request issue comments and maps secondary GitHub event families', 0, () => {

@@ -372,7 +372,7 @@ function githubPushEvent(event: ProviderRecord, repo: ProviderRecord, payload: P
   const commitsValue = payload === null ? undefined : payload['commits'];
   const commits = Array.isArray(commitsValue) ? commitsValue as ProviderJsonValue[] : [];
   const distinctSize = providerNumber(payload, ['distinct_size', 'size']);
-  const commitCount = distinctSize === undefined ? commits.length : distinctSize;
+  const commitCount = distinctSize === undefined ? (commits.length > 0 ? commits.length : undefined) : distinctSize;
   const messages: ProviderJsonValue[] = [];
   for (let index = 0; index < commits.length && index < 5; index++) {
     const message = providerText(providerRecord(commits[index]), ['message']);
@@ -383,9 +383,12 @@ function githubPushEvent(event: ProviderRecord, repo: ProviderRecord, payload: P
   putProviderNumber(details, 'commitCount', commitCount);
   if (messages.length > 0) details['commitMessages'] = messages as Object;
   const target = branch.length > 0 ? repoName + ' 的 ' + branch + ' 分支' : repoName;
+  const summary = commitCount === undefined ? '向 ' + target + '执行了推送' :
+    (commitCount === 0 ? '向 ' + target + '执行了推送（未包含新提交）' :
+      '向 ' + target + '推送了 ' + commitCount.toString() + ' 个提交');
   return {
     kind: 'push', title: '更新了 ' + repoName,
-    summary: '向 ' + target + '推送了 ' + commitCount.toString() + ' 个提交',
+    summary: summary,
     repo: repo as Object, occurredAt: providerText(event, ['created_at']), details: details as Object
   };
 }

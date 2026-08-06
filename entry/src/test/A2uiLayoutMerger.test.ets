@@ -121,8 +121,16 @@ export default function a2uiLayoutMergerTest() {
       expect(rebuilt).assertEqual(source);
     });
 
-    it('includes one complete generic A2UI protocol-shape example in the layout prompt', 0, () => {
+    it('gives UI Lab only the envelope skeleton while retaining the generic renderer example', 0, () => {
       const prompt = buildA2uiLayoutSystemPrompt(SURFACE_ID, UI_AGENT_LAB_COMPONENT_CATALOG_JSON);
+      const genericPrompt = buildA2uiLayoutSystemPrompt(SURFACE_ID, AIPHONE_COMPONENT_CATALOG_JSON);
+      const uiLabSkeleton =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[...]}}';
+      const genericExample =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"summary"},' +
+        '{"id":"summary","component":"Text","dataPath":"/summary/text"}' +
+        ']}}';
       const example =
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
         '{"id":"root","component":"SurfaceRoot","child":"content"},' +
@@ -140,8 +148,30 @@ export default function a2uiLayoutMergerTest() {
         '{"id":"summary","component":"Text","dataPath":"/summary/text"}]}}\n' +
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/summary","value":{}}}\n' +
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/results","value":[]}}\n';
-      expect(prompt.includes(example)).assertTrue();
-      expect(prompt.includes('actual dataSnapshot and component catalog')).assertTrue();
+      expect(prompt.includes(example)).assertFalse();
+      expect(prompt.includes(uiLabSkeleton)).assertTrue();
+      expect(prompt.includes('never output the ellipsis literally')).assertTrue();
+      expect(prompt.includes('The following is a complete protocol-shape example only')).assertFalse();
+      expect(prompt.includes('REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS')).assertFalse();
+      expect(prompt.includes('For repeated array items')).assertTrue();
+      expect(prompt.includes('official A2UI v0.9 List shape')).assertTrue();
+      expect(prompt.includes('compact Text template bound only to that field')).assertTrue();
+      expect(prompt.includes('Use ExpandableCard only when each item has additional details')).assertTrue();
+      expect(prompt.includes('offered action to carry')).assertTrue();
+      expect(prompt.includes('Never bind a whole provider object')).assertTrue();
+      expect(prompt.includes('prefer one InfoRows binding over List or ExpandableCard')).assertTrue();
+      expect(prompt.includes('Array<{label,value,time?}>')).assertTrue();
+      expect(prompt.includes('make charts the main body of the layout')).assertTrue();
+      expect(prompt.includes('use as many different chart component types as the data can meaningfully support')).assertTrue();
+      expect(prompt.includes('Every chart must add a distinct view')).assertTrue();
+      expect(prompt.includes('Do not repeat the same metric, invent or calculate values')).assertTrue();
+      expect(prompt.includes('force a specific chart type')).assertTrue();
+      expect(genericPrompt.includes(genericExample)).assertTrue();
+      expect(genericPrompt.includes('The following is a complete protocol-shape example only')).assertTrue();
+      expect(genericPrompt.includes('For repeated array items')).assertTrue();
+      expect(genericPrompt.includes('List with one ExpandableCard')).assertTrue();
+      expect(genericPrompt.includes('compact Text template bound only to that field')).assertFalse();
+      expect(genericPrompt.includes('make charts the main body of the layout')).assertFalse();
       expect(prompt.includes('Use "component", never "type"')).assertTrue();
       expect(prompt.includes('nested "props" or "properties" object')).assertTrue();
       expect(prompt.includes('Derive every binding path only from the exact structure present in dataSnapshot')).assertTrue();
@@ -151,21 +181,21 @@ export default function a2uiLayoutMergerTest() {
       expect(prompt.includes('For "path-only"')).assertTrue();
       expect(prompt.includes('never output a numeric literal, numeric string')).assertTrue();
       expect(prompt.includes('MetricGrid may use legacy dataPath or direct items')).assertTrue();
-      expect(prompt.includes('current item scope')).assertTrue();
+      expect(prompt.includes('rendered once per item')).assertTrue();
       expect(prompt.includes('MUST output exactly one HeroBanner')).assertTrue();
       expect(prompt.includes('Do not fabricate a HeroBanner summary for an error or no-display-data baseline')).assertTrue();
       expect(prompt.includes('always the first visible element in the main content container')).assertTrue();
       expect(prompt.includes('SurfaceRoot.child must reference a Column')).assertTrue();
       expect(prompt.includes('HeroBanner id must be Column.children[0]')).assertTrue();
       expect(prompt.includes('leaving sibling components disconnected')).assertTrue();
-      expect(prompt.includes('Every HeroBanner visible string must be rewritten from the current verified results')).assertTrue();
-      expect(prompt.includes('never copy the REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS placeholder')).assertTrue();
+      expect(prompt.includes('Every HeroBanner visible string must be rewritten from the current verified results')).assertFalse();
+      expect(prompt.includes('never copy the REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS placeholder')).assertFalse();
       expect(prompt.includes('sampled array length')).assertTrue();
       expect(prompt.includes('/summary/count and /summary/text describe how many DataResult sets')).assertTrue();
       expect(prompt.includes('result.data explicitly labels a scalar as count or total')).assertTrue();
       expect(prompt.includes('result.data.summary text explicitly supports it')).assertTrue();
       expect(prompt.includes('must not mechanically list toolId')).assertTrue();
-      expect(prompt.includes('each result gets its own card')).assertTrue();
+      expect(prompt.includes('each result gets its own card')).assertFalse();
       expect(prompt.includes('output no SVG')).assertTrue();
       expect(prompt.includes('renderer owns all chart geometry and styling')).assertTrue();
       expect(example.includes('"type"')).assertFalse();
@@ -219,6 +249,16 @@ export default function a2uiLayoutMergerTest() {
         expect(Object.keys(catalog[index].schema.fields).length > 1).assertTrue();
         if (catalog[index].name === 'HeroBanner') heroUsage = catalog[index].usage;
       }
+      const infoRowsUsage = catalog[4].usage;
+      const expandableUsage = catalog[11].usage;
+      const listUsage = catalog[15].usage;
+      expect(infoRowsUsage.includes('Array<{label,value,time?}>')).assertTrue();
+      expect(infoRowsUsage.includes('优先于 List 或 ExpandableCard')).assertTrue();
+      expect(expandableUsage.includes('额外详情')).assertTrue();
+      expect(expandableUsage.includes('summary 或 description 已足够时改用')).assertTrue();
+      expect(expandableUsage.includes('不得绑定整个 provider object')).assertTrue();
+      expect(listUsage.includes('{path:ARRAY_PATH,componentId:TEMPLATE_ID}')).assertTrue();
+      expect(listUsage.includes('最简单组件')).assertTrue();
       expect(heroUsage.includes('主内容容器中的第一个可见元素')).assertTrue();
       expect(heroUsage.includes('必须且只能生成一个 HeroBanner')).assertTrue();
       expect(heroUsage.includes('错误或无可展示数据的 baseline 不得强造 HeroBanner 概述')).assertTrue();
@@ -240,6 +280,7 @@ export default function a2uiLayoutMergerTest() {
       expect(metricItemFields?.['value'].valuePolicy).assertEqual('path-only');
       expect(ringItemFields?.['label'].valuePolicy).assertEqual('literal-or-path');
       expect(ringItemFields?.['value'].valuePolicy).assertEqual('path-only');
+      expect(catalog[18].usage.includes('已验证的占比、ratio 或类别构成信息')).assertTrue();
       expect(catalog[18].schema.exactlyOne?.[0].join(',')).assertEqual('dataPath,segments');
       expect(ringSegments.maxItems).assertEqual(8);
       for (let index = 16; index < LAB_COMPONENT_NAMES.length; index++) {

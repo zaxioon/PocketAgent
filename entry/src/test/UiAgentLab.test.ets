@@ -175,8 +175,20 @@ export default function uiAgentLabTest() {
       expect(html.indexOf('UI_AGENT_LAB_COMPONENT_REGISTRY.BentoGrid=')).assertEqual(-1);
       expect(html.indexOf('.bento-grid')).assertEqual(-1);
       expect(html).assertContain('.textContent=');
+      expect(html).assertContain('info-time');
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
       expect(html).assertContain("return safeError('不支持的组件'");
+    });
+
+    it('keeps the complete UI Lab catalog available to the UI model', 0, () => {
+      const entries = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as
+        Record<string, Object | string>[];
+      const names = entries.map((entry: Record<string, Object | string>): string => entry['name'] as string);
+      expect(names.length).assertEqual(21);
+      expect(names.indexOf('InfoRows') >= 0).assertTrue();
+      expect(names.indexOf('List') >= 0).assertTrue();
+      expect(names.indexOf('ExpandableCard') >= 0).assertTrue();
+      expect(names.indexOf('SegmentedRingChart') >= 0).assertTrue();
     });
 
     it('pre-resolves exact catalog bindings into real MetricGrid and ring inputs', 0, () => {
@@ -455,7 +467,7 @@ export default function uiAgentLabTest() {
       expect(resolveUiAgentLabDataPath(model, '/results/00') === undefined).assertTrue();
     });
 
-    it('keeps exact nested allowlist paths and finishes with one generic root data model', 0, () => {
+    it('keeps exact nested snapshot paths and finishes with one generic root data model', 0, () => {
       const task: CreateUiTaskPayload = {
         taskId: 'ui-nested',
         dataTaskIds: ['data-nested'],
@@ -470,7 +482,7 @@ export default function uiAgentLabTest() {
         sources: [],
         warnings: [],
         data: JSON.parse('{"title":"动态标题","details":{"items":[{"label":"第一项"}]},' +
-          '"providerData":{"repositoryMetrics":{"repositoryCount":2}},' +
+          '"repositoryMetrics":{"repositoryCount":2},' +
           '"slash/key":{"til~de":"保留转义键"}}') as Object
       };
       const snapshot = buildUiAgentLabSnapshot(task, [data]);
@@ -496,8 +508,7 @@ export default function uiAgentLabTest() {
       expect(summary['text']).assertEqual('已获取 1 组真实数据。');
       expect(summary['dataLabel']).assertEqual('uiLabResultSets');
       expect((nestedData['details'] as Record<string, Object>)['items'] !== undefined).assertTrue();
-      expect(((nestedData['providerData'] as Record<string, Object>)['repositoryMetrics'] as
-        Record<string, Object>)['repositoryCount']).assertEqual(2);
+      expect((nestedData['repositoryMetrics'] as Record<string, Object>)['repositoryCount']).assertEqual(2);
       expect((nestedData['slash/key'] as Record<string, Object>)['til~de']).assertEqual('保留转义键');
 
       const baseline =
@@ -710,10 +721,10 @@ export default function uiAgentLabTest() {
       const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
       expect(prompt).assertContain('intent="展示真实结果"');
       expect(prompt).assertContain('originalUserInput="查询 GitHub 用户并整理成数据看板"');
-      expect(prompt).assertContain('MUST include at least one suitable chart component');
-      expect(prompt).assertContain('prefer adding SegmentedRingChart');
-      expect(prompt).assertContain('Every numeric chart value must use a path-only binding');
-      expect(prompt).assertContain('/results/0/data/headline');
+      expect(prompt.indexOf('MUST include at least one suitable chart component')).assertEqual(-1);
+      expect(prompt.indexOf('prefer adding SegmentedRingChart')).assertEqual(-1);
+      expect(prompt.indexOf('make charts the main body of the layout')).assertEqual(-1);
+      expect(prompt).assertContain('"headline":"动态标题"');
       expect(prompt).assertContain('动态标题');
       expect(prompt).assertContain('Choose presentation by the meaning and shape');
       expect(prompt).assertContain('do not prescribe a chart type');

@@ -213,6 +213,7 @@ export function createUiAgentLabHtmlShell(): string {
     .info-row:last-child { border-bottom:0; padding-bottom:0; }
     .info-label { color:var(--muted); font-size:12px; }
     .info-value { font-size:13px; text-align:right; overflow-wrap:anywhere; }
+    .info-time { grid-column:2; margin-top:-7px; color:var(--muted); font-size:11px; text-align:right; overflow-wrap:anywhere; }
     .action-bar { display:flex; flex-wrap:wrap; gap:9px; }
     .action-button { min-height:42px; flex:1 1 120px; border:0; border-radius:16px; padding:0 14px; background:linear-gradient(145deg,#5b91ff,#2867eb); color:white; box-shadow:0 8px 18px rgba(42,101,230,.22); }
     .action-button.secondary { color:var(--ink); background:rgba(255,255,255,.72); box-shadow:inset 0 0 0 1px rgba(84,79,71,.08); }
@@ -678,6 +679,8 @@ export function createUiAgentLabHtmlShell(): string {
           var valueRecord=record(item),row=node('div','info-row');
           row.appendChild(node('span','info-label',valueRecord?text(valueRecord.label,'项目 '+String(index+1)):'项目 '+String(index+1)));
           row.appendChild(node('span','info-value',valueRecord?text(valueRecord.value):text(item)));
+          var time=valueRecord?text(valueRecord.time).trim():'';
+          if(time)row.appendChild(node('span','info-time',time));
           rows.appendChild(row);
         });
         if(items.length===0)rows.appendChild(node('p','lab-card-copy','暂无信息'));
