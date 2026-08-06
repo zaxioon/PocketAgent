@@ -22,7 +22,8 @@ interface ChatResponse {
 
 export function buildA2uiLayoutSystemPrompt(
   surfaceId: string,
-  componentCatalogJson: string
+  componentCatalogJson: string,
+  decisionNotesEnabled: boolean = false
 ): string {
   const isUiLabCatalog = componentCatalogJson.indexOf('"name":"HeroBanner"') >= 0;
   const outputExample =
@@ -76,9 +77,25 @@ export function buildA2uiLayoutSystemPrompt(
       'component rendered once per item. For repeated entity results, use List with one ExpandableCard template so ' +
       'each result gets its own card. The template may omit dataPath (or use "/") to read the current item scope. Do not ' +
       'replace this dynamic children object with a static children array.\n';
+  const outputContractRules = decisionNotesEnabled && isUiLabCatalog ?
+    '- Output exactly two compact JSON lines. No markdown, code fences, prose, or extra lines. The first line must be ' +
+      'the bounded UI decision notes object described below. The second line must be the single A2UI updateComponents ' +
+      'protocol envelope.\n' +
+      '- The first line must have exactly this shape: ' +
+      '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
+      '{"id":"COMPONENT_ID","component":"CATALOG_COMPONENT","purpose":"SHORT_VISIBLE_PURPOSE"}],' +
+      '"omittedData":[{"path":"/exact/path/from/dataSnapshot","reason":"duplicate"}]}}. ' +
+      'plannedComponents lists the planned components the layout intends to use and their user-visible purpose. ' +
+      'omittedData lists verified DataResult paths not presented. Never list a path in omittedData when an output ' +
+      'component uses that exact dataPath. Use only duplicate, irrelevant, raw_or_unreadable, unsupported_component, ' +
+      'or mobile_space as reason. Use at most 12 entries in each array, at most 96 characters per purpose, at most 240 ' +
+      'characters per path, and at most 2400 characters for the complete first line. Do not copy provider values into notes.\n' +
+      '- UI decision notes are a bounded presentation summary only. Never provide hidden reasoning, chain-of-thought, ' +
+      'private deliberation, or step-by-step analysis.\n' :
+    '- Output exactly one compact JSON line. No markdown or explanation.\n';
   return `You plan one constrained A2UI ${A2UI_VERSION} component layout for a mobile UI renderer.\n` +
     'Rules:\n' +
-    '- Output exactly one compact JSON line. No markdown or explanation.\n' +
+    outputContractRules +
     `- The only envelope is updateComponents for surfaceId "${surfaceId}".\n` +
     '- Never output createSurface, updateDataModel, deleteSurface, provider facts, action IDs, or action args.\n' +
     '- The root component id must be "root" and all children must form one connected acyclic tree.\n' +
@@ -101,10 +118,16 @@ export function buildA2uiLayoutSystemPrompt(
 export class OpenAiA2uiModel implements A2uiModel {
   private provider: LlmProvider;
   private componentCatalogJson: string;
+  private decisionNotesEnabled: () => boolean;
 
-  constructor(provider: LlmProvider, componentCatalogJson: string = AIPHONE_COMPONENT_CATALOG_JSON) {
+  constructor(
+    provider: LlmProvider,
+    componentCatalogJson: string = AIPHONE_COMPONENT_CATALOG_JSON,
+    decisionNotesEnabled: () => boolean = (): boolean => false
+  ) {
     this.provider = provider;
     this.componentCatalogJson = componentCatalogJson;
+    this.decisionNotesEnabled = decisionNotesEnabled;
   }
 
   async generate(userTask: string, surfaceId: string, conversation?: ConversationContext): Promise<string> {
@@ -145,7 +168,11 @@ export class OpenAiA2uiModel implements A2uiModel {
   }
 
   private buildRequest(userTask: string, surfaceId: string, conversation?: ConversationContext): ChatRequest {
-    const systemPrompt = buildA2uiLayoutSystemPrompt(surfaceId, this.componentCatalogJson);
+    const systemPrompt = buildA2uiLayoutSystemPrompt(
+      surfaceId,
+      this.componentCatalogJson,
+      this.decisionNotesEnabled()
+    );
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt }

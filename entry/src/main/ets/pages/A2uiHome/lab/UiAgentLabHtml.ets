@@ -12,6 +12,23 @@ export interface UiAgentLabStatusPayload {
   responseChars: number;
 }
 
+export interface UiAgentLabDecisionPlannedComponent {
+  id: string;
+  component: string;
+  purpose: string;
+}
+
+export interface UiAgentLabDecisionOmittedData {
+  path: string;
+  reason: string;
+}
+
+export interface UiAgentLabDecisionPayload {
+  enabled: boolean;
+  plannedComponents: UiAgentLabDecisionPlannedComponent[];
+  omittedData: UiAgentLabDecisionOmittedData[];
+}
+
 type UiAgentLabDataValue = Object | string | number | boolean | null | undefined;
 type UiAgentLabDataRecord = Record<string, UiAgentLabDataValue>;
 
@@ -65,6 +82,38 @@ function scriptString(value: string): string {
 export function uiAgentLabStatusScript(payload: UiAgentLabStatusPayload): string {
   const serialized = JSON.stringify(payload);
   return 'window.__applyUiAgentLabStatus(JSON.parse(' + scriptString(serialized) + '));';
+}
+
+function boundedUiAgentLabDecisionText(value: string, limit: number): string {
+  return value.trim().substring(0, limit);
+}
+
+function boundedUiAgentLabDecisionPayload(payload: UiAgentLabDecisionPayload): UiAgentLabDecisionPayload {
+  return {
+    enabled: payload.enabled,
+    plannedComponents: payload.plannedComponents.slice(0, 12).map(
+      (item: UiAgentLabDecisionPlannedComponent): UiAgentLabDecisionPlannedComponent => {
+        return {
+          id: boundedUiAgentLabDecisionText(item.id, 120),
+          component: boundedUiAgentLabDecisionText(item.component, 120),
+          purpose: boundedUiAgentLabDecisionText(item.purpose, 96)
+        };
+      }
+    ),
+    omittedData: payload.omittedData.slice(0, 12).map(
+      (item: UiAgentLabDecisionOmittedData): UiAgentLabDecisionOmittedData => {
+        return {
+          path: boundedUiAgentLabDecisionText(item.path, 240),
+          reason: boundedUiAgentLabDecisionText(item.reason, 40)
+        };
+      }
+    )
+  };
+}
+
+export function uiAgentLabDecisionScript(payload: UiAgentLabDecisionPayload): string {
+  const serialized = JSON.stringify(boundedUiAgentLabDecisionPayload(payload));
+  return 'window.__applyUiAgentLabDecision(JSON.parse(' + scriptString(serialized) + '));';
 }
 
 export function uiAgentLabSurfaceScript(surfaceJson: string): string {
@@ -185,12 +234,29 @@ export function createUiAgentLabHtmlShell(): string {
     .blob.peach { width:58vw; height:40vh; right:-22vw; top:18vh; background:#ffc3aa; }
     .blob.mint { width:64vw; height:35vh; left:12vw; bottom:-16vh; background:#9de1c7; }
     .shell { position:relative; z-index:1; height:100%; padding:calc(14px + env(safe-area-inset-top,0px)) 14px calc(18px + env(safe-area-inset-bottom,0px)); display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:0; }
+    .shell.decision-notes-visible { grid-template-rows:auto minmax(0,auto) minmax(0,1fr) auto; }
+    [hidden] { display:none!important; }
     .glass { background:linear-gradient(135deg,rgba(255,255,255,.76),var(--glass)); border:1px solid rgba(255,255,255,.78); box-shadow:0 18px 50px rgba(76,68,58,.13),inset 0 1px 0 rgba(255,255,255,.85); backdrop-filter:blur(22px) saturate(1.14); -webkit-backdrop-filter:blur(22px) saturate(1.14); }
     .lab-header { min-height:52px; margin-bottom:12px; border-radius:999px; display:flex; align-items:center; padding:6px 12px 6px 6px; }
     .back { width:38px; height:38px; border:0; border-radius:50%; background:rgba(255,255,255,.66); color:#343942; font-size:20px; cursor:pointer; box-shadow:inset 0 0 0 1px rgba(255,255,255,.75); }
-    .title { margin-left:12px; min-width:0; }
+    .title { flex:1 1 auto; margin-left:12px; min-width:0; }
     .title h1 { margin:0; font-size:21px; letter-spacing:-.02em; }
     .title p { margin:3px 0 0; color:var(--muted); font-size:12px; }
+    .decision-toggle { width:38px; height:38px; flex:0 0 38px; margin-left:8px; border:0; border-radius:50%; background:rgba(255,255,255,.66); color:#555b65; font-size:17px; cursor:pointer; box-shadow:inset 0 0 0 1px rgba(255,255,255,.75); }
+    .decision-toggle[aria-pressed="true"] { color:white; background:linear-gradient(145deg,#5b91ff,#2867eb); box-shadow:0 8px 18px rgba(42,101,230,.22),inset 0 1px 0 rgba(255,255,255,.28); }
+    .decision-toggle:disabled { opacity:.45; box-shadow:none; cursor:default; }
+    .decision-panel { min-height:0; max-height:min(34vh,260px); margin-bottom:12px; border-radius:24px; padding:14px 15px; overflow:auto; overscroll-behavior:contain; }
+    .decision-panel-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:11px; }
+    .decision-panel-title { margin:0; font-size:14px; }
+    .decision-panel-badge { border-radius:999px; padding:4px 8px; color:#37609f; background:rgba(211,225,255,.72); font-size:10px; }
+    .decision-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .decision-group { min-width:0; }
+    .decision-group-title { margin:0 0 7px; color:var(--muted); font-size:11px; }
+    .decision-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
+    .decision-item { min-width:0; border-radius:13px; padding:9px 10px; background:rgba(255,255,255,.48); }
+    .decision-item strong,.decision-path { display:block; font-size:11px; line-height:1.4; overflow-wrap:anywhere; }
+    .decision-item small { display:block; margin-top:3px; color:var(--muted); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
+    .decision-empty { margin:0; color:var(--muted); font-size:11px; line-height:1.5; }
     .surface-viewport { min-height:0; border-radius:30px; overflow:auto; overscroll-behavior:contain; padding:18px; text-align:left; }
     .surface-root,.lab-column { width:100%; display:flex; flex-direction:column; gap:12px; }
     .lab-list { display:flex; flex-direction:column; gap:10px; min-width:0; }
@@ -299,7 +365,7 @@ export function createUiAgentLabHtmlShell(): string {
     .heatmap-cell { width:100%; aspect-ratio:1/1; border-radius:3px; background:#dfe3e8; }
     .heatmap-scale { display:flex; justify-content:flex-end; gap:3px; margin-top:8px; }
     .heatmap-scale span { width:10px; height:10px; border-radius:3px; }
-    @media (max-width:360px) { .ring-layout { grid-template-columns:112px minmax(0,1fr); gap:10px; } .hero-title { font-size:21px; } }
+    @media (max-width:360px) { .ring-layout { grid-template-columns:112px minmax(0,1fr); gap:10px; } .hero-title { font-size:21px; } .decision-groups { grid-template-columns:1fr; } .decision-panel { max-height:30vh; } }
     .media-slider { display:flex; gap:11px; overflow-x:auto; scroll-snap-type:x mandatory; padding-bottom:3px; }
     .media-card { min-width:76%; scroll-snap-align:start; border:0; border-radius:20px; padding:0; overflow:hidden; text-align:left; color:var(--ink); background:rgba(255,255,255,.65); }
     .media-frame { height:112px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#bfd3ff,#ffd0bd 52%,#b9e8d6); color:rgba(32,36,43,.72); font-size:11px; letter-spacing:.08em; }
@@ -339,7 +405,15 @@ export function createUiAgentLabHtmlShell(): string {
     <header class="lab-header glass">
       <button id="back" class="back" type="button" aria-label="返回设置">&#8249;</button>
       <div class="title"><h1>UI Lab</h1><p>ArkWeb hybrid component playground</p></div>
+      <button id="decisionToggle" class="decision-toggle" type="button" aria-label="显示 UI 决策说明" aria-pressed="false" title="UI 决策说明">&#9881;</button>
     </header>
+    <aside id="decisionPanel" class="decision-panel glass" aria-label="UI 决策说明" hidden>
+      <div class="decision-panel-header"><h2 class="decision-panel-title">UI 决策说明</h2><span class="decision-panel-badge">有限摘要</span></div>
+      <div class="decision-groups">
+        <section class="decision-group"><h3 class="decision-group-title">计划组件</h3><div id="plannedComponents"></div></section>
+        <section class="decision-group"><h3 class="decision-group-title">未呈现数据</h3><div id="omittedData"></div></section>
+      </div>
+    </aside>
     <main class="surface-viewport glass" id="surface"><div class="empty"><strong>实验 Surface</strong><span>等待 UI Agent 生成 Lab 组件</span></div></main>
     <section>
       <div id="status" class="status" data-state="ready"><span id="statusText">模型已就绪</span><span id="responseMeta"></span></div>
@@ -357,7 +431,9 @@ export function createUiAgentLabHtmlShell(): string {
         if(entry&&typeof entry.name==='string'&&record(entry.schema))UI_AGENT_LAB_SCHEMA_BY_NAME[entry.name]=entry.schema;
       });
       var UI_AGENT_LAB_RESERVED_FIELDS = ${JSON.stringify(A2UI_CATALOG_RESERVED_COMPONENT_FIELDS)};
-      var surfaceHost=document.getElementById('surface');
+      var shell=document.querySelector('.shell'),surfaceHost=document.getElementById('surface');
+      var decisionToggle=document.getElementById('decisionToggle'),decisionPanel=document.getElementById('decisionPanel');
+      var plannedComponents=document.getElementById('plannedComponents'),omittedData=document.getElementById('omittedData');
       var toast=document.getElementById('toast'),toastTimer=0;
       var bridge=function(message){
         try { if(window.UiAgentLabBridge&&UiAgentLabBridge.postMessage){ UiAgentLabBridge.postMessage(JSON.stringify(message)); } } catch(_e){}
@@ -882,6 +958,36 @@ export function createUiAgentLabHtmlShell(): string {
         if(typeof source.rootId!=='string'||!source.rootId){surfaceHost.appendChild(safeError('Surface 无根节点','UI Agent 没有提供 rootId。'));return;}
         surfaceHost.appendChild(renderById(source.rootId,{surface:source,model:model,byId:byId,hasItemScope:false,itemScope:undefined},[]));
       };
+      function decisionText(value,limit){return text(value).trim().substring(0,limit);}
+      function renderDecisionList(host,items,kind){
+        clear(host);
+        var bounded=list(items).slice(0,12),result=node('ul','decision-list');
+        bounded.forEach(function(item){
+          var source=record(item);if(!source)return;
+          var entry=node('li','decision-item');
+          if(kind==='planned'){
+            var component=decisionText(source.component,120),id=decisionText(source.id,120),purpose=decisionText(source.purpose,96);
+            entry.appendChild(node('strong','',component+(id?' · '+id:'')));
+            if(purpose)entry.appendChild(node('small','',purpose));
+          }else{
+            var path=decisionText(source.path,240),reason=decisionText(source.reason,40);
+            entry.appendChild(node('span','decision-path',path));
+            if(reason)entry.appendChild(node('small','',reason));
+          }
+          if(entry.firstChild)result.appendChild(entry);
+        });
+        if(result.firstChild)host.appendChild(result);else host.appendChild(node('p','decision-empty','本轮没有相关说明。'));
+      }
+      window.__applyUiAgentLabDecision=function(next){
+        var source=record(next),enabled=source!==null&&source.enabled===true;
+        decisionToggle.dataset.enabled=enabled?'true':'false';
+        decisionToggle.setAttribute('aria-pressed',enabled?'true':'false');
+        decisionToggle.setAttribute('aria-label',enabled?'隐藏 UI 决策说明':'显示 UI 决策说明');
+        decisionPanel.hidden=!enabled;shell.classList.toggle('decision-notes-visible',enabled);
+        if(!enabled){clear(plannedComponents);clear(omittedData);return;}
+        renderDecisionList(plannedComponents,source.plannedComponents,'planned');
+        renderDecisionList(omittedData,source.omittedData,'omitted');
+      };
       var status=document.getElementById('status'),statusText=document.getElementById('statusText'),responseMeta=document.getElementById('responseMeta');
       var prompt=document.getElementById('prompt'),send=document.getElementById('send');
       window.__applyUiAgentLabStatus=function(next){
@@ -889,9 +995,13 @@ export function createUiAgentLabHtmlShell(): string {
         status.dataset.state=next.state;
         statusText.textContent=typeof next.message==='string'?next.message:'';
         responseMeta.textContent=Number(next.responseChars)>0?String(next.responseChars)+' chars':'';
-        send.disabled=next.state==='loading';prompt.disabled=next.state==='loading';
+        send.disabled=next.state==='loading';prompt.disabled=next.state==='loading';decisionToggle.disabled=next.state==='loading';
       };
       document.getElementById('back').addEventListener('click',function(){bridge({type:'back'});});
+      decisionToggle.addEventListener('click',function(){
+        if(decisionToggle.disabled)return;
+        bridge({type:'toggleDecisionNotes',enabled:decisionToggle.dataset.enabled!=='true'});
+      });
       document.getElementById('composer').addEventListener('submit',function(event){
         event.preventDefault();var value=prompt.value.trim();if(!value||send.disabled)return;
         window.__applyUiAgentLabStatus({state:'loading',message:'模型正在响应…',responseChars:0});

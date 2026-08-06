@@ -24,6 +24,12 @@ import {
 import { MultiAgentCanaryRuntime, MultiAgentCanaryOptions } from '../agent/MultiAgentCanaryRuntime';
 import { SystemUriOpener } from '../agent/AiphoneRegisteredActionExecutor';
 import { HtmlHomeAction, HtmlHomeBlock, HtmlHomeDocument } from '../html/HtmlHomeTypes';
+import {
+  parseUiAgentLabDecisionOutput,
+  UiAgentLabDecisionNotes,
+  UiAgentLabDecisionNotesState,
+  UiAgentLabDecisionOutput
+} from './UiAgentLabDecisionNotes';
 
 const UI_LAB_LAYOUT_TIMEOUT_MS: number = 60000;
 const UI_LAB_SNAPSHOT_LIMIT: number = 12000;
@@ -113,6 +119,7 @@ interface UiLabPromptOffer {
 export interface UiAgentLabSurfaceEvent {
   turnId: string;
   surface: A2uiSurfaceState;
+  decisionNotes?: UiAgentLabDecisionNotes;
 }
 
 export interface UiAgentLabSubmitOutcome {
@@ -660,9 +667,17 @@ export function uiAgentLabLayoutPrompt(
 
 class UiAgentLabRenderer implements UiTaskRenderer {
   private readonly planner: UiLayoutPlanner;
+  private readonly decisionNotesEnabled: () => boolean;
+  private readonly onDecisionNotes: (surfaceId: string, notes: UiAgentLabDecisionNotes | null) => void;
 
-  constructor(planner: UiLayoutPlanner) {
+  constructor(
+    planner: UiLayoutPlanner,
+    decisionNotesEnabled: () => boolean,
+    onDecisionNotes: (surfaceId: string, notes: UiAgentLabDecisionNotes | null) => void
+  ) {
     this.planner = planner;
+    this.decisionNotesEnabled = decisionNotesEnabled;
+    this.onDecisionNotes = onDecisionNotes;
   }
 
   skeleton(task: CreateUiTaskPayload, surfaceId: string): Promise<UiRenderResult> {
@@ -682,6 +697,8 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     surfaceId: string
   ): Promise<UiRenderResult> {
     const snapshot = buildUiAgentLabSnapshot(task, data);
+    const notesEnabled = this.decisionNotesEnabled();
+    this.onDecisionNotes(surfaceId, null);
     const baseline = surfaceShell(surfaceId, 'ready', baselineComponents(data, offers)) +
       uiAgentLabDataJsonl(surfaceId, snapshot);
     let timerId: number = -1;
@@ -697,9 +714,14 @@ class UiAgentLabRenderer implements UiTaskRenderer {
         aiLogInfo('[UiAgentLabLayout] surface=' + surfaceId + ' planner=null fallback=true');
         return { jsonl: baseline };
       }
+      const decisionOutput: UiAgentLabDecisionOutput = parseUiAgentLabDecisionOutput(
+        candidate,
+        notesEnabled,
+        JSON.stringify(snapshot)
+      );
       const merge = mergeA2uiLayoutWithStatus(
         baseline,
-        candidate,
+        decisionOutput.protocolCandidate,
         surfaceId,
         offers,
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
@@ -708,6 +730,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
         '[UiAgentLabLayout] surface=' + surfaceId + ' mergeAccepted=' + merge.accepted.toString() +
         ' reason=' + merge.reason
       );
+      this.onDecisionNotes(surfaceId, merge.accepted ? decisionOutput.decisionNotes : null);
       return {
         jsonl: annotateActionSources(
           merge.accepted ? hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data) : merge.jsonl,
@@ -796,6 +819,8 @@ export class UiAgentLabHarness {
   private active: boolean = true;
   private generation: number = 0;
   private currentSurface: A2uiSurfaceState | null = null;
+  private decisionNotesEnabled: boolean = false;
+  private readonly decisionNotesState: UiAgentLabDecisionNotesState = new UiAgentLabDecisionNotesState();
 
   constructor(settings: LocalModelSettings, listener: UiAgentLabSurfaceListener) {
     const provider = new LlmProvider(
@@ -806,12 +831,22 @@ export class UiAgentLabHarness {
       settings.customParametersJson
     );
     const planner = new A2uiAgentRunner(
-      new OpenAiA2uiModel(provider, UI_AGENT_LAB_COMPONENT_CATALOG_JSON)
+      new OpenAiA2uiModel(
+        provider,
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON,
+        (): boolean => this.decisionNotesEnabled
+      )
     );
     const options: MultiAgentCanaryOptions = {
       model: new OpenAiCompatibleModel(provider),
       opener: new RejectUiLabUriOpener(),
-      uiRenderer: new UiAgentLabRenderer(planner),
+      uiRenderer: new UiAgentLabRenderer(
+        planner,
+        (): boolean => this.decisionNotesEnabled,
+        (surfaceId: string, notes: UiAgentLabDecisionNotes | null): void => {
+          this.decisionNotesState.update(surfaceId, notes);
+        }
+      ),
       structuredToolCall: callStructuredToolForUiLab,
       allowTrustedOperationTargets: true,
       surfaceDocumentProjector: projectUiAgentLabSurface,
@@ -823,7 +858,15 @@ export class UiAgentLabHarness {
       onSurface: (surface: A2uiSurfaceState, generation: number): boolean => {
         if (!this.active || generation !== this.generation) return false;
         this.currentSurface = cloneSurface(surface);
-        listener({ turnId: 'ui-agent-lab-' + generation.toString(), surface: cloneSurface(surface) });
+        const event: UiAgentLabSurfaceEvent = {
+          turnId: 'ui-agent-lab-' + generation.toString(),
+          surface: cloneSurface(surface)
+        };
+        const decisionNotes = this.decisionNotesState.read(surface.surfaceId);
+        if (this.decisionNotesEnabled && surface.status === 'ready' && decisionNotes !== null) {
+          event.decisionNotes = JSON.parse(JSON.stringify(decisionNotes)) as UiAgentLabDecisionNotes;
+        }
+        listener(event);
         return true;
       },
       onMemoryUpdate: (): void => {},
@@ -840,6 +883,7 @@ export class UiAgentLabHarness {
       return { ok: false, status: 'canceled', message: 'UI Lab runtime 不可用。' };
     }
     this.runtime.cancelActiveTurn('superseded');
+    this.decisionNotesState.clear();
     this.generation++;
     const generation = this.generation;
     const input: UserInputPayload = { text: bounded, recentMessages: [] };
@@ -847,8 +891,21 @@ export class UiAgentLabHarness {
     return { ok: outcome.ok, status: outcome.status, message: outcome.message };
   }
 
+  setDecisionNotesEnabled(enabled: boolean): boolean {
+    if (!this.active) return false;
+    this.decisionNotesEnabled = enabled;
+    this.decisionNotesState.clear();
+    return this.decisionNotesEnabled;
+  }
+
+  isDecisionNotesEnabled(): boolean {
+    return this.active && this.decisionNotesEnabled;
+  }
+
   async runAction(action: A2uiAction): Promise<boolean> {
-    if (!this.active || action.args === undefined) return false;
+    if (!this.active) return false;
+    this.decisionNotesState.clear();
+    if (action.args === undefined) return false;
     const context = this.runtime.currentActionContext(action);
     if (context === null) return false;
     return await this.runtime.runAction(action, context);
@@ -865,5 +922,7 @@ export class UiAgentLabHarness {
     this.runtime.cancelActiveTurn('ui-lab-disposed');
     this.runtime.dispose();
     this.currentSurface = null;
+    this.decisionNotesEnabled = false;
+    this.decisionNotesState.clear();
   }
 }

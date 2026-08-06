@@ -17,6 +17,8 @@ import {
   resolveUiAgentLabDataPath,
   resolveUiAgentLabSurfaceJson,
   strictUiAgentLabFiniteNumber,
+  UiAgentLabDecisionPayload,
+  uiAgentLabDecisionScript,
   uiAgentLabSurfaceScript,
   uiAgentLabStatusScript
 } from '../main/ets/pages/A2uiHome/lab/UiAgentLabHtml';
@@ -25,6 +27,11 @@ import {
   configureUiLabModelSettings,
   uiLabModelSettings
 } from '../main/ets/pages/A2uiHome/lab/UiLabRuntimeConfig';
+import {
+  parseUiAgentLabDecisionOutput,
+  UiAgentLabDecisionNotesState,
+  UiAgentLabDecisionOutput
+} from '../main/ets/pages/A2uiHome/lab/UiAgentLabDecisionNotes';
 import {
   buildUiAgentLabSnapshot,
   hydrateUiAgentLabMergedJsonl,
@@ -126,6 +133,13 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('id="composer"');
       expect(html).assertContain('id="toast"');
       expect(html).assertContain('window.__applyUiAgentLabSurface');
+      expect(html).assertContain('id="decisionToggle"');
+      expect(html).assertContain('id="decisionPanel"');
+      expect(html).assertContain('aria-pressed="false"');
+      expect(html).assertContain('UI 决策说明');
+      expect(html).assertContain("bridge({type:'toggleDecisionNotes',enabled:");
+      expect(html.indexOf('id="decisionPanel"')).assertLarger(html.indexOf('</header>'));
+      expect(html.indexOf('id="surface"')).assertLarger(html.indexOf('id="decisionPanel"'));
     });
 
     it('encodes status payload before building executable JavaScript', 0, () => {
@@ -140,6 +154,21 @@ export default function uiAgentLabTest() {
       expect(script).assertContain('\\u007b');
     });
 
+    it('bounds and encodes decision notes before injecting them into ArkWeb', 0, () => {
+      const marker = "</script><script>window.__RAW_DECISION_EXECUTED=true</script>";
+      const payload: UiAgentLabDecisionPayload = {
+        enabled: true,
+        plannedComponents: [{ id: 'hero', component: 'HeroBanner', purpose: marker + 'p'.repeat(120) }],
+        omittedData: [{ path: '/results/0/data/' + 'x'.repeat(300), reason: 'raw_or_unreadable' }]
+      };
+      const script = uiAgentLabDecisionScript(payload);
+      expect(script).assertContain('window.__applyUiAgentLabDecision(JSON.parse(');
+      expect(script.indexOf(marker)).assertEqual(-1);
+      expect(script.indexOf('</script>')).assertEqual(-1);
+      expect(script).assertContain('\\u007b');
+      expect(script.length).assertLess(10000);
+    });
+
     it('encodes a complete surface before injecting it into ArkWeb JavaScript', 0, () => {
       const marker = "</script><script>window.__RAW_SURFACE_EXECUTED=true</script>";
       const surfaceJson = '{"surfaceId":"surface-lab","rootId":"root","components":[' +
@@ -150,6 +179,119 @@ export default function uiAgentLabTest() {
       expect(script.indexOf('</script>')).assertEqual(-1);
       expect(script).assertContain('\\u007b');
       expect(script).assertContain('\\u003c');
+    });
+
+    it('strictly separates bounded UI decision notes from the unchanged A2UI candidate', 0, () => {
+      const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
+        '"components":[{"id":"root","component":"SurfaceRoot","child":"hero"},' +
+        '{"id":"hero","component":"HeroBanner","title":"Verified result"}]}}';
+      const notes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
+        '{"id":"hero","component":"HeroBanner","purpose":"概括已验证结果"}],' +
+        '"omittedData":[{"path":"/results/0/data/raw","reason":"raw_or_unreadable"}]}}';
+      const snapshot = '{"summary":{"text":"ok"},"results":[{"data":{"raw":{"nested":true}}}]}';
+      const parsed: UiAgentLabDecisionOutput = parseUiAgentLabDecisionOutput(notes + '\n' + protocol, true, snapshot);
+      expect(parsed.protocolCandidate).assertEqual(protocol);
+      expect(parsed.decisionNotes === null).assertFalse();
+      expect(parsed.decisionNotes!.plannedComponents.length).assertEqual(1);
+      expect(parsed.decisionNotes!.plannedComponents[0].component).assertEqual('HeroBanner');
+      expect(parsed.decisionNotes!.omittedData[0].path).assertEqual('/results/0/data/raw');
+
+      const disabled = parseUiAgentLabDecisionOutput(notes + '\n' + protocol, false, snapshot);
+      expect(disabled.protocolCandidate).assertEqual(notes + '\n' + protocol);
+      expect(disabled.decisionNotes === null).assertTrue();
+    });
+
+    it('clears accepted decision notes before a later surface update can reuse them', 0, () => {
+      const state = new UiAgentLabDecisionNotesState();
+      state.update('decision-surface', {
+        version: 1,
+        plannedComponents: [{ id: 'hero', component: 'HeroBanner', purpose: '概括结果' }],
+        omittedData: []
+      });
+      expect(state.read('decision-surface') === null).assertFalse();
+      state.clear();
+      expect(state.read('decision-surface') === null).assertTrue();
+    });
+
+    it('drops malformed or misleading notes while preserving a valid protocol line', 0, () => {
+      const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
+        '"components":[{"id":"root","component":"SurfaceRoot","child":"hero"},' +
+        '{"id":"hero","component":"HeroBanner","title":"Verified result"}]}}';
+      const snapshot = '{"results":[{"data":{"raw":true}}]}';
+      const invalidNotes: string[] = [
+        '{"uiDecisionNotes":{"version":1,"plannedComponents":[],"omittedData":[],"extra":true}}',
+        '{"uiDecisionNotes":{"version":1,"plannedComponents":[],"omittedData":[' +
+          '{"path":"/results/0/data/missing","reason":"irrelevant"}]}}',
+        '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
+          '{"id":"missing","component":"MetricGrid","purpose":"不存在于协议"}],"omittedData":[]}}',
+        '{"uiDecisionNotes":{"version":1,"plannedComponents":[],"omittedData":[' +
+          '{"path":"/results/0/data/raw","reason":"private_reasoning"}]}}'
+      ];
+      for (let index = 0; index < invalidNotes.length; index++) {
+        const parsed = parseUiAgentLabDecisionOutput(invalidNotes[index] + '\n' + protocol, true, snapshot);
+        expect(parsed.protocolCandidate).assertEqual(protocol);
+        expect(parsed.decisionNotes === null).assertTrue();
+      }
+      const extraLine = parseUiAgentLabDecisionOutput('unbounded prose\n{}\n' + protocol, true, snapshot);
+      expect(extraLine.protocolCandidate).assertEqual(protocol);
+      expect(extraLine.decisionNotes === null).assertTrue();
+
+      const dataPathProtocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
+        '"components":[{"id":"root","component":"SurfaceRoot","child":"summary"},' +
+        '{"id":"summary","component":"Text","dataPath":"/summary/text",' +
+        '"legacy":{"nested":{"dataPath":"/results/0/data/raw"}}}]}}';
+      const contradictoryNotes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[],' +
+        '"omittedData":[{"path":"/results/0/data/raw","reason":"irrelevant"}]}}';
+      const contradictory = parseUiAgentLabDecisionOutput(
+        contradictoryNotes + '\n' + dataPathProtocol,
+        true,
+        snapshot
+      );
+      expect(contradictory.protocolCandidate).assertEqual(dataPathProtocol);
+      expect(contradictory.decisionNotes === null).assertTrue();
+    });
+
+    it('keeps a useful partial planned-component summary when every listed item is real', 0, () => {
+      const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
+        '"components":[{"id":"root","component":"SurfaceRoot","child":"column"},' +
+        '{"id":"column","component":"Column","children":["hero","summary"]},' +
+        '{"id":"hero","component":"HeroBanner","title":"Verified"},' +
+        '{"id":"summary","component":"Text","dataPath":"/summary/text"}]}}';
+      const partialNotes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
+        '{"id":"hero","component":"HeroBanner","purpose":"概括结果"}],"omittedData":[]}}';
+      const parsed = parseUiAgentLabDecisionOutput(
+        partialNotes + '\n' + protocol,
+        true,
+        '{"summary":{"text":"Verified"}}'
+      );
+      expect(parsed.protocolCandidate).assertEqual(protocol);
+      expect(parsed.decisionNotes === null).assertFalse();
+      expect(parsed.decisionNotes!.plannedComponents.length).assertEqual(1);
+    });
+
+    it('keeps the shared merger strict and accepts only the extracted protocol', 0, () => {
+      const surfaceId = 'decision-surface';
+      const baseline = '{"version":"v0.9.1","createSurface":{"surfaceId":"decision-surface","root":"root"}}\n' +
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"summary"},' +
+        '{"id":"summary","component":"Text","dataPath":"/summary/text"}]}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"decision-surface","path":"/summary",' +
+        '"value":{"text":"Verified"}}}\n';
+      const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
+        '"components":[{"id":"root","component":"SurfaceRoot","child":"hero"},' +
+        '{"id":"hero","component":"HeroBanner","title":"Verified"}]}}';
+      const notes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
+        '{"id":"hero","component":"HeroBanner","purpose":"概括结果"}],"omittedData":[]}}';
+      const parsed = parseUiAgentLabDecisionOutput(notes + '\n' + protocol, true, '{"summary":{"text":"Verified"}}');
+      const extracted = mergeA2uiLayoutWithStatus(
+        baseline, parsed.protocolCandidate, surfaceId, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      const unstripped = mergeA2uiLayoutWithStatus(
+        baseline, notes + '\n' + protocol, surfaceId, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(extracted.accepted).assertTrue();
+      expect(unstripped.accepted).assertFalse();
+      expect(unstripped.reason).assertEqual('candidate_rejected');
     });
 
     it('registers only the fixed UI Lab catalog and uses safe DOM text APIs', 0, () => {
@@ -788,6 +930,16 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('.status { min-height:24px; padding:4px 8px;');
       expect(html).assertContain('line-height:16px; display:flex; justify-content:space-between; align-items:center;');
       expect(html).assertContain('.status>span { min-height:16px; display:flex; align-items:center; }');
+      expect(html).assertContain('.decision-toggle { width:38px; height:38px;');
+      expect(html).assertContain('border-radius:50%');
+      expect(html).assertContain('[hidden] { display:none!important; }');
+      expect(html).assertContain('.shell.decision-notes-visible { grid-template-rows:auto minmax(0,auto) minmax(0,1fr) auto; }');
+      expect(html).assertContain('.decision-panel { min-height:0; max-height:min(34vh,260px);');
+      expect(html).assertContain('overflow:auto;');
+      expect(html).assertContain('decisionPanel.hidden=!enabled');
+      expect(html).assertContain("decisionToggle.disabled=next.state==='loading'");
+      expect(html).assertContain("entry.appendChild(node('strong'");
+      expect(html.indexOf('.innerHTML')).assertEqual(-1);
       expect(html.indexOf('grid-template-rows:auto minmax(0,1fr) auto; gap:12px;')).assertEqual(-1);
       expect(html).assertContain('.expandable-panel { display:grid; grid-template-rows:0fr; opacity:0; transform:translateY(-6px);');
       expect(html).assertContain('cubic-bezier(.22,1,.36,1)');

@@ -219,6 +219,31 @@ export default function a2uiLayoutMergerTest() {
       ) === uiLabBaseline).assertFalse();
     });
 
+    it('adds bounded presentation decision notes only for the enabled UI Lab mode', 0, () => {
+      const disabled = buildA2uiLayoutSystemPrompt(SURFACE_ID, UI_AGENT_LAB_COMPONENT_CATALOG_JSON);
+      const enabled = buildA2uiLayoutSystemPrompt(SURFACE_ID, UI_AGENT_LAB_COMPONENT_CATALOG_JSON, true);
+      const genericEnabled = buildA2uiLayoutSystemPrompt(SURFACE_ID, AIPHONE_COMPONENT_CATALOG_JSON, true);
+      expect(disabled.includes('Output exactly one compact JSON line')).assertTrue();
+      expect(disabled.includes('uiDecisionNotes')).assertFalse();
+      expect(enabled.includes('Output exactly two compact JSON lines')).assertTrue();
+      expect(enabled.includes('The second line must be the single A2UI updateComponents protocol envelope')).assertTrue();
+      expect(enabled.includes('"plannedComponents"')).assertTrue();
+      expect(enabled.includes('plannedComponents lists the planned components the layout intends to use')).assertTrue();
+      expect(enabled.includes('plannedComponents lists only non-container components')).assertFalse();
+      expect(enabled.includes('"omittedData"')).assertTrue();
+      expect(enabled.includes('DataResult paths not presented')).assertTrue();
+      expect(enabled.includes('Never list a path in omittedData when an output component uses that exact dataPath')).assertTrue();
+      expect(enabled.includes('duplicate, irrelevant, raw_or_unreadable, unsupported_component')).assertTrue();
+      expect(enabled.includes('mobile_space')).assertTrue();
+      expect(enabled.includes('at most 12 entries in each array')).assertTrue();
+      expect(enabled.includes('at most 2400 characters for the complete first line')).assertTrue();
+      expect(enabled.includes('bounded presentation summary only')).assertTrue();
+      expect(enabled.includes('Never provide hidden reasoning, chain-of-thought')).assertTrue();
+      expect(enabled.includes('step-by-step analysis')).assertTrue();
+      expect(genericEnabled.includes('Output exactly one compact JSON line')).assertTrue();
+      expect(genericEnabled.includes('uiDecisionNotes')).assertFalse();
+    });
+
     it('keeps the business catalog as the default', 0, () => {
       const merged: string = mergeA2uiLayout(BASELINE, VALID_CANDIDATE, SURFACE_ID, offers());
       expect(merged === BASELINE).assertFalse();
