@@ -1,12 +1,15 @@
 import { DataResult } from '../message/DataResult';
 import { ActionOffer } from '../action/ActionOfferTypes';
 
+export const UI_TASK_ORIGINAL_USER_INPUT_MAX_LENGTH: number = 512;
+
 export interface CreateUiTaskPayload {
   taskId: string;
   dataTaskIds: string[];
   personaId?: string;
   skillId: string;
   intent: string;
+  originalUserInput?: string;
   expectedOutputSchema: string;
 }
 

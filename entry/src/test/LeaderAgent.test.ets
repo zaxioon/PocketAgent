@@ -950,11 +950,12 @@ export default function leaderAgentTest() {
       expect(data.toolId).assertEqual('hotel.search');
       expect(data.outputSchema).assertEqual('hotelSearchResults');
       expect(ui.skillId).assertEqual('');
+      expect(ui.originalUserInput).assertEqual('Find a Shenzhen hotel');
       expect(data.skillId).assertEqual('');
       expect(args.city).assertEqual('Shenzhen');
       expect(args.guests).assertEqual(2);
       expect(Object.keys(ui).sort().join(',')).assertEqual(
-        'dataTaskIds,expectedOutputSchema,intent,skillId,taskId'
+        'dataTaskIds,expectedOutputSchema,intent,originalUserInput,skillId,taskId'
       );
       expect(Object.keys(data).sort().join(',')).assertEqual('allowedToolIds,args,goal,outputSchema,required,roundId,skillId,taskId,toolId');
       expect(JSON.stringify(ui).indexOf('provider')).assertEqual(-1);
@@ -2200,6 +2201,7 @@ export default function leaderAgentTest() {
       expect(uiTask.type).assertEqual(AgentMessageType.TASK_CREATE_UI);
       const uiPayload = uiTask.payload as CreateUiTaskPayload;
       expect(uiPayload.dataTaskIds.join(',')).assertEqual(firstData.taskId + ',' + secondData.taskId);
+      expect(uiPayload.originalUserInput).assertEqual('Find a Shenzhen hotel');
       expect(uiTask.taskId).assertEqual('input-1:ui');
 
       bus.publish({
