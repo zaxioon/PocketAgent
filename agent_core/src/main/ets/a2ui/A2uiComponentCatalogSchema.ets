@@ -190,6 +190,9 @@ function resolveCatalogValueForModel(
   if (depth > MAX_SCHEMA_DEPTH) {
     return failedResolution();
   }
+  if (schema.valuePolicy === 'literal-or-path' && typeof value === 'string' && pointerSyntax(value as string)) {
+    return failedResolution();
+  }
   const path = syntaxBindingPath(value);
   if (schema.valuePolicy === 'path-only' || (schema.valuePolicy === 'literal-or-path' && path !== null)) {
     if (path === null) {
@@ -334,6 +337,9 @@ function validCatalogValue(
   }
   if (schema.valuePolicy === 'literal-or-path' && bindingPath(value, allowedPaths) !== null) {
     return true;
+  }
+  if (schema.valuePolicy === 'literal-or-path' && typeof value === 'string' && pointerSyntax(value as string)) {
+    return false;
   }
   if (schema.valuePolicy === 'legacy-data-path') {
     return typeof value === 'string' &&

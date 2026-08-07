@@ -37,6 +37,7 @@ import {
   hydrateUiAgentLabMergedJsonl,
   hydrateUiAgentLabSnapshotForMergedLayout,
   uiAgentLabDataJsonl,
+  uiAgentLabLayoutDiagnosticText,
   uiAgentLabLayoutPrompt,
 } from '../main/ets/pages/A2uiHome/lab/UiAgentLabHarness';
 
@@ -158,15 +159,14 @@ export default function uiAgentLabTest() {
       const marker = "</script><script>window.__RAW_DECISION_EXECUTED=true</script>";
       const payload: UiAgentLabDecisionPayload = {
         enabled: true,
-        plannedComponents: [{ id: 'hero', component: 'HeroBanner', purpose: marker + 'p'.repeat(120) }],
-        omittedData: [{ path: '/results/0/data/' + 'x'.repeat(300), reason: 'raw_or_unreadable' }]
+        text: marker + 'p'.repeat(2600)
       };
       const script = uiAgentLabDecisionScript(payload);
       expect(script).assertContain('window.__applyUiAgentLabDecision(JSON.parse(');
       expect(script.indexOf(marker)).assertEqual(-1);
       expect(script.indexOf('</script>')).assertEqual(-1);
       expect(script).assertContain('\\u007b');
-      expect(script.length).assertLess(10000);
+      expect(script.length).assertLess(16000);
     });
 
     it('encodes a complete surface before injecting it into ArkWeb JavaScript', 0, () => {
@@ -181,92 +181,58 @@ export default function uiAgentLabTest() {
       expect(script).assertContain('\\u003c');
     });
 
-    it('strictly separates bounded UI decision notes from the unchanged A2UI candidate', 0, () => {
+    it('strictly separates bounded multiline decision notes from the unchanged A2UI candidate', 0, () => {
       const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
         '"components":[{"id":"root","component":"SurfaceRoot","child":"hero"},' +
         '{"id":"hero","component":"HeroBanner","title":"Verified result"}]}}';
-      const notes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
-        '{"id":"hero","component":"HeroBanner","purpose":"概括已验证结果"}],' +
-        '"omittedData":[{"path":"/results/0/data/raw","reason":"raw_or_unreadable"}]}}';
-      const snapshot = '{"summary":{"text":"ok"},"results":[{"data":{"raw":{"nested":true}}}]}';
-      const parsed: UiAgentLabDecisionOutput = parseUiAgentLabDecisionOutput(notes + '\n' + protocol, true, snapshot);
+      const output = '<ui_decision_notes>\n' +
+        '选择 HeroBanner，因为它适合概括已验证结果。\n' +
+        '/results/0/data/raw 未展示，因为它是不可读的原始字段。\n' +
+        '</ui_decision_notes>\n' + protocol;
+      const parsed: UiAgentLabDecisionOutput = parseUiAgentLabDecisionOutput(output, true);
       expect(parsed.protocolCandidate).assertEqual(protocol);
-      expect(parsed.decisionNotes === null).assertFalse();
-      expect(parsed.decisionNotes!.plannedComponents.length).assertEqual(1);
-      expect(parsed.decisionNotes!.plannedComponents[0].component).assertEqual('HeroBanner');
-      expect(parsed.decisionNotes!.omittedData[0].path).assertEqual('/results/0/data/raw');
+      expect(parsed.decisionNotes).assertEqual('选择 HeroBanner，因为它适合概括已验证结果。\n' +
+        '/results/0/data/raw 未展示，因为它是不可读的原始字段。');
 
-      const disabled = parseUiAgentLabDecisionOutput(notes + '\n' + protocol, false, snapshot);
-      expect(disabled.protocolCandidate).assertEqual(notes + '\n' + protocol);
+      const disabled = parseUiAgentLabDecisionOutput(output, false);
+      expect(disabled.protocolCandidate).assertEqual(output);
       expect(disabled.decisionNotes === null).assertTrue();
+
+      const protocolOnly = parseUiAgentLabDecisionOutput(protocol, true);
+      expect(protocolOnly.protocolCandidate).assertEqual(protocol);
+      expect(protocolOnly.decisionNotes === null).assertTrue();
     });
 
     it('clears accepted decision notes before a later surface update can reuse them', 0, () => {
       const state = new UiAgentLabDecisionNotesState();
-      state.update('decision-surface', {
-        version: 1,
-        plannedComponents: [{ id: 'hero', component: 'HeroBanner', purpose: '概括结果' }],
-        omittedData: []
-      });
+      state.update('decision-surface', '选择 HeroBanner 概括结果。');
       expect(state.read('decision-surface') === null).assertFalse();
       state.clear();
       expect(state.read('decision-surface') === null).assertTrue();
     });
 
-    it('drops malformed or misleading notes while preserving a valid protocol line', 0, () => {
+    it('does not guess a protocol from prose and recovers only after an exact closing tag', 0, () => {
       const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
         '"components":[{"id":"root","component":"SurfaceRoot","child":"hero"},' +
         '{"id":"hero","component":"HeroBanner","title":"Verified result"}]}}';
-      const snapshot = '{"results":[{"data":{"raw":true}}]}';
-      const invalidNotes: string[] = [
-        '{"uiDecisionNotes":{"version":1,"plannedComponents":[],"omittedData":[],"extra":true}}',
-        '{"uiDecisionNotes":{"version":1,"plannedComponents":[],"omittedData":[' +
-          '{"path":"/results/0/data/missing","reason":"irrelevant"}]}}',
-        '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
-          '{"id":"missing","component":"MetricGrid","purpose":"不存在于协议"}],"omittedData":[]}}',
-        '{"uiDecisionNotes":{"version":1,"plannedComponents":[],"omittedData":[' +
-          '{"path":"/results/0/data/raw","reason":"private_reasoning"}]}}'
-      ];
-      for (let index = 0; index < invalidNotes.length; index++) {
-        const parsed = parseUiAgentLabDecisionOutput(invalidNotes[index] + '\n' + protocol, true, snapshot);
-        expect(parsed.protocolCandidate).assertEqual(protocol);
-        expect(parsed.decisionNotes === null).assertTrue();
-      }
-      const extraLine = parseUiAgentLabDecisionOutput('unbounded prose\n{}\n' + protocol, true, snapshot);
-      expect(extraLine.protocolCandidate).assertEqual(protocol);
-      expect(extraLine.decisionNotes === null).assertTrue();
+      const oversized = '<ui_decision_notes>\n' + 'x'.repeat(2401) +
+        '\n</ui_decision_notes>\n' + protocol;
+      const recovered = parseUiAgentLabDecisionOutput(oversized, true);
+      expect(recovered.protocolCandidate).assertEqual(protocol);
+      expect(recovered.decisionNotes === null).assertTrue();
 
-      const dataPathProtocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
-        '"components":[{"id":"root","component":"SurfaceRoot","child":"summary"},' +
-        '{"id":"summary","component":"Text","dataPath":"/summary/text",' +
-        '"legacy":{"nested":{"dataPath":"/results/0/data/raw"}}}]}}';
-      const contradictoryNotes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[],' +
-        '"omittedData":[{"path":"/results/0/data/raw","reason":"irrelevant"}]}}';
-      const contradictory = parseUiAgentLabDecisionOutput(
-        contradictoryNotes + '\n' + dataPathProtocol,
-        true,
-        snapshot
-      );
-      expect(contradictory.protocolCandidate).assertEqual(dataPathProtocol);
-      expect(contradictory.decisionNotes === null).assertTrue();
-    });
+      const arbitrary = 'unbounded prose\n' + protocol;
+      const unguessed = parseUiAgentLabDecisionOutput(arbitrary, true);
+      expect(unguessed.protocolCandidate).assertEqual(arbitrary);
+      expect(unguessed.decisionNotes === null).assertTrue();
 
-    it('keeps a useful partial planned-component summary when every listed item is real', 0, () => {
-      const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
-        '"components":[{"id":"root","component":"SurfaceRoot","child":"column"},' +
-        '{"id":"column","component":"Column","children":["hero","summary"]},' +
-        '{"id":"hero","component":"HeroBanner","title":"Verified"},' +
-        '{"id":"summary","component":"Text","dataPath":"/summary/text"}]}}';
-      const partialNotes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
-        '{"id":"hero","component":"HeroBanner","purpose":"概括结果"}],"omittedData":[]}}';
-      const parsed = parseUiAgentLabDecisionOutput(
-        partialNotes + '\n' + protocol,
-        true,
-        '{"summary":{"text":"Verified"}}'
-      );
-      expect(parsed.protocolCandidate).assertEqual(protocol);
-      expect(parsed.decisionNotes === null).assertFalse();
-      expect(parsed.decisionNotes!.plannedComponents.length).assertEqual(1);
+      const extraAfterClose = '<ui_decision_notes>\n说明\n</ui_decision_notes>\nextra\n' + protocol;
+      const rejectedExtra = parseUiAgentLabDecisionOutput(extraAfterClose, true);
+      expect(rejectedExtra.protocolCandidate).assertEqual(extraAfterClose);
+      expect(rejectedExtra.decisionNotes === null).assertTrue();
+
+      const missingClose = '<ui_decision_notes>\n说明\n' + protocol;
+      expect(parseUiAgentLabDecisionOutput(missingClose, true).protocolCandidate).assertEqual(missingClose);
     });
 
     it('keeps the shared merger strict and accepts only the extracted protocol', 0, () => {
@@ -280,9 +246,9 @@ export default function uiAgentLabTest() {
       const protocol = '{"version":"v0.9.1","updateComponents":{"surfaceId":"decision-surface",' +
         '"components":[{"id":"root","component":"SurfaceRoot","child":"hero"},' +
         '{"id":"hero","component":"HeroBanner","title":"Verified"}]}}';
-      const notes = '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
-        '{"id":"hero","component":"HeroBanner","purpose":"概括结果"}],"omittedData":[]}}';
-      const parsed = parseUiAgentLabDecisionOutput(notes + '\n' + protocol, true, '{"summary":{"text":"Verified"}}');
+      const notes = '<ui_decision_notes>\n选择 HeroBanner 概括结果；没有有意义的数据被省略\n' +
+        '</ui_decision_notes>';
+      const parsed = parseUiAgentLabDecisionOutput(notes + '\n' + protocol, true);
       const extracted = mergeA2uiLayoutWithStatus(
         baseline, parsed.protocolCandidate, surfaceId, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       );
@@ -326,11 +292,24 @@ export default function uiAgentLabTest() {
       const entries = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as
         Record<string, Object | string>[];
       const names = entries.map((entry: Record<string, Object | string>): string => entry['name'] as string);
-      expect(names.length).assertEqual(21);
+      expect(names.length).assertEqual(20);
       expect(names.indexOf('InfoRows') >= 0).assertTrue();
       expect(names.indexOf('List') >= 0).assertTrue();
       expect(names.indexOf('ExpandableCard') >= 0).assertTrue();
       expect(names.indexOf('SegmentedRingChart') >= 0).assertTrue();
+      expect(names.indexOf('ThinkingStream')).assertEqual(-1);
+    });
+
+    it('formats bounded layout rejection diagnostics for the visible status area', 0, () => {
+      const message = uiAgentLabLayoutDiagnosticText({
+        componentId: 'profile_info\nignored',
+        rule: 'mapping_source_not_array'
+      });
+      expect(message).assertEqual(
+        'UI Agent 候选布局被拒绝（profile_info ignored: mapping_source_not_array），已显示基础布局。'
+      );
+      expect(message.indexOf('\n')).assertEqual(-1);
+      expect(message.indexOf('providerData')).assertEqual(-1);
     });
 
     it('pre-resolves exact catalog bindings into real MetricGrid and ring inputs', 0, () => {
@@ -339,9 +318,10 @@ export default function uiAgentLabTest() {
         '{"id":"stars","label":{"path":"/dashboard/metricLabel"},' +
         '"value":{"path":"/dashboard/stars"},"unit":"stars"}]}';
       const ringFields = '{"title":"Languages","segments":[' +
-        '{"label":{"path":"/dashboard/ringLabel"},"value":{"path":"/dashboard/arkts"}}]}';
+        '{"label":{"path":"/dashboard/ringLabel"},"value":{"path":"/dashboard/arkts"}},' +
+        '{"label":"TypeScript","value":{"path":"/dashboard/typescript"}}]}';
       const modelJson = '{"dashboard":{"title":"Repository","metricLabel":"Stars","stars":42,' +
-        '"ringLabel":"ArkTS","arkts":8}}';
+        '"ringLabel":"ArkTS","arkts":8,"typescript":12}}';
       const surfaceJson = '{"surfaceId":"binding-behavior","rootId":"metrics","components":[' +
         '{"id":"metrics","component":"MetricGrid","catalogFieldsJson":' +
           JSON.stringify(metricFields) + '},' +
@@ -353,12 +333,15 @@ export default function uiAgentLabTest() {
       const ring = components[1] as Record<string, Object | string | undefined>;
       const metricItem = (metric['items'] as Object[])[0] as Record<string, Object | string | number>;
       const ringItem = (ring['segments'] as Object[])[0] as Record<string, Object | string | number>;
+      const secondRingItem = (ring['segments'] as Object[])[1] as Record<string, Object | string | number>;
 
       expect(metric['title']).assertEqual('Repository');
       expect(metricItem['label']).assertEqual('Stars');
       expect(metricItem['value']).assertEqual(42);
       expect(ringItem['label']).assertEqual('ArkTS');
       expect(ringItem['value']).assertEqual(8);
+      expect(secondRingItem['label']).assertEqual('TypeScript');
+      expect(secondRingItem['value']).assertEqual(12);
       expect(metric['catalogFieldsJson'] === undefined).assertTrue();
       expect(ring['catalogFieldsJson'] === undefined).assertTrue();
       expect(html).assertContain('var UI_AGENT_LAB_COMPONENT_CATALOG = ');
@@ -368,36 +351,47 @@ export default function uiAgentLabTest() {
       expect(html.indexOf('new Function')).assertEqual(-1);
     });
 
-    it('keeps List template fields for item scope and resolves each item independently', 0, () => {
-      const fieldsJson = '{"title":{"path":"/kind"},"body":{"path":"/summary"}}';
+    it('renders List item Text title and body bindings from each item scope', 0, () => {
+      const titleFieldsJson = '{"title":{"path":"/kind"}}';
+      const bodyFieldsJson = '{"body":{"path":"/summary"}}';
       const surfaceJson = '{"surfaceId":"item-bindings","rootId":"items","components":[' +
         '{"id":"items","component":"List","dataPath":"/events","child":"event-card"},' +
-        '{"id":"event-card","component":"ExpandableCard","catalogFieldsJson":' +
-        JSON.stringify(fieldsJson) + '}],"dataModelJson":"{\\"events\\":[' +
+        '{"id":"event-card","component":"Column","children":["event-title","event-body"]},' +
+        '{"id":"event-title","component":"Text","catalogFieldsJson":' +
+        JSON.stringify(titleFieldsJson) + '},' +
+        '{"id":"event-body","component":"Text","catalogFieldsJson":' +
+        JSON.stringify(bodyFieldsJson) + '}],"dataModelJson":"{\\"events\\":[' +
         '{\\"kind\\":\\"PushEvent\\",\\"summary\\":\\"Pushed commits\\"},' +
         '{\\"kind\\":\\"IssueEvent\\",\\"summary\\":\\"Opened issue\\"}]}"}';
       const resolvedSurface = JSON.parse(resolveUiAgentLabSurfaceJson(surfaceJson)) as Record<string, Object>;
-      const template = (resolvedSurface['components'] as Object[])[1] as Record<string, Object | string>;
-      const firstJson = resolveUiAgentLabCatalogFieldsJsonForModel(
-        'ExpandableCard', fieldsJson, '{"kind":"PushEvent","summary":"Pushed commits"}'
+      const components = resolvedSurface['components'] as Object[];
+      const titleTemplate = components[2] as Record<string, Object | string>;
+      const bodyTemplate = components[3] as Record<string, Object | string>;
+      const firstTitleJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'Text', titleFieldsJson, '{"kind":"PushEvent","summary":"Pushed commits"}'
       );
-      const secondJson = resolveUiAgentLabCatalogFieldsJsonForModel(
-        'ExpandableCard', fieldsJson, '{"kind":"IssueEvent","summary":"Opened issue"}'
+      const firstBodyJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'Text', bodyFieldsJson, '{"kind":"PushEvent","summary":"Pushed commits"}'
       );
-      const first = JSON.parse(firstJson as string) as Record<string, string>;
-      const second = JSON.parse(secondJson as string) as Record<string, string>;
+      const secondTitleJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'Text', titleFieldsJson, '{"kind":"IssueEvent","summary":"Opened issue"}'
+      );
+      const firstTitle = JSON.parse(firstTitleJson as string) as Record<string, string>;
+      const firstBody = JSON.parse(firstBodyJson as string) as Record<string, string>;
+      const secondTitle = JSON.parse(secondTitleJson as string) as Record<string, string>;
       const html = createUiAgentLabHtmlShell();
 
-      expect(typeof template['catalogFieldsJson']).assertEqual('string');
-      expect(template['title'] === undefined).assertTrue();
-      expect(first['title']).assertEqual('PushEvent');
-      expect(first['body']).assertEqual('Pushed commits');
-      expect(second['title']).assertEqual('IssueEvent');
-      expect(second['body']).assertEqual('Opened issue');
-      expect(JSON.stringify(first).indexOf('/kind')).assertEqual(-1);
-      expect(JSON.stringify(second).indexOf('[object Object]')).assertEqual(-1);
+      expect(typeof titleTemplate['catalogFieldsJson']).assertEqual('string');
+      expect(typeof bodyTemplate['catalogFieldsJson']).assertEqual('string');
+      expect(titleTemplate['title'] === undefined).assertTrue();
+      expect(firstTitle['title']).assertEqual('PushEvent');
+      expect(firstBody['body']).assertEqual('Pushed commits');
+      expect(secondTitle['title']).assertEqual('IssueEvent');
       expect(html).assertContain('function resolveCatalogFields(component,context)');
       expect(html).assertContain('context.hasItemScope===true?context.itemScope:context.model');
+      expect(html).assertContain("var primitive=typeof value==='string'||typeof value==='number'||typeof value==='boolean'");
+      expect(html).assertContain('copy=nonEmptyText(direct,nonEmptyText(body,title))');
+      expect(html).assertContain("if(!direct&&title&&body){output.appendChild(node('span','lab-text-title',title))");
       expect(html.indexOf('eval(')).assertEqual(-1);
       expect(html.indexOf('new Function')).assertEqual(-1);
     });
@@ -422,17 +416,54 @@ export default function uiAgentLabTest() {
       }
     });
 
+    it('rejects pointer-shaped visible literals but resolves exact binding objects', 0, () => {
+      const modelJson = '{"summary":{"title":"Repository","route":"/release/notes"}}';
+      const directPointer = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'HeroBanner', '{"title":"/summary/title"}', modelJson
+      );
+      const directBodyPointer = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'HeroBanner', '{"title":"Repository","body":"/summary/title"}', modelJson
+      );
+      const boundTitle = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'HeroBanner', '{"title":{"path":"/summary/title"}}', modelJson
+      );
+      const boundSlashValue = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'HeroBanner', '{"title":{"path":"/summary/route"}}', modelJson
+      );
+
+      expect(directPointer).assertNull();
+      expect(directBodyPointer).assertNull();
+      expect((JSON.parse(boundTitle as string) as Record<string, string>)['title']).assertEqual('Repository');
+      expect((JSON.parse(boundSlashValue as string) as Record<string, string>)['title']).assertEqual('/release/notes');
+    });
+
     it('rejects numeric strings and preserves direct-first legacy-fallback renderer markers', 0, () => {
       const html = createUiAgentLabHtmlShell();
       expect(strictUiAgentLabFiniteNumber(42)).assertEqual(42);
       expect(strictUiAgentLabFiniteNumber('42')).assertNull();
       expect(strictUiAgentLabFiniteNumber(Number.POSITIVE_INFINITY)).assertNull();
       expect(html).assertContain("return typeof value==='number'&&Number.isFinite(value)?value:null");
+      expect(html).assertContain(
+        "policy==='literal-or-path'&&typeof value==='string'&&value.charAt(0)==='/'"
+      );
       expect(html.indexOf('var next=Number(value)')).assertEqual(-1);
       expect(html).assertContain('Array.isArray(component.items)?component.items:');
       expect(html).assertContain("itemArray(value,'items')");
       expect(html).assertContain('Array.isArray(component.segments)?component.segments:');
       expect(html).assertContain("itemArray(value,'segments')");
+      expect(html).assertContain("typeof component.labelPath==='string'&&typeof component.valuePath==='string'");
+      expect(html).assertContain('if(mapped){items=items.map(function(item)');
+      expect(html).assertContain('label:pointer(item,component.labelPath),value:pointer(item,component.valuePath)');
+      expect(html).assertContain('items.forEach(function(item)');
+      expect(html.indexOf('items.slice(0,8)')).assertEqual(-1);
+      expect(html.indexOf('items.length>8')).assertEqual(-1);
+      expect(html).assertContain("typeof component.timePath==='string'?pointer(item,component.timePath):''");
+      expect(html).assertContain("nonEmptyText(valueRecord.value,'—')");
+      expect(html).assertContain("nonEmptyText(item,'—')");
+      expect(html).assertContain("if(segments.length===0||total<=0){wrapper.appendChild(node('p','lab-card-copy','暂无有效构成数据'))");
+      expect(html.indexOf('segments.length===0||total<=0')).assertLess(
+        html.indexOf("compactNumber(segment.field.value/total*100)+'%'")
+      );
       expect(html).assertContain('componentValue(component,context)');
     });
 
@@ -444,7 +475,7 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MultiSeriesLineChart=');
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MatrixHeatmap=');
       expect(html).assertContain("document.createElementNS('http://www.w3.org/2000/svg',tag)");
-      expect(html).assertContain("var CHART_PALETTE=['#d9dee6'");
+      expect(html).assertContain("var SEGMENTED_RING_PALETTE=['#ece6df','#dce9ff','#b7cbff','#89a7ff','#6384ef','#4665cf']");
       expect(html).assertContain("var HEATMAP_PALETTE=['#dfe3e8'");
       expect(html).assertContain("if(copy.endsWith('.0'))copy=copy.slice(0,-2)");
       expect(html).assertContain("function formattedBytes(value)");
@@ -464,10 +495,20 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("nonEmptyText(component.title,fields.title)");
       expect(html).assertContain("nonEmptyText(component.body,fields.description)");
       expect(html).assertContain("parent.setAttribute('aria-label',fields.ariaLabel)");
-      expect(html).assertContain("ranks.sort(function(left,right){return left-right;})");
-      expect(html).assertContain("segment.paletteIndex=ranks.length===1?CHART_PALETTE.length-1");
-      expect(html).assertContain("track.setAttribute('stroke-width','8')");
-      expect(html).assertContain("arc.setAttribute('stroke-width','8')");
+      expect(html).assertContain("left.value-right.value||left.index-right.index");
+      expect(html).assertContain("segments[entry.index].renderColor=chartColorAtRank(rank,ranked.length)");
+      expect(html).assertContain("var SEGMENTED_RING_OTHER_COLOR='#d9dde3'");
+      expect(html).assertContain("if(segments.length>8){var otherValue=segments.slice(8).reduce");
+      expect(html).assertContain("segments=segments.slice(0,8);segments.push({label:'其他'");
+      expect(html).assertContain("renderColor:SEGMENTED_RING_OTHER_COLOR,neutral:true");
+      expect(html).assertContain("filter(function(entry){return !entry.neutral;})");
+      expect(html.indexOf('total+=field.value')).assertLess(html.indexOf('if(segments.length>8)'));
+      expect(html.indexOf('ranks.indexOf(segment.field.value)')).assertEqual(-1);
+      expect(html).assertContain("var SEGMENTED_RING_STROKE_WIDTH=7,SEGMENTED_RING_GAP_LENGTH=2.5");
+      expect(html).assertContain("track.setAttribute('stroke','#f4f1ec')");
+      expect(html).assertContain("track.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH))");
+      expect(html).assertContain("arc.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH))");
+      expect(html).assertContain('visibleArcLength=segments.length===1?circumference:Math.max(0,arcLength-SEGMENTED_RING_GAP_LENGTH)');
       expect(html).assertContain("compactNumber(segment.field.value/total*100)+'%'");
       expect(html).assertContain("source?nonEmptyText(source.centerLabel):''");
       expect(html).assertContain("centerValue.textContent=compactNumber(total)");
@@ -488,7 +529,7 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("grid.setAttribute('role','grid')");
       expect(html).assertContain("cell.setAttribute('role','gridcell')");
       expect(html).assertContain("cell.setAttribute('aria-label',cellLabel)");
-      expect(html).assertContain("arc.setAttribute('stroke',CHART_PALETTE");
+      expect(html).assertContain("arc.setAttribute('stroke',segment.renderColor)");
       expect(html.indexOf('source.color')).assertEqual(-1);
       expect(html.indexOf('source.svg')).assertEqual(-1);
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
@@ -535,6 +576,10 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("more.addEventListener('click',appendPage)");
       expect(html).assertContain("status.textContent='已显示 '+String(visibleCount)+' / '+String(items.length)");
       expect(html).assertContain('more.disabled=visibleCount>=items.length');
+      expect(html).assertContain("var row=node('div','lab-list-row')");
+      expect(html).assertContain("row.setAttribute('role','listitem')");
+      expect(html).assertContain('if(items.length>LIST_PAGE_SIZE)wrapper.appendChild(pager)');
+      expect(html).assertContain('.lab-list-row:last-child { padding-bottom:0; border-bottom:0; }');
       expect(html).assertContain('hasItemScope:true,itemScope:item');
       expect(html).assertContain("component.dataPath==='/'");
       expect(html).assertContain('return context.itemScope');
@@ -548,15 +593,19 @@ export default function uiAgentLabTest() {
         '"title":"动态列表","entries":[{"time":"08:30","title":"动态事项"}]}]}';
       const surfaceJson = '{"surfaceId":"surface-dynamic","rootId":"root","components":[' +
         '{"id":"root","component":"Column","children":["headline","schedule"]},' +
-        '{"id":"headline","component":"Text","dataPath":"/headline"},' +
+        '{"id":"headline","component":"Text","text":"静态回退","dataPath":"/headline"},' +
         '{"id":"schedule","component":"ScheduleStack","dataPath":"/days"}],' +
         '"dataModelJson":' + JSON.stringify(modelJson) + '}';
       const script = uiAgentLabSurfaceScript(surfaceJson);
       expect(script.indexOf('动态标题')).assertEqual(-1);
       expect(script.indexOf('动态列表')).assertEqual(-1);
+      expect(script.indexOf('静态回退')).assertEqual(-1);
       expect(script).assertContain('\\u52a8');
       expect(script).assertContain('\\u5217');
       expect(html).assertContain('componentValue(component,context)');
+      expect(html).assertContain('var direct=nonEmptyText(component.text),title=nonEmptyText(component.title),body=nonEmptyText(component.body)');
+      expect(html).assertContain('copy=nonEmptyText(direct,nonEmptyText(body,title))');
+      expect(html).assertContain("if(!direct&&title&&body){output.appendChild(node('span','lab-text-title',title));output.appendChild(node('span','lab-text-body',body));return output;}");
       expect(html).assertContain("itemArray(dayRecord,'entries')");
       expect(html).assertContain('text(dayRecord.title');
       expect(html).assertContain('text(eventRecord.title');
@@ -936,9 +985,13 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('.shell.decision-notes-visible { grid-template-rows:auto minmax(0,auto) minmax(0,1fr) auto; }');
       expect(html).assertContain('.decision-panel { min-height:0; max-height:min(34vh,260px);');
       expect(html).assertContain('overflow:auto;');
+      expect(html).assertContain('.decision-copy { margin:0;');
+      expect(html).assertContain('white-space:pre-wrap;');
       expect(html).assertContain('decisionPanel.hidden=!enabled');
       expect(html).assertContain("decisionToggle.disabled=next.state==='loading'");
-      expect(html).assertContain("entry.appendChild(node('strong'");
+      expect(html).assertContain("decisionText.textContent=enabled&&typeof source.text==='string'");
+      expect(html.indexOf('plannedComponents')).assertEqual(-1);
+      expect(html.indexOf('omittedData')).assertEqual(-1);
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
       expect(html.indexOf('grid-template-rows:auto minmax(0,1fr) auto; gap:12px;')).assertEqual(-1);
       expect(html).assertContain('.expandable-panel { display:grid; grid-template-rows:0fr; opacity:0; transform:translateY(-6px);');

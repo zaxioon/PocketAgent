@@ -12,21 +12,9 @@ export interface UiAgentLabStatusPayload {
   responseChars: number;
 }
 
-export interface UiAgentLabDecisionPlannedComponent {
-  id: string;
-  component: string;
-  purpose: string;
-}
-
-export interface UiAgentLabDecisionOmittedData {
-  path: string;
-  reason: string;
-}
-
 export interface UiAgentLabDecisionPayload {
   enabled: boolean;
-  plannedComponents: UiAgentLabDecisionPlannedComponent[];
-  omittedData: UiAgentLabDecisionOmittedData[];
+  text: string;
 }
 
 type UiAgentLabDataValue = Object | string | number | boolean | null | undefined;
@@ -84,30 +72,10 @@ export function uiAgentLabStatusScript(payload: UiAgentLabStatusPayload): string
   return 'window.__applyUiAgentLabStatus(JSON.parse(' + scriptString(serialized) + '));';
 }
 
-function boundedUiAgentLabDecisionText(value: string, limit: number): string {
-  return value.trim().substring(0, limit);
-}
-
 function boundedUiAgentLabDecisionPayload(payload: UiAgentLabDecisionPayload): UiAgentLabDecisionPayload {
   return {
     enabled: payload.enabled,
-    plannedComponents: payload.plannedComponents.slice(0, 12).map(
-      (item: UiAgentLabDecisionPlannedComponent): UiAgentLabDecisionPlannedComponent => {
-        return {
-          id: boundedUiAgentLabDecisionText(item.id, 120),
-          component: boundedUiAgentLabDecisionText(item.component, 120),
-          purpose: boundedUiAgentLabDecisionText(item.purpose, 96)
-        };
-      }
-    ),
-    omittedData: payload.omittedData.slice(0, 12).map(
-      (item: UiAgentLabDecisionOmittedData): UiAgentLabDecisionOmittedData => {
-        return {
-          path: boundedUiAgentLabDecisionText(item.path, 240),
-          reason: boundedUiAgentLabDecisionText(item.reason, 40)
-        };
-      }
-    )
+    text: payload.text.trim().substring(0, 2400)
   };
 }
 
@@ -249,18 +217,14 @@ export function createUiAgentLabHtmlShell(): string {
     .decision-panel-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:11px; }
     .decision-panel-title { margin:0; font-size:14px; }
     .decision-panel-badge { border-radius:999px; padding:4px 8px; color:#37609f; background:rgba(211,225,255,.72); font-size:10px; }
-    .decision-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
-    .decision-group { min-width:0; }
-    .decision-group-title { margin:0 0 7px; color:var(--muted); font-size:11px; }
-    .decision-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
-    .decision-item { min-width:0; border-radius:13px; padding:9px 10px; background:rgba(255,255,255,.48); }
-    .decision-item strong,.decision-path { display:block; font-size:11px; line-height:1.4; overflow-wrap:anywhere; }
-    .decision-item small { display:block; margin-top:3px; color:var(--muted); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
-    .decision-empty { margin:0; color:var(--muted); font-size:11px; line-height:1.5; }
+    .decision-copy { margin:0; color:#3f4752; font-size:12px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
     .surface-viewport { min-height:0; border-radius:30px; overflow:auto; overscroll-behavior:contain; padding:18px; text-align:left; }
     .surface-root,.lab-column { width:100%; display:flex; flex-direction:column; gap:12px; }
     .lab-list { display:flex; flex-direction:column; gap:10px; min-width:0; }
-    .lab-list-items { display:flex; flex-direction:column; gap:10px; min-width:0; }
+    .lab-list-items { display:flex; flex-direction:column; min-width:0; }
+    .lab-list-row { min-width:0; padding:11px 0; border-bottom:1px solid var(--line); }
+    .lab-list-row:first-child { padding-top:0; }
+    .lab-list-row:last-child { padding-bottom:0; border-bottom:0; }
     .list-pager { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:2px 4px 0; }
     .list-page-status { color:var(--muted); font-size:12px; }
     .list-more { min-height:34px; border:0; border-radius:999px; padding:0 14px; color:white; background:linear-gradient(145deg,#5b91ff,#2867eb); }
@@ -271,6 +235,8 @@ export function createUiAgentLabHtmlShell(): string {
     .empty strong { display:block; font-size:17px; margin-bottom:8px; }
     .empty span { color:var(--muted); font-size:13px; line-height:1.6; }
     .lab-text { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--ink); font-size:15px; line-height:1.55; }
+    .lab-text-title { display:block; margin-bottom:3px; color:var(--muted); font-size:11px; line-height:1.35; }
+    .lab-text-body { display:block; }
     .lab-card { border-radius:22px; padding:16px; background:rgba(255,255,255,.58); border:1px solid rgba(255,255,255,.76); box-shadow:0 12px 30px rgba(73,66,58,.09); }
     .lab-card-title { margin:0 0 7px; font-size:15px; line-height:1.35; }
     .lab-card-copy { margin:0; color:var(--muted); font-size:13px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -365,7 +331,7 @@ export function createUiAgentLabHtmlShell(): string {
     .heatmap-cell { width:100%; aspect-ratio:1/1; border-radius:3px; background:#dfe3e8; }
     .heatmap-scale { display:flex; justify-content:flex-end; gap:3px; margin-top:8px; }
     .heatmap-scale span { width:10px; height:10px; border-radius:3px; }
-    @media (max-width:360px) { .ring-layout { grid-template-columns:112px minmax(0,1fr); gap:10px; } .hero-title { font-size:21px; } .decision-groups { grid-template-columns:1fr; } .decision-panel { max-height:30vh; } }
+    @media (max-width:360px) { .ring-layout { grid-template-columns:112px minmax(0,1fr); gap:10px; } .hero-title { font-size:21px; } .decision-panel { max-height:30vh; } }
     .media-slider { display:flex; gap:11px; overflow-x:auto; scroll-snap-type:x mandatory; padding-bottom:3px; }
     .media-card { min-width:76%; scroll-snap-align:start; border:0; border-radius:20px; padding:0; overflow:hidden; text-align:left; color:var(--ink); background:rgba(255,255,255,.65); }
     .media-frame { height:112px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#bfd3ff,#ffd0bd 52%,#b9e8d6); color:rgba(32,36,43,.72); font-size:11px; letter-spacing:.08em; }
@@ -409,10 +375,7 @@ export function createUiAgentLabHtmlShell(): string {
     </header>
     <aside id="decisionPanel" class="decision-panel glass" aria-label="UI 决策说明" hidden>
       <div class="decision-panel-header"><h2 class="decision-panel-title">UI 决策说明</h2><span class="decision-panel-badge">有限摘要</span></div>
-      <div class="decision-groups">
-        <section class="decision-group"><h3 class="decision-group-title">计划组件</h3><div id="plannedComponents"></div></section>
-        <section class="decision-group"><h3 class="decision-group-title">未呈现数据</h3><div id="omittedData"></div></section>
-      </div>
+      <p id="decisionText" class="decision-copy"></p>
     </aside>
     <main class="surface-viewport glass" id="surface"><div class="empty"><strong>实验 Surface</strong><span>等待 UI Agent 生成 Lab 组件</span></div></main>
     <section>
@@ -433,7 +396,7 @@ export function createUiAgentLabHtmlShell(): string {
       var UI_AGENT_LAB_RESERVED_FIELDS = ${JSON.stringify(A2UI_CATALOG_RESERVED_COMPONENT_FIELDS)};
       var shell=document.querySelector('.shell'),surfaceHost=document.getElementById('surface');
       var decisionToggle=document.getElementById('decisionToggle'),decisionPanel=document.getElementById('decisionPanel');
-      var plannedComponents=document.getElementById('plannedComponents'),omittedData=document.getElementById('omittedData');
+      var decisionText=document.getElementById('decisionText');
       var toast=document.getElementById('toast'),toastTimer=0;
       var bridge=function(message){
         try { if(window.UiAgentLabBridge&&UiAgentLabBridge.postMessage){ UiAgentLabBridge.postMessage(JSON.stringify(message)); } } catch(_e){}
@@ -486,6 +449,7 @@ export function createUiAgentLabHtmlShell(): string {
       function resolveCatalogValue(value,schema,model,depth){
         if(!record(schema)||depth>12)return {ok:false};
         var policy=schema.valuePolicy,binding=exactBinding(value),candidate=value;
+        if(policy==='literal-or-path'&&typeof value==='string'&&value.charAt(0)==='/')return {ok:false};
         if(policy==='path-only'||(policy==='literal-or-path'&&binding!==null)){
           if(binding===null)return {ok:false};
           candidate=pointer(model,binding);
@@ -594,8 +558,26 @@ export function createUiAgentLabHtmlShell(): string {
         if(body)header.appendChild(node('p','lab-card-copy',body));
         parent.appendChild(header);
       }
+      var SEGMENTED_RING_PALETTE=['#ece6df','#dce9ff','#b7cbff','#89a7ff','#6384ef','#4665cf'];
       var CHART_PALETTE=['#d9dee6','#c7d7f0','#a8c3eb','#7da5df','#527fd0','#315eae','#21457f','#172f59'];
+      var SEGMENTED_RING_STROKE_WIDTH=7,SEGMENTED_RING_GAP_LENGTH=2.5;
+      var SEGMENTED_RING_OTHER_COLOR='#d9dde3';
       var HEATMAP_PALETTE=['#dfe3e8','#d8e4f5','#b7cfee','#8fb1e4','#5d8bd2','#2d5fae'];
+      function blendedChartColor(left,right,ratio){
+        function channel(color,offset){return parseInt(color.substring(offset,offset+2),16);}
+        function hex(value){return Math.round(value).toString(16).padStart(2,'0');}
+        var red=channel(left,1)+(channel(right,1)-channel(left,1))*ratio;
+        var green=channel(left,3)+(channel(right,3)-channel(left,3))*ratio;
+        var blue=channel(left,5)+(channel(right,5)-channel(left,5))*ratio;
+        return '#'+hex(red)+hex(green)+hex(blue);
+      }
+      function chartColorAtRank(rank,count){
+        if(count<=1)return SEGMENTED_RING_PALETTE[SEGMENTED_RING_PALETTE.length-1];
+        var position=rank/(count-1)*(SEGMENTED_RING_PALETTE.length-1);
+        if(count<=SEGMENTED_RING_PALETTE.length)return SEGMENTED_RING_PALETTE[Math.round(position)];
+        var lower=Math.floor(position),upper=Math.ceil(position);
+        return lower===upper?SEGMENTED_RING_PALETTE[lower]:blendedChartColor(SEGMENTED_RING_PALETTE[lower],SEGMENTED_RING_PALETTE[upper],position-lower);
+      }
       UI_AGENT_LAB_COMPONENT_REGISTRY.SurfaceRoot=function(component,context,trail){
         var root=node('section','surface-root'); appendChildren(root,component,context,trail); return root;
       };
@@ -610,19 +592,19 @@ export function createUiAgentLabHtmlShell(): string {
         var wrapper=node('section','lab-list'),items=componentValue(component,context),templateId=text(component.child);
         if(!Array.isArray(items)||items.length===0){wrapper.appendChild(node('p','lab-card-copy','暂无内容'));return wrapper;}
         if(!templateId){wrapper.appendChild(safeError('List 缺少模板','没有可用的 componentId。'));return wrapper;}
-        var itemHost=node('div','lab-list-items'),pager=node('div','list-pager'),status=node('span','list-page-status');
+        var itemHost=node('div','lab-list-items'),pager=node('div','list-pager'),status=node('span','list-page-status');itemHost.setAttribute('role','list');
         var more=node('button','list-more','加载更多'),visibleCount=0;more.type='button';
         function appendPage(){
           var nextCount=Math.min(visibleCount+LIST_PAGE_SIZE,items.length);
           items.slice(visibleCount,nextCount).forEach(function(item){
             var itemContext={surface:context.surface,model:context.model,byId:context.byId,hasItemScope:true,itemScope:item};
-            itemHost.appendChild(renderById(templateId,itemContext,trail));
+            var row=node('div','lab-list-row');row.setAttribute('role','listitem');row.appendChild(renderById(templateId,itemContext,trail));itemHost.appendChild(row);
           });
           visibleCount=nextCount;status.textContent='已显示 '+String(visibleCount)+' / '+String(items.length);
           more.disabled=visibleCount>=items.length;more.textContent=more.disabled?'已显示全部':'加载更多';
         }
         more.addEventListener('click',appendPage);pager.appendChild(status);pager.appendChild(more);
-        wrapper.appendChild(itemHost);wrapper.appendChild(pager);appendPage();
+        wrapper.appendChild(itemHost);if(items.length>LIST_PAGE_SIZE)wrapper.appendChild(pager);appendPage();
         return wrapper;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.HeroBanner=function(component,context){
@@ -652,28 +634,30 @@ export function createUiAgentLabHtmlShell(): string {
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.SegmentedRingChart=function(component,context){
         var value=componentValue(component,context),source=record(value),wrapper=node('section','lab-card viz-card');appendVisualHeader(wrapper,component,value);
-        var items=Array.isArray(component.segments)?component.segments:(Array.isArray(value)?value:itemArray(value,'segments')),segments=[],total=0;
-        items.slice(0,8).forEach(function(item){
+        var mapped=typeof component.labelPath==='string'&&typeof component.valuePath==='string',items=Array.isArray(component.segments)?component.segments:(Array.isArray(value)?value:itemArray(value,'segments')),segments=[],total=0;
+        if(mapped){items=items.map(function(item){return {label:pointer(item,component.labelPath),value:pointer(item,component.valuePath)};});}
+        items.forEach(function(item){
           var source=record(item),field=numericField(source);if(!source||field===null||field.value<0)return;
           var label=nonEmptyText(source.label,source.name);if(!label)return;
           segments.push({label:label,field:field});total+=field.value;
         });
-        if(segments.length===0||total<=0){wrapper.appendChild(node('p','lab-card-copy','暂无有效数据'));return wrapper;}
-        var ranks=[];segments.forEach(function(segment){if(ranks.indexOf(segment.field.value)<0)ranks.push(segment.field.value);});ranks.sort(function(left,right){return left-right;});
-        segments.forEach(function(segment){segment.paletteIndex=ranks.length===1?CHART_PALETTE.length-1:Math.round(ranks.indexOf(segment.field.value)/(ranks.length-1)*(CHART_PALETTE.length-1));});
+        if(segments.length===0||total<=0){wrapper.appendChild(node('p','lab-card-copy','暂无有效构成数据'));return wrapper;}
+        if(segments.length>8){var otherValue=segments.slice(8).reduce(function(sum,segment){return sum+segment.field.value;},0);segments=segments.slice(0,8);segments.push({label:'其他',field:{value:otherValue,kind:'number'},renderColor:SEGMENTED_RING_OTHER_COLOR,neutral:true});}
+        var ranked=segments.map(function(segment,index){return {index:index,value:segment.field.value,neutral:segment.neutral===true};}).filter(function(entry){return !entry.neutral;}).sort(function(left,right){return left.value-right.value||left.index-right.index;});
+        ranked.forEach(function(entry,rank){segments[entry.index].renderColor=chartColorAtRank(rank,ranked.length);});
         var layout=node('div','ring-layout'),svg=svgNode('svg','ring-svg'),legend=node('div','chart-legend');
         var ringFields=headerFields(value),ringSummary=segments.map(function(segment){return segment.label+' '+compactNumber(segment.field.value/total*100)+'%';}).join(', '),ringAria=nonEmptyText(ringFields.ariaLabel,ringSummary);
         svg.setAttribute('viewBox','0 0 120 120');svg.setAttribute('role','img');svg.setAttribute('aria-label',ringAria);
         var ringTitle=svgNode('title','');ringTitle.textContent=ringAria;svg.appendChild(ringTitle);
-        var track=svgNode('circle','');track.setAttribute('cx','60');track.setAttribute('cy','60');track.setAttribute('r','44');track.setAttribute('fill','none');track.setAttribute('stroke','#e4e7eb');track.setAttribute('stroke-width','8');svg.appendChild(track);
-        var gap=Math.min(1.6,8/segments.length),usable=100-gap*segments.length,cursor=0;
+        var track=svgNode('circle','');track.setAttribute('cx','60');track.setAttribute('cy','60');track.setAttribute('r','44');track.setAttribute('fill','none');track.setAttribute('stroke','#f4f1ec');track.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH));svg.appendChild(track);
+        var circumference=2*Math.PI*44,consumed=0;
         segments.forEach(function(segment,index){
-          var amount=segment.field.value/total*usable,arc=svgNode('circle','');
+          var arcLength=circumference*segment.field.value/total,visibleArcLength=segments.length===1?circumference:Math.max(0,arcLength-SEGMENTED_RING_GAP_LENGTH),arc=svgNode('circle','');
           arc.setAttribute('cx','60');arc.setAttribute('cy','60');arc.setAttribute('r','44');arc.setAttribute('fill','none');
-          arc.setAttribute('pathLength','100');arc.setAttribute('stroke',CHART_PALETTE[segment.paletteIndex]);arc.setAttribute('stroke-width','8');
-          arc.setAttribute('stroke-linecap','butt');arc.setAttribute('stroke-dasharray',String(amount)+' '+String(100-amount));
-          arc.setAttribute('stroke-dashoffset',String(-cursor));arc.setAttribute('transform','rotate(-90 60 60)');svg.appendChild(arc);cursor+=amount+gap;
-          var entry=node('div','legend-item'),swatch=node('span','legend-swatch');swatch.style.background=CHART_PALETTE[segment.paletteIndex];
+          arc.setAttribute('stroke',segment.renderColor);arc.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH));
+          arc.setAttribute('stroke-linecap','butt');arc.setAttribute('stroke-dasharray',String(visibleArcLength)+' '+String(circumference-visibleArcLength));
+          arc.setAttribute('stroke-dashoffset',String(-circumference*consumed/total));arc.setAttribute('transform','rotate(-90 60 60)');svg.appendChild(arc);consumed+=segment.field.value;
+          var entry=node('div','legend-item'),swatch=node('span','legend-swatch');swatch.style.background=segment.renderColor;
           entry.appendChild(swatch);entry.appendChild(node('span','legend-label',segment.label));entry.appendChild(node('span','legend-value',compactNumber(segment.field.value/total*100)+'%'));legend.appendChild(entry);
         });
         var centerLabel=source?nonEmptyText(source.centerLabel):'',unitLabel=source?nonEmptyText(source.unitLabel):'';
@@ -744,17 +728,23 @@ export function createUiAgentLabHtmlShell(): string {
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.Text=function(component,context){
         var value=componentValue(component,context);
-        var copy=value===undefined?text(component.text,text(component.body,component.title)):text(value);
-        return node('p','lab-text',copy);
+        var primitive=typeof value==='string'||typeof value==='number'||typeof value==='boolean';
+        if(primitive)return node('p','lab-text',text(value));
+        var direct=nonEmptyText(component.text),title=nonEmptyText(component.title),body=nonEmptyText(component.body),copy=nonEmptyText(direct,nonEmptyText(body,title));
+        var output=node('div','lab-text');
+        if(!direct&&title&&body){output.appendChild(node('span','lab-text-title',title));output.appendChild(node('span','lab-text-body',body));return output;}
+        output.textContent=copy;return output;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.InfoRows=function(component,context){
         var wrapper=card(component.title,'','info-card'),rows=node('div','info-rows');
         var value=componentValue(component,context),items=Array.isArray(value)?value:[];
+        var mapped=typeof component.labelPath==='string'&&typeof component.valuePath==='string';
+        if(mapped)items=items.map(function(item){return {label:pointer(item,component.labelPath),value:pointer(item,component.valuePath),time:typeof component.timePath==='string'?pointer(item,component.timePath):''};});
         if(items.length===0){var source=record(value);if(source){Object.keys(source).slice(0,16).forEach(function(key){items.push({label:key,value:source[key]});});}}
         items.slice(0,24).forEach(function(item,index){
           var valueRecord=record(item),row=node('div','info-row');
           row.appendChild(node('span','info-label',valueRecord?text(valueRecord.label,'项目 '+String(index+1)):'项目 '+String(index+1)));
-          row.appendChild(node('span','info-value',valueRecord?text(valueRecord.value):text(item)));
+          row.appendChild(node('span','info-value',valueRecord?nonEmptyText(valueRecord.value,'—'):nonEmptyText(item,'—')));
           var time=valueRecord?text(valueRecord.time).trim():'';
           if(time)row.appendChild(node('span','info-time',time));
           rows.appendChild(row);
@@ -958,35 +948,13 @@ export function createUiAgentLabHtmlShell(): string {
         if(typeof source.rootId!=='string'||!source.rootId){surfaceHost.appendChild(safeError('Surface 无根节点','UI Agent 没有提供 rootId。'));return;}
         surfaceHost.appendChild(renderById(source.rootId,{surface:source,model:model,byId:byId,hasItemScope:false,itemScope:undefined},[]));
       };
-      function decisionText(value,limit){return text(value).trim().substring(0,limit);}
-      function renderDecisionList(host,items,kind){
-        clear(host);
-        var bounded=list(items).slice(0,12),result=node('ul','decision-list');
-        bounded.forEach(function(item){
-          var source=record(item);if(!source)return;
-          var entry=node('li','decision-item');
-          if(kind==='planned'){
-            var component=decisionText(source.component,120),id=decisionText(source.id,120),purpose=decisionText(source.purpose,96);
-            entry.appendChild(node('strong','',component+(id?' · '+id:'')));
-            if(purpose)entry.appendChild(node('small','',purpose));
-          }else{
-            var path=decisionText(source.path,240),reason=decisionText(source.reason,40);
-            entry.appendChild(node('span','decision-path',path));
-            if(reason)entry.appendChild(node('small','',reason));
-          }
-          if(entry.firstChild)result.appendChild(entry);
-        });
-        if(result.firstChild)host.appendChild(result);else host.appendChild(node('p','decision-empty','本轮没有相关说明。'));
-      }
       window.__applyUiAgentLabDecision=function(next){
         var source=record(next),enabled=source!==null&&source.enabled===true;
         decisionToggle.dataset.enabled=enabled?'true':'false';
         decisionToggle.setAttribute('aria-pressed',enabled?'true':'false');
         decisionToggle.setAttribute('aria-label',enabled?'隐藏 UI 决策说明':'显示 UI 决策说明');
         decisionPanel.hidden=!enabled;shell.classList.toggle('decision-notes-visible',enabled);
-        if(!enabled){clear(plannedComponents);clear(omittedData);return;}
-        renderDecisionList(plannedComponents,source.plannedComponents,'planned');
-        renderDecisionList(omittedData,source.omittedData,'omitted');
+        decisionText.textContent=enabled&&typeof source.text==='string'?source.text.substring(0,2400):'';
       };
       var status=document.getElementById('status'),statusText=document.getElementById('statusText'),responseMeta=document.getElementById('responseMeta');
       var prompt=document.getElementById('prompt'),send=document.getElementById('send');

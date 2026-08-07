@@ -1,6 +1,7 @@
 import {
   ActionOffer,
   A2uiAction,
+  A2uiLayoutMergeDiagnostic,
   A2uiComponentCatalogSchema,
   A2uiAgentRunner,
   A2uiComponent,
@@ -26,7 +27,6 @@ import { SystemUriOpener } from '../agent/AiphoneRegisteredActionExecutor';
 import { HtmlHomeAction, HtmlHomeBlock, HtmlHomeDocument } from '../html/HtmlHomeTypes';
 import {
   parseUiAgentLabDecisionOutput,
-  UiAgentLabDecisionNotes,
   UiAgentLabDecisionNotesState,
   UiAgentLabDecisionOutput
 } from './UiAgentLabDecisionNotes';
@@ -119,7 +119,8 @@ interface UiLabPromptOffer {
 export interface UiAgentLabSurfaceEvent {
   turnId: string;
   surface: A2uiSurfaceState;
-  decisionNotes?: UiAgentLabDecisionNotes;
+  decisionNotes?: string;
+  layoutDiagnostic?: A2uiLayoutMergeDiagnostic;
 }
 
 export interface UiAgentLabSubmitOutcome {
@@ -129,6 +130,17 @@ export interface UiAgentLabSubmitOutcome {
 }
 
 export type UiAgentLabSurfaceListener = (event: UiAgentLabSurfaceEvent) => void;
+
+function boundedDiagnosticToken(value: string, fallback: string): string {
+  const bounded = value.replace(/[\r\n\t]/g, ' ').trim().substring(0, 80);
+  return bounded.length > 0 ? bounded : fallback;
+}
+
+export function uiAgentLabLayoutDiagnosticText(diagnostic: A2uiLayoutMergeDiagnostic): string {
+  const componentId = boundedDiagnosticToken(diagnostic.componentId, 'unknown');
+  const rule = boundedDiagnosticToken(diagnostic.rule, 'candidate_rejected');
+  return 'UI Agent 候选布局被拒绝（' + componentId + ': ' + rule + '），已显示基础布局。';
+}
 
 class RejectUiLabUriOpener implements SystemUriOpener {
   async open(_uri: string): Promise<boolean> {
@@ -668,16 +680,22 @@ export function uiAgentLabLayoutPrompt(
 class UiAgentLabRenderer implements UiTaskRenderer {
   private readonly planner: UiLayoutPlanner;
   private readonly decisionNotesEnabled: () => boolean;
-  private readonly onDecisionNotes: (surfaceId: string, notes: UiAgentLabDecisionNotes | null) => void;
+  private readonly onDecisionNotes: (surfaceId: string, notes: string | null) => void;
+  private readonly onLayoutDiagnostic: (
+    surfaceId: string,
+    diagnostic: A2uiLayoutMergeDiagnostic | null
+  ) => void;
 
   constructor(
     planner: UiLayoutPlanner,
     decisionNotesEnabled: () => boolean,
-    onDecisionNotes: (surfaceId: string, notes: UiAgentLabDecisionNotes | null) => void
+    onDecisionNotes: (surfaceId: string, notes: string | null) => void,
+    onLayoutDiagnostic: (surfaceId: string, diagnostic: A2uiLayoutMergeDiagnostic | null) => void
   ) {
     this.planner = planner;
     this.decisionNotesEnabled = decisionNotesEnabled;
     this.onDecisionNotes = onDecisionNotes;
+    this.onLayoutDiagnostic = onLayoutDiagnostic;
   }
 
   skeleton(task: CreateUiTaskPayload, surfaceId: string): Promise<UiRenderResult> {
@@ -699,6 +717,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     const snapshot = buildUiAgentLabSnapshot(task, data);
     const notesEnabled = this.decisionNotesEnabled();
     this.onDecisionNotes(surfaceId, null);
+    this.onLayoutDiagnostic(surfaceId, null);
     const baseline = surfaceShell(surfaceId, 'ready', baselineComponents(data, offers)) +
       uiAgentLabDataJsonl(surfaceId, snapshot);
     let timerId: number = -1;
@@ -716,8 +735,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
       }
       const decisionOutput: UiAgentLabDecisionOutput = parseUiAgentLabDecisionOutput(
         candidate,
-        notesEnabled,
-        JSON.stringify(snapshot)
+        notesEnabled
       );
       const merge = mergeA2uiLayoutWithStatus(
         baseline,
@@ -728,9 +746,13 @@ class UiAgentLabRenderer implements UiTaskRenderer {
       );
       aiLogInfo(
         '[UiAgentLabLayout] surface=' + surfaceId + ' mergeAccepted=' + merge.accepted.toString() +
-        ' reason=' + merge.reason
+        ' reason=' + merge.reason +
+        (merge.diagnostic === undefined ? '' :
+          ' componentId=' + boundedDiagnosticToken(merge.diagnostic.componentId, 'unknown') +
+          ' rule=' + boundedDiagnosticToken(merge.diagnostic.rule, 'candidate_rejected'))
       );
       this.onDecisionNotes(surfaceId, merge.accepted ? decisionOutput.decisionNotes : null);
+      this.onLayoutDiagnostic(surfaceId, merge.accepted || merge.diagnostic === undefined ? null : merge.diagnostic);
       return {
         jsonl: annotateActionSources(
           merge.accepted ? hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data) : merge.jsonl,
@@ -821,6 +843,8 @@ export class UiAgentLabHarness {
   private currentSurface: A2uiSurfaceState | null = null;
   private decisionNotesEnabled: boolean = false;
   private readonly decisionNotesState: UiAgentLabDecisionNotesState = new UiAgentLabDecisionNotesState();
+  private readonly layoutDiagnostics: Map<string, A2uiLayoutMergeDiagnostic> =
+    new Map<string, A2uiLayoutMergeDiagnostic>();
 
   constructor(settings: LocalModelSettings, listener: UiAgentLabSurfaceListener) {
     const provider = new LlmProvider(
@@ -843,8 +867,18 @@ export class UiAgentLabHarness {
       uiRenderer: new UiAgentLabRenderer(
         planner,
         (): boolean => this.decisionNotesEnabled,
-        (surfaceId: string, notes: UiAgentLabDecisionNotes | null): void => {
+        (surfaceId: string, notes: string | null): void => {
           this.decisionNotesState.update(surfaceId, notes);
+        },
+        (surfaceId: string, diagnostic: A2uiLayoutMergeDiagnostic | null): void => {
+          if (diagnostic === null) {
+            this.layoutDiagnostics.delete(surfaceId);
+          } else {
+            this.layoutDiagnostics.set(surfaceId, {
+              componentId: diagnostic.componentId,
+              rule: diagnostic.rule
+            });
+          }
         }
       ),
       structuredToolCall: callStructuredToolForUiLab,
@@ -864,7 +898,15 @@ export class UiAgentLabHarness {
         };
         const decisionNotes = this.decisionNotesState.read(surface.surfaceId);
         if (this.decisionNotesEnabled && surface.status === 'ready' && decisionNotes !== null) {
-          event.decisionNotes = JSON.parse(JSON.stringify(decisionNotes)) as UiAgentLabDecisionNotes;
+          event.decisionNotes = decisionNotes;
+        }
+        const layoutDiagnostic = this.layoutDiagnostics.get(surface.surfaceId);
+        if (surface.status === 'ready' && layoutDiagnostic !== undefined) {
+          event.layoutDiagnostic = {
+            componentId: layoutDiagnostic.componentId,
+            rule: layoutDiagnostic.rule
+          };
+          this.layoutDiagnostics.delete(surface.surfaceId);
         }
         listener(event);
         return true;
@@ -884,6 +926,7 @@ export class UiAgentLabHarness {
     }
     this.runtime.cancelActiveTurn('superseded');
     this.decisionNotesState.clear();
+    this.layoutDiagnostics.clear();
     this.generation++;
     const generation = this.generation;
     const input: UserInputPayload = { text: bounded, recentMessages: [] };
@@ -922,6 +965,7 @@ export class UiAgentLabHarness {
     this.runtime.cancelActiveTurn('ui-lab-disposed');
     this.runtime.dispose();
     this.currentSurface = null;
+    this.layoutDiagnostics.clear();
     this.decisionNotesEnabled = false;
     this.decisionNotesState.clear();
   }

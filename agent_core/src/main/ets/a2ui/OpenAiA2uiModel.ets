@@ -50,7 +50,12 @@ export function buildA2uiLayoutSystemPrompt(
       'a sampled array length. A business count may appear only when result.data explicitly labels a scalar as count ' +
       'or total, or when result.data.summary text explicitly supports it.\n' +
       '- Choose chart fields only from each catalog schema. MetricGrid may use legacy dataPath or direct items; ' +
-      'SegmentedRingChart may use legacy dataPath or direct segments. Other charts keep their declared legacy dataPath. ' +
+      'SegmentedRingChart accepts one or more comparable categories and may use legacy dataPath, direct segments, or an array ' +
+      'dataPath with paired item-relative labelPath/valuePath. In mapping mode the renderer expands the complete source ' +
+      'array; direct segments still enumerate every usable category explicitly. One category may render as a 100% ring, ' +
+      'and 1-8 categories are usually easiest to read. For more than 8 categories, still pass every category without ' +
+      'calculating, merging, or truncating them; the renderer keeps the first 8 and combines the remaining values as Other. ' +
+      'Other charts keep their declared legacy dataPath. ' +
       'Choose them from the meaning and shape of the data; output no SVG, path, points, rect, viewBox, coordinates, dimensions, arc ' +
       'geometry, stroke settings, or colors. The renderer owns all chart geometry and styling.\n' +
       '- When originalUserInput explicitly requests a dashboard and the verified data meaningfully supports visualization, ' +
@@ -68,8 +73,13 @@ export function buildA2uiLayoutSystemPrompt(
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
       '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
       'component rendered once per item; never replace this dynamic children object with a static children array. ' +
-      'Choose the simplest template that expresses each entity. If a presentation-ready Array<{label,value,time?}> path ' +
-      'exists, prefer one InfoRows binding over List or ExpandableCard. Otherwise, when summary or description is sufficient, ' +
+      'Choose the simplest template that expresses each entity. InfoRows supports two source modes. When dataPath points ' +
+      'to an ordinary object, omit labelPath, valuePath, and timePath; the renderer turns that object own fields into rows. ' +
+      'Never invent /key or /value for an ordinary object. When dataPath points to an object array, it may be a ' +
+      'presentation-ready Array<{label,value,time?}> or use paired labelPath/valuePath plus optional timePath. Mapping ' +
+      'paths must start with "/", be relative to each array item rather than the root snapshot, and name fields that ' +
+      'actually exist in the sampled items. Prefer one InfoRows binding over List or ExpandableCard when either mode fits. Otherwise, when ' +
+      'summary or description is sufficient, ' +
       'use a compact Text template bound only to that field. Use ExpandableCard only when each item has additional details ' +
       'worth revealing or an offered action to carry. Never bind a whole provider object merely to expose its raw fields.\n' :
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
@@ -78,18 +88,15 @@ export function buildA2uiLayoutSystemPrompt(
       'each result gets its own card. The template may omit dataPath (or use "/") to read the current item scope. Do not ' +
       'replace this dynamic children object with a static children array.\n';
   const outputContractRules = decisionNotesEnabled && isUiLabCatalog ?
-    '- Output exactly two compact JSON lines. No markdown, code fences, prose, or extra lines. The first line must be ' +
-      'the bounded UI decision notes object described below. The second line must be the single A2UI updateComponents ' +
-      'protocol envelope.\n' +
-      '- The first line must have exactly this shape: ' +
-      '{"uiDecisionNotes":{"version":1,"plannedComponents":[' +
-      '{"id":"COMPONENT_ID","component":"CATALOG_COMPONENT","purpose":"SHORT_VISIBLE_PURPOSE"}],' +
-      '"omittedData":[{"path":"/exact/path/from/dataSnapshot","reason":"duplicate"}]}}. ' +
-      'plannedComponents lists the planned components the layout intends to use and their user-visible purpose. ' +
-      'omittedData lists verified DataResult paths not presented. Never list a path in omittedData when an output ' +
-      'component uses that exact dataPath. Use only duplicate, irrelevant, raw_or_unreadable, unsupported_component, ' +
-      'or mobile_space as reason. Use at most 12 entries in each array, at most 96 characters per purpose, at most 240 ' +
-      'characters per path, and at most 2400 characters for the complete first line. Do not copy provider values into notes.\n' +
+    '- Begin with the exact standalone line <ui_decision_notes>. Write a bounded natural-language UI decision summary ' +
+      'on the following line or lines, then write the exact standalone line </ui_decision_notes>. After the closing tag, ' +
+      'output exactly one compact A2UI updateComponents JSON line. Do not use markdown, code fences, text outside the ' +
+      'tagged block, or extra lines after the protocol.\n' +
+      '- The natural-language summary must contain exactly two labeled stages in this order. First, “我拿到了哪些数据”: ' +
+      'enumerate every meaningful DataResult field or array grouping, give its exact JSON Pointer, and briefly describe ' +
+      'what the data means. Second, “我要把它们放到什么组件里”: map every inventoried path or grouping to the selected ' +
+      'component and briefly explain why that component fits. Keep the summary at most 2400 characters and do not copy ' +
+      'raw provider values unnecessarily.\n' +
       '- UI decision notes are a bounded presentation summary only. Never provide hidden reasoning, chain-of-thought, ' +
       'private deliberation, or step-by-step analysis.\n' :
     '- Output exactly one compact JSON line. No markdown or explanation.\n';
@@ -105,7 +112,8 @@ export function buildA2uiLayoutSystemPrompt(
     '- An action slot contains only {"offerId":"an offered id"}; never invent or alter an offer.\n' +
     '- The catalog schema is the only field and value-policy authority. Output only fields declared for that component. ' +
     'For valuePolicy "literal-or-path", output either a literal of the declared type or exactly {"path":"/an/exact/path"}. ' +
-    'Never output a data path string as literal visible content. ' +
+    'Visible field example: title:{"path":"/summary/title"} is correct; title:"/summary/title" is wrong. ' +
+    'Path declaration fields stay strings: dataPath:"/items", labelPath:"/label", valuePath:"/value", timePath:"/time". ' +
     'For "path-only", output only that exact one-key binding object: never output a numeric literal, numeric string, ' +
     'expression, FunctionCall, or binding with extra keys. For literal arrays and objects, follow their nested fields recursively.\n' +
     '- Component names and properties are direct members of each component object. Use "component", never "type", ' +

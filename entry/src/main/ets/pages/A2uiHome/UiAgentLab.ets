@@ -2,7 +2,11 @@ import { webview } from '@kit.ArkWeb';
 import { A2uiAction, A2uiComponent, A2uiSurfaceState, LocalModelSettings, aiLogError, aiLogInfo } from '@loop/agent-core';
 import router from '@ohos.router';
 import { clearUiLabModelSettings, uiLabModelSettings } from './lab/UiLabRuntimeConfig';
-import { UiAgentLabHarness, UiAgentLabSurfaceEvent } from './lab/UiAgentLabHarness';
+import {
+  UiAgentLabHarness,
+  uiAgentLabLayoutDiagnosticText,
+  UiAgentLabSurfaceEvent
+} from './lab/UiAgentLabHarness';
 import {
   createUiAgentLabHtmlShell,
   UiAgentLabDecisionPayload,
@@ -83,14 +87,13 @@ struct UiAgentLab {
   };
   private pendingDecision: UiAgentLabDecisionPayload = {
     enabled: false,
-    plannedComponents: [],
-    omittedData: []
+    text: ''
   };
 
   aboutToAppear(): void {
     this.settings = uiLabModelSettings();
     this.decisionNotesEnabled = false;
-    this.pendingDecision = { enabled: false, plannedComponents: [], omittedData: [] };
+    this.pendingDecision = { enabled: false, text: '' };
     const lifecycleGeneration = this.generation;
     this.harness = new UiAgentLabHarness(this.settings, (event: UiAgentLabSurfaceEvent): void => {
       if (lifecycleGeneration !== this.generation) {
@@ -126,7 +129,7 @@ struct UiAgentLab {
     this.shellReady = false;
     this.busy = false;
     this.decisionNotesEnabled = false;
-    this.pendingDecision = { enabled: false, plannedComponents: [], omittedData: [] };
+    this.pendingDecision = { enabled: false, text: '' };
     this.pendingSurfaceJson = '';
     this.currentSurface = null;
     clearUiLabModelSettings();
@@ -180,8 +183,7 @@ struct UiAgentLab {
     this.decisionNotesEnabled = this.harness.setDecisionNotesEnabled(enabled);
     this.pushDecision({
       enabled: this.decisionNotesEnabled,
-      plannedComponents: [],
-      omittedData: []
+      text: ''
     });
     aiLogInfo('[AIPhone][UiAgentLabDecisionToggle] enabled=' + this.decisionNotesEnabled.toString());
   }
@@ -206,22 +208,28 @@ struct UiAgentLab {
       const notes = event.decisionNotes;
       this.pushDecision({
         enabled: this.decisionNotesEnabled,
-        plannedComponents: this.decisionNotesEnabled && notes !== undefined && notes !== null ?
-          notes.plannedComponents : [],
-        omittedData: this.decisionNotesEnabled && notes !== undefined && notes !== null ? notes.omittedData : []
+        text: this.decisionNotesEnabled && notes !== undefined && notes !== null ? notes : ''
       });
-      this.pushStatus({
-        state: 'success',
-        message: 'UI Agent 已使用实验组件完成排版。',
-        responseChars: this.pendingSurfaceJson.length
-      });
+      if (event.layoutDiagnostic !== undefined) {
+        this.pushStatus({
+          state: 'error',
+          message: uiAgentLabLayoutDiagnosticText(event.layoutDiagnostic),
+          responseChars: this.pendingSurfaceJson.length
+        });
+      } else {
+        this.pushStatus({
+          state: 'success',
+          message: 'UI Agent 已使用实验组件完成排版。',
+          responseChars: this.pendingSurfaceJson.length
+        });
+      }
       aiLogInfo('[AIPhone][UiAgentLabSurface] turnChars=' + event.turnId.length.toString() +
         ' status=ready components=' + surface.components.length.toString());
       return;
     }
     if (surface.status === 'error') {
       this.busy = false;
-      this.pushDecision({ enabled: this.decisionNotesEnabled, plannedComponents: [], omittedData: [] });
+      this.pushDecision({ enabled: this.decisionNotesEnabled, text: '' });
       this.pushStatus({
         state: 'error',
         message: 'UI Agent 排版失败，请检查模型连接。',
@@ -243,7 +251,7 @@ struct UiAgentLab {
       return;
     }
     this.busy = true;
-    this.pushDecision({ enabled: this.decisionNotesEnabled, plannedComponents: [], omittedData: [] });
+    this.pushDecision({ enabled: this.decisionNotesEnabled, text: '' });
     this.pushStatus({ state: 'loading', message: '正在提交给 UI Agent…', responseChars: 0 });
     aiLogInfo('[AIPhone][UiAgentLabSubmit] promptChars=' + prompt.length.toString());
     try {
@@ -284,7 +292,7 @@ struct UiAgentLab {
 
   private async runSurfaceAction(componentId: string, actionIndex: number): Promise<void> {
     if (this.busy || this.harness === null) return;
-    this.pushDecision({ enabled: this.decisionNotesEnabled, plannedComponents: [], omittedData: [] });
+    this.pushDecision({ enabled: this.decisionNotesEnabled, text: '' });
     const action = this.trustedAction(componentId, actionIndex);
     if (action === null || action.args === undefined) {
       this.pushStatus({ state: 'error', message: '当前操作未通过页面校验。', responseChars: 0 });

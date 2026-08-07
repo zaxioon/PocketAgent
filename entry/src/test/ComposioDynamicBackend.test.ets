@@ -166,10 +166,10 @@ export default function composioDynamicBackendTest() {
             '"followers":10,"following":2,"public_repos":3}}',
           '{"data":{"repositories":[' +
             '{"name":"alpha","full_name":"sindresorhus/alpha","html_url":"https://github.com/sindresorhus/alpha",' +
-            '"language":"TypeScript","stargazers_count":7,"forks_count":2,"updated_at":"2026-07-01T00:00:00Z",' +
+            '"description":"Alpha repository","language":"TypeScript","stargazers_count":7,"forks_count":2,"updated_at":"2026-07-01T00:00:00Z",' +
             '"pushed_at":"2026-07-02T00:00:00Z"},' +
             '{"name":"beta","full_name":"sindresorhus/beta","html_url":"https://github.com/sindresorhus/beta",' +
-            '"language":"TypeScript","stargazers_count":5,"forks_count":1,"updated_at":"2026-06-01T00:00:00Z"},' +
+            '"description":null,"language":"TypeScript","stargazers_count":5,"forks_count":1,"updated_at":"2026-06-01T00:00:00Z"},' +
             '{"name":"gamma","full_name":"sindresorhus/gamma","html_url":"https://github.com/sindresorhus/gamma",' +
             '"language":"Python","stargazers_count":3,"forks_count":0,"updated_at":"2026-05-01T00:00:00Z"}' +
             ']}}',
@@ -183,8 +183,9 @@ export default function composioDynamicBackendTest() {
       );
       const dashboard = result.providerData as Record<string, Object | string | number | boolean>;
       const metrics = dashboard['repositoryMetrics'] as Record<string, number>;
+      const repositories = dashboard['repositories'] as Array<Record<string, Object | string | number | boolean>>;
       const languages = dashboard['languages'] as Object[];
-      const activityRows = dashboard['recentActivityRows'] as Array<Record<string, string>>;
+      const activity = dashboard['recentActivity'] as Array<Record<string, string>>;
 
       expect(result.status).assertEqual('success');
       expect(result.toolName).assertEqual('github.user.dashboard');
@@ -198,6 +199,9 @@ export default function composioDynamicBackendTest() {
       expect(metrics['returnedRepositoryCount']).assertEqual(3);
       expect(metrics['returnedStars']).assertEqual(15);
       expect(metrics['returnedForks']).assertEqual(3);
+      expect(repositories[0]['description']).assertEqual('Alpha repository');
+      expect(Object.keys(repositories[1]).indexOf('description')).assertLarger(-1);
+      expect(repositories[1]['description']).assertEqual('');
       expect(languages.length).assertEqual(2);
       const primaryLanguage = languages[0] as Record<string, Object | string | number>;
       const secondaryLanguage = languages[1] as Record<string, Object | string | number>;
@@ -210,24 +214,23 @@ export default function composioDynamicBackendTest() {
       const dashboardOutputSchema = JSON.stringify(result.registration?.outputSchema);
       expect(dashboardOutputSchema).assertContain('"ratio":{"type":"number"}');
       expect(dashboardOutputSchema).assertContain(
-        '"required":["label","value","time"]'
+        '"required":["time","summary"]'
       );
       expect(dashboardOutputSchema).assertContain(
-        '"label":{"type":"string"},"value":{"type":"string"},"time":{"type":"string"}'
+        '"time":{"type":"string"},"summary":{"type":"string"}'
       );
-      expect(dashboardOutputSchema.indexOf('"recentActivity"')).assertEqual(-1);
+      expect(dashboardOutputSchema).assertContain('"recentActivity":{"type":"array"');
       expect(dashboardOutputSchema.indexOf('"activityMetadata"')).assertEqual(-1);
-      expect(activityRows.length).assertEqual(1);
-      expect(activityRows[0]['label']).assertEqual('更新了 sindresorhus/alpha');
-      expect(activityRows[0]['value']).assertEqual('向 sindresorhus/alpha 的 main 分支执行了推送');
-      expect(activityRows[0]['value'].indexOf('0 个提交')).assertEqual(-1);
-      expect(activityRows[0]['time']).assertEqual('2026-08-01T00:00:00Z');
-      expect(dashboard['recentActivity'] === undefined).assertTrue();
+      expect(activity.length).assertEqual(1);
+      expect(activity[0]['summary']).assertEqual('向 sindresorhus/alpha 的 main 分支执行了推送');
+      expect(activity[0]['summary'].indexOf('0 个提交')).assertEqual(-1);
+      expect(activity[0]['time']).assertEqual('2026-08-01T00:00:00Z');
       expect(dashboard['activityMetadata'] === undefined).assertTrue();
-      expect(JSON.stringify(activityRows[0]).indexOf('kind')).assertEqual(-1);
-      expect(JSON.stringify(activityRows[0]).indexOf('repo')).assertEqual(-1);
-      expect(JSON.stringify(activityRows[0]).indexOf('details')).assertEqual(-1);
-      expect(JSON.stringify(activityRows[0]).indexOf('visibility')).assertEqual(-1);
+      expect(JSON.stringify(activity[0]).indexOf('title')).assertEqual(-1);
+      expect(JSON.stringify(activity[0]).indexOf('kind')).assertEqual(-1);
+      expect(JSON.stringify(activity[0]).indexOf('repo')).assertEqual(-1);
+      expect(JSON.stringify(activity[0]).indexOf('details')).assertEqual(-1);
+      expect(JSON.stringify(activity[0]).indexOf('visibility')).assertEqual(-1);
       expect(JSON.stringify(dashboard).indexOf('contributions')).assertEqual(-1);
     });
 

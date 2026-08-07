@@ -2573,9 +2573,9 @@ export function githubUserDashboardOutputSchema(): Object {
     '"repositoryMetrics":{"type":"object"},"languages":{"type":"array","items":{"type":"object",' +
     '"required":["language","repositoryCount","ratio"],"properties":{' +
     '"language":{"type":"string"},"repositoryCount":{"type":"number"},"ratio":{"type":"number"}}}},' +
-    '"recentActivityRows":{"type":"array","items":{"type":"object",' +
-    '"required":["label","value","time"],"properties":{' +
-    '"label":{"type":"string"},"value":{"type":"string"},"time":{"type":"string"}}}},' +
+    '"recentActivity":{"type":"array","items":{"type":"object",' +
+    '"required":["time","summary"],"properties":{' +
+    '"time":{"type":"string"},"summary":{"type":"string"}}}},' +
     '"sections":{"type":"array"},"limitations":{"type":"array","items":{"type":"string"}}}}') as Object;
 }
 
@@ -2674,7 +2674,7 @@ function normalizedGitHubRepository(value: Object): Object | null {
   repository['name'] = name;
   repository['url'] = url;
   putGitHubText(repository, 'fullName', githubText(source, ['full_name', 'fullName']));
-  putGitHubText(repository, 'description', githubText(source, ['description']));
+  repository['description'] = githubText(source, ['description']);
   putGitHubText(repository, 'language', githubText(source, ['language']));
   putGitHubText(repository, 'visibility', githubText(source, ['visibility']));
   putGitHubText(repository, 'updatedAt', githubText(source, ['updated_at', 'updatedAt']));
@@ -3070,18 +3070,17 @@ async function callComposioGitHubTargetWithClient(
   }
   if (sections[2].ok && events !== null) {
     const recentActivity = events['recentActivity'];
-    const recentActivityRows: Object[] = [];
+    const dashboardActivity: Object[] = [];
     if (Array.isArray(recentActivity)) {
       recentActivity.forEach((item: Object) => {
         const event = githubRecord(item);
-        const row = emptyGitHubRecord();
-        row['label'] = githubText(event, ['title']);
-        row['value'] = githubText(event, ['summary']);
-        row['time'] = githubText(event, ['occurredAt']);
-        recentActivityRows.push(row as Object);
+        const activity = emptyGitHubRecord();
+        activity['time'] = githubText(event, ['occurredAt']);
+        activity['summary'] = githubText(event, ['summary', 'title']);
+        dashboardActivity.push(activity as Object);
       });
     }
-    dashboard['recentActivityRows'] = recentActivityRows as Object;
+    dashboard['recentActivity'] = dashboardActivity as Object;
     successfulSections++;
   }
   const failedSections = specs.length - successfulSections;

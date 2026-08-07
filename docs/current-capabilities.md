@@ -12,7 +12,7 @@ Firecrawl 六个固定工具由 HAP 携带 `FIRECRAWL_API_KEY`，直接连接 Fi
 
 UI Lab 的 GitHub 用户看板是 `dynamic.search` 的宿主受信 profile，不是新的模型工具。Leader 只提交一次 `github.user.dashboard` target；宿主依次将它映射到 `GITHUB_GET_A_USER`、`GITHUB_LIST_REPOSITORIES_FOR_A_USER`、`GITHUB_LIST_EVENTS_FOR_USER`，并要求每次 search 都返回精确 slug 和完整可验证的输入 schema 后才执行。看板允许分区部分失败，三个分区全失败时整体失败；近期 events 不是贡献日历，仓库计数/Star/Fork 只统计 Provider 当前返回页。普通首页和旧 `dynamic.search` 入口不会获得该受信 target 权限。
 
-UI Lab 的 UI Agent 仍只输出单条 `updateComponents`，字段直接写在组件对象上。每个可用字段及其取值策略由同一份机器可读 component catalog 声明：普通文案和标签可按字段使用字面量或精确 `{path}`，`MetricGrid.items[].value/delta` 与 `SegmentedRingChart.segments[].value` 等业务数值只能使用精确 `{path}`。宿主和 renderer 共用该 catalog 做严格校验与解析；UI Agent 不能输出 `updateDataModel`、表达式、函数调用或数值字面量来代替真实数据。
+UI Lab 的 UI Agent 仍只输出单条 `updateComponents`，字段直接写在组件对象上。每个可用字段及其取值策略由同一份机器可读 component catalog 声明：普通文案和标签可按字段使用字面量或精确 `{path}`，`MetricGrid.items[].value/delta` 与 `SegmentedRingChart.segments[].value` 等业务数值只能使用精确 `{path}`。`SegmentedRingChart` 和 `InfoRows` 还可让 `dataPath` 指向完整对象数组，再用相对于单个数组项的 `labelPath`、`valuePath`（以及 InfoRows 可选的 `timePath`）声明字段映射；宿主会按当前 snapshot 逐项校验，renderer 负责完整展开。InfoRows 的 label 每项仍须存在，个别 value/time 可缺失或为 null，缺失或空 value 显示为 `—`，但非空数组至少要有一个 primitive value。旧的 direct segments 和已清洗 `Array<{label,value,time?}>` 绑定继续兼容。UI Agent 不能输出 `updateDataModel`、表达式、函数调用或数值字面量来代替真实数据。
 
 ## multi-Agent smoke 证据边界
 

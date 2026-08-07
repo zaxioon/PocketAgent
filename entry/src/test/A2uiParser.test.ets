@@ -53,7 +53,10 @@ export default function a2uiParserTest() {
         '{"id":"stars","label":{"path":"/dashboard/label"},"value":{"path":"/dashboard/stars"},' +
         '"unit":"stars"}]},' +
         '{"id":"ring","component":"SegmentedRingChart","segments":[' +
-        '{"label":"ArkTS","value":{"path":"/dashboard/arkts"}}]}]}}',
+        '{"label":"ArkTS","value":{"path":"/dashboard/arkts"}},' +
+        '{"label":"TypeScript","value":{"path":"/dashboard/typescript"}}]},' +
+        '{"id":"activity","component":"InfoRows","dataPath":"/dashboard/activity",' +
+        '"labelPath":"/time","valuePath":"/summary","timePath":"/time"}]}}',
         'ui-lab'
       );
 
@@ -61,16 +64,44 @@ export default function a2uiParserTest() {
       if (parsed.updateComponents !== undefined) {
         const metrics = parsed.updateComponents.components[0];
         const ring = parsed.updateComponents.components[1];
+        const activity = parsed.updateComponents.components[2];
         const metricFields = JSON.parse(metrics.catalogFieldsJson as string) as Record<string, Object | string>;
         const ringFields = JSON.parse(ring.catalogFieldsJson as string) as Record<string, Object>;
+        const activityFields = JSON.parse(activity.catalogFieldsJson as string) as Record<string, string>;
         const metricItems = metricFields['items'] as Object[];
         const firstMetric = metricItems[0] as Record<string, Object | string>;
         const ringItems = ringFields['segments'] as Object[];
         expect((metricFields['title'] as Record<string, string>)['path']).assertEqual('/dashboard/title');
         expect((firstMetric['value'] as Record<string, string>)['path']).assertEqual('/dashboard/stars');
         expect((ringItems[0] as Record<string, Object>)['value'] !== undefined).assertTrue();
+        expect(ringItems.length).assertEqual(2);
+        expect(activity.dataPath).assertEqual('/dashboard/activity');
+        expect(activityFields['labelPath']).assertEqual('/time');
+        expect(activityFields['valuePath']).assertEqual('/summary');
+        expect(activityFields['timePath']).assertEqual('/time');
         expect(metrics.catalogFieldsJson?.indexOf('properties')).assertEqual(-1);
         expect(metrics.catalogFieldsJson?.indexOf('props')).assertEqual(-1);
+      }
+    });
+
+    it('accepts and preserves a direct ring with one segment in the UI Lab parser', 0, () => {
+      const parsed = parseA2uiEnvelope(
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab-ring","components":[' +
+        '{"id":"ring","component":"SegmentedRingChart","segments":[' +
+        '{"label":"ArkTS","value":{"path":"/dashboard/arkts"}}]}]}}',
+        'ui-lab'
+      );
+
+      expect(parsed.updateComponents !== undefined).assertTrue();
+      if (parsed.updateComponents !== undefined) {
+        const ring = parsed.updateComponents.components[0];
+        const ringFields = JSON.parse(ring.catalogFieldsJson as string) as Record<string, Object>;
+        const ringItems = ringFields['segments'] as Object[];
+        const firstSegment = ringItems[0] as Record<string, Object | string>;
+        expect(ring.component).assertEqual('SegmentedRingChart');
+        expect(ringItems.length).assertEqual(1);
+        expect(firstSegment['label'] as string).assertEqual('ArkTS');
+        expect((firstSegment['value'] as Record<string, string>)['path']).assertEqual('/dashboard/arkts');
       }
     });
 
