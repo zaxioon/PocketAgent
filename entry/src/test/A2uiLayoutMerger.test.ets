@@ -845,6 +845,30 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(
         itemBaseline, literalBodyPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       )).assertEqual(itemBaseline);
+
+      const trainBaseline = BASELINE +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/","value":' +
+        '{"summary":{"text":"Train options"},"results":[{"data":{"trains":[' +
+        '{"trainNo":"G100","departureTime":"08:00"},' +
+        '{"trainNo":"G101","departureTime":"09:00"}]}}]}}}\n';
+      const trainInfoRows =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["hero","train-list"]},' +
+        '{"id":"hero","component":"HeroBanner","title":"Train options"},' +
+        '{"id":"train-list","component":"List","children":{' +
+        '"path":"/results/0/data/trains","componentId":"train-item"}},' +
+        '{"id":"train-item","component":"InfoRows","dataPath":"/"}]}}';
+      const absoluteTrainItem = trainInfoRows.replace(
+        '"dataPath":"/"',
+        '"dataPath":"/results/0/data/trains/0"'
+      );
+      expect(mergeA2uiLayout(
+        trainBaseline, trainInfoRows, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === trainBaseline).assertFalse();
+      expect(mergeA2uiLayout(
+        trainBaseline, absoluteTrainItem, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(trainBaseline);
     });
 
     it('rejects business components when the UI Lab catalog is selected', 0, () => {

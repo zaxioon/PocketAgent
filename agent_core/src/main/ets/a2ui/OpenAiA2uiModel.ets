@@ -93,6 +93,9 @@ export function buildA2uiLayoutSystemPrompt(
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
       '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
       'component rendered once per item; never replace this dynamic children object with a static children array. ' +
+      'Every path or dataPath inside that template and all of its descendants is relative to the current array item ' +
+      'scope. Never repeat the absolute collection path or append an array index such as /0 inside the template. ' +
+      'When an InfoRows template should show the whole current item object, set its dataPath to exactly "/". ' +
       'Choose the simplest template that expresses each entity. InfoRows supports two source modes. When dataPath points ' +
       'to an ordinary object, omit labelPath, valuePath, and timePath; the renderer turns that object own fields into rows. ' +
       'Never invent /key or /value for an ordinary object. When dataPath points to an object array, it may be a ' +
