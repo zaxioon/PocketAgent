@@ -579,6 +579,7 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("var row=node('div','lab-list-row')");
       expect(html).assertContain("row.setAttribute('role','listitem')");
       expect(html).assertContain('if(items.length>LIST_PAGE_SIZE)wrapper.appendChild(pager)');
+      expect(html).assertContain('.lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--line); }');
       expect(html).assertContain('.lab-list-row:last-child { padding-bottom:0; border-bottom:0; }');
       expect(html).assertContain('hasItemScope:true,itemScope:item');
       expect(html).assertContain("component.dataPath==='/'");

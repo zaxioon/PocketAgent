@@ -221,6 +221,7 @@ export function createUiAgentLabHtmlShell(): string {
     .surface-viewport { min-height:0; border-radius:30px; overflow:auto; overscroll-behavior:contain; padding:18px; text-align:left; }
     .surface-root,.lab-column { width:100%; display:flex; flex-direction:column; gap:12px; }
     .lab-list { display:flex; flex-direction:column; gap:10px; min-width:0; }
+    .lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--line); }
     .lab-list-items { display:flex; flex-direction:column; min-width:0; }
     .lab-list-row { min-width:0; padding:11px 0; border-bottom:1px solid var(--line); }
     .lab-list-row:first-child { padding-top:0; }
