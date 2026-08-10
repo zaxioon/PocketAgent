@@ -302,6 +302,35 @@ function maskNonCode(source) {
   );
 }
 
+function hasCodeStringComparison(body, identifier, literal) {
+  const pattern = new RegExp(`\\b${escapeRegex(identifier)}\\s*===\\s*(['"])${escapeRegex(literal)}\\1`, 'g');
+  const masked = maskNonCode(body);
+  let match = pattern.exec(body);
+  while (match !== null) {
+    const quoteOffset = match[0].lastIndexOf(match[1]);
+    const codePrefix = masked.substring(match.index, match.index + quoteOffset);
+    if (new RegExp(`\\b${escapeRegex(identifier)}\\s*===\\s*$`).test(codePrefix)) return true;
+    match = pattern.exec(body);
+  }
+  return false;
+}
+
+function hasProtectedOpenAiRequestMerge(source) {
+  const body = liveDeclarationBody(source, 'export function mergeOpenAiRequestJson(');
+  const code = maskNonCode(body);
+  return /JSON\.parse\s*\(\s*customJson\s*\)/.test(code) &&
+    /const\s+keys\s*:\s*string\[\]\s*=\s*Object\.keys\s*\(\s*parsed\s*\)/.test(code) &&
+    hasCodeStringComparison(body, 'key', 'model') &&
+    hasCodeStringComparison(body, 'key', 'messages') &&
+    hasCodeStringComparison(body, 'key', 'stream');
+}
+
+function openAiCompatibleUsesSharedRequestMerge(source) {
+  const body = liveDeclarationBody(source, 'private buildRequestJson(');
+  const code = maskNonCode(body);
+  return /return\s+mergeOpenAiRequestJson\s*\(\s*baseJson\s*,\s*this\.provider\.customParametersJson\s*\)\s*;/.test(code);
+}
+
 function hasProductionCanarySubmitTimeout(source) {
   const code = maskNonCode(source);
   const declaration = 'const options: MultiAgentCanaryOptions = {';
@@ -701,6 +730,29 @@ Use Google Maps for explicit provider requests.`;
     'verifier rejects a missing or commented message envelope field'
   );
 
+  const openAiRequestMergeFixture = `
+    export function mergeOpenAiRequestJson(baseJson: string, customParametersJson: string): string {
+      const customJson = customParametersJson.trim();
+      const parsed = JSON.parse(customJson) as Object;
+      const keys: string[] = Object.keys(parsed);
+      for (let index = 0; index < keys.length; index++) {
+        const key = keys[index];
+        if (key === 'model' || key === 'messages' || key === 'stream') return baseJson;
+      }
+      return baseJson;
+    }
+  `;
+  assert(
+    hasProtectedOpenAiRequestMerge(openAiRequestMergeFixture),
+    'verifier accepts parsed top-level OpenAI request field protection'
+  );
+  const openAiRequestMergeDecoy = openAiRequestMergeFixture
+    .replace("if (key === 'model' || key === 'messages' || key === 'stream') return baseJson;", "const decoy = \"key === 'model' || key === 'messages' || key === 'stream'\";");
+  assert(
+    !hasProtectedOpenAiRequestMerge(openAiRequestMergeDecoy),
+    'verifier rejects string-only OpenAI request field protection'
+  );
+
   assert(
     hasNamedPlanStepCap('const MAX_ACTION_PLAN_STEPS: number = 5; plan.steps.length > MAX_ACTION_PLAN_STEPS'),
     'verifier accepts an active named action-plan cap'
@@ -1055,6 +1107,7 @@ function verifySourceContracts() {
   const protocol = read('agent_core/src/main/ets/a2ui/A2uiProtocol.ets');
   const llmProvider = read('agent_core/src/main/ets/model/LlmProvider.ets');
   const openAiModel = read('agent_core/src/main/ets/model/OpenAiCompatibleModel.ets');
+  const openAiRequestJson = read('agent_core/src/main/ets/model/OpenAiRequestJson.ets');
   const aiphoneA2ui = read('agent_core/src/main/ets/aiphone/AiphoneA2ui.ets');
   const definitions = read('agent_core/src/main/ets/aiphone/AiphoneToolDefinitions.ets');
   const executor = read('agent_core/src/main/ets/aiphone/AiphoneToolExecutor.ets');
@@ -1145,9 +1198,14 @@ function verifySourceContracts() {
   assertContains(llmProvider, "endsWith('/v1/chat/completions')", 'model base URL can be full chat completions URL');
   assertContains(llmProvider, "endsWith('/v1')", 'model base URL can be OpenAI v1 root');
   assertContains(openAiModel, 'buildRequestJson', 'OpenAI-compatible model applies custom parameters');
-  assertContains(openAiModel, 'customParametersJson', 'OpenAI-compatible model reads custom parameter JSON');
-  assertContains(openAiModel, 'search(/"model"\\s*:/)', 'custom parameters cannot replace model');
-  assertContains(openAiModel, 'search(/"messages"\\s*:/)', 'custom parameters cannot replace messages');
+  assert(
+    openAiCompatibleUsesSharedRequestMerge(openAiModel),
+    'OpenAI-compatible model uses the shared custom request merger'
+  );
+  assert(
+    hasProtectedOpenAiRequestMerge(openAiRequestJson),
+    'custom parameters cannot replace model, messages, or stream'
+  );
   assertContains(
     openAiModel,
     'streamEndResolve();\n      await streamEnd;',
