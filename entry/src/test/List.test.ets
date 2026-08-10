@@ -4,6 +4,7 @@ import agentCorePublicContractTest from './AgentCorePublicContract.test';
 import a2uiParserTest from './A2uiParser.test';
 import a2uiSurfaceStoreTest from './A2uiSurfaceStore.test';
 import localModelClientTest from './LocalModelClient.test';
+import openAiRequestJsonTest from './OpenAiRequestJson.test';
 import toolGatewayClientTest from './ToolGatewayClient.test';
 import a2uiHomeStateTest from './A2uiHomeState.test';
 import a2uiRenderDataTest from './A2uiRenderData.test';
@@ -114,6 +115,7 @@ export default function testsuite() {
   a2uiParserTest();
   a2uiSurfaceStoreTest();
   localModelClientTest();
+  openAiRequestJsonTest();
   toolGatewayClientTest();
   a2uiHomeStateTest();
   a2uiRenderDataTest();

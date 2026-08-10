@@ -94,6 +94,7 @@ export { LlmProvider } from './src/main/ets/model/LlmProvider';
 export { ScriptedLocalModel } from './src/main/ets/model/ScriptedLocalModel';
 export { ScriptedA2uiModel, buildTaskCardComponents } from './src/main/ets/a2ui/ScriptedA2uiModel';
 export { OpenAiCompatibleModel } from './src/main/ets/model/OpenAiCompatibleModel';
+export { mergeOpenAiRequestJson } from './src/main/ets/model/OpenAiRequestJson';
 export { createLoopModel, createLoopModelInfo, LoopModelInfo } from './src/main/ets/model/LoopModelFactory';
 export { ModelScopeClient } from './src/main/ets/modelscope/ModelScopeClient';
 export { ModelScopeConfig } from './src/main/ets/modelscope/ModelScopeConfig';
