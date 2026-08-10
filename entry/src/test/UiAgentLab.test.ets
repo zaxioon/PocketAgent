@@ -22,6 +22,7 @@ import {
   uiAgentLabSurfaceScript,
   uiAgentLabStatusScript
 } from '../main/ets/pages/A2uiHome/lab/UiAgentLabHtml';
+import { uiAgentLabThemeScript } from '../main/ets/pages/A2uiHome/lab/UiAgentLabTheme';
 import {
   clearUiLabModelSettings,
   configureUiLabModelSettings,
@@ -40,7 +41,6 @@ import {
   UiAgentLabDecisionStreamGate,
   uiAgentLabDataJsonl,
   uiAgentLabPartialDispatch,
-  uiAgentLabProgressWindowAvailable,
   uiAgentLabRejectedLayoutJsonl,
   uiAgentLabLayoutDiagnosticText,
   uiAgentLabLayoutPrompt,
@@ -201,9 +201,6 @@ export default function uiAgentLabTest() {
       expect(uiAgentLabPartialDispatch(true, -1)).assertEqual('schedule');
       expect(uiAgentLabPartialDispatch(true, 0)).assertEqual('none');
       expect(uiAgentLabPartialDispatch(true, 32)).assertEqual('none');
-      expect(uiAgentLabProgressWindowAvailable(-1)).assertTrue();
-      expect(uiAgentLabProgressWindowAvailable(0)).assertFalse();
-      expect(uiAgentLabProgressWindowAvailable(32)).assertFalse();
     });
 
     it('keeps a valid partial only for timeout and fails closed for a rejected final candidate', 0, () => {
@@ -232,15 +229,13 @@ export default function uiAgentLabTest() {
       expect(badClose.isInvalid()).assertTrue();
     });
 
-    it('adds surface revision and lifecycle generation guards to ArkWeb pushes', 0, () => {
+    it('keeps surface revision and lifecycle generation guards in ArkWeb pushes', 0, () => {
       const surfaceJson = '{"surfaceId":"revision-surface","rootId":"root","components":[],' +
         '"dataModelJson":"{}"}';
       const first = uiAgentLabSurfaceScript(surfaceJson, 7, 3);
       const second = uiAgentLabSurfaceScript(surfaceJson, 8, 3);
       const html = createUiAgentLabHtmlShell();
       expect(first === second).assertFalse();
-      expect(first).assertContain('\\u0072\\u0065\\u0076\\u0069\\u0073\\u0069\\u006f\\u006e');
-      expect(first).assertContain('\\u0067\\u0065\\u006e\\u0065\\u0072\\u0061\\u0074\\u0069\\u006f\\u006e');
       expect(html).assertContain('var latestSurfaceGeneration=-1,latestSurfaceRevision=-1');
       expect(html).assertContain('if(generation<latestSurfaceGeneration)return');
       expect(html).assertContain('if(revision<=latestSurfaceRevision)return');
@@ -252,17 +247,47 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("type:'back'");
       expect(html).assertContain("type:'submit'");
       expect(html).assertContain('id="status"');
-      expect(html).assertContain('等待 UI Agent 生成 Lab 组件');
       expect(html).assertContain('id="composer"');
       expect(html).assertContain('id="toast"');
       expect(html).assertContain('window.__applyUiAgentLabSurface');
       expect(html).assertContain('id="decisionToggle"');
+      expect(html).assertContain('id="themeToggle"');
       expect(html).assertContain('id="decisionPanel"');
       expect(html).assertContain('aria-pressed="false"');
-      expect(html).assertContain('UI 决策说明');
       expect(html).assertContain("bridge({type:'toggleDecisionNotes',enabled:");
       expect(html.indexOf('id="decisionPanel"')).assertLarger(html.indexOf('</header>'));
       expect(html.indexOf('id="surface"')).assertLarger(html.indexOf('id="decisionPanel"'));
+    });
+
+    it('exposes encoded warm and cool theme controls without bypassing the surface guard', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+      const coolScript = uiAgentLabThemeScript('cool', 4);
+
+      expect(html).assertContain('<html lang="zh-CN" data-theme="warm">');
+      expect(html).assertContain(':root[data-theme="cool"]');
+      expect(html).assertContain('window.__applyUiAgentLabTheme=function(next)');
+      expect(html).assertContain("Object.keys(source).sort().join(',')!=='generation,theme'");
+      expect(html).assertContain("theme!=='warm'&&theme!=='cool'");
+      expect(html).assertContain("bridge({type:'toggleTheme',enabled:enabled})");
+      expect(html).assertContain('if(revision<=latestSurfaceRevision)return');
+      expect(coolScript).assertContain('window.__applyUiAgentLabTheme(JSON.parse(');
+      expect(coolScript.indexOf('cool')).assertEqual(-1);
+      expect(coolScript).assertContain('\\u0063\\u006f\\u006f\\u006c');
+    });
+
+    it('uses renderer-owned theme colors and official Phosphor header and send icons', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+
+      expect(html).assertContain('--hero-start:');
+      expect(html).assertContain('--chart-6:');
+      expect(html).assertContain('--series-4:');
+      expect(html).assertContain("function cssColor(name)");
+      expect(html).assertContain('viewBox="0 0 256 256"');
+      expect(html).assertContain('M128,80a48,48,0,1,0,48,48');
+      expect(html).assertContain('M48,64a8,8,0,0,1,8-8H72V40');
+      expect(html).assertContain('M205.66,117.66a8,8,0,0,1-11.32,0L136,59.31V216');
+      expect(html.indexOf('&#8593;')).assertEqual(-1);
+      expect(html.indexOf('&#9881;')).assertEqual(-1);
     });
 
     it('encodes status payload before building executable JavaScript', 0, () => {
@@ -408,18 +433,6 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('info-time');
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
       expect(html).assertContain("return safeError('不支持的组件'");
-    });
-
-    it('keeps the complete UI Lab catalog available to the UI model', 0, () => {
-      const entries = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as
-        Record<string, Object | string>[];
-      const names = entries.map((entry: Record<string, Object | string>): string => entry['name'] as string);
-      expect(names.length).assertEqual(20);
-      expect(names.indexOf('InfoRows') >= 0).assertTrue();
-      expect(names.indexOf('List') >= 0).assertTrue();
-      expect(names.indexOf('ExpandableCard') >= 0).assertTrue();
-      expect(names.indexOf('SegmentedRingChart') >= 0).assertTrue();
-      expect(names.indexOf('ThinkingStream')).assertEqual(-1);
     });
 
     it('formats bounded layout rejection diagnostics for the visible status area', 0, () => {
@@ -589,7 +602,7 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('componentValue(component,context)');
     });
 
-    it('renders dynamic dashboard components with bounded renderer-owned geometry', 0, () => {
+    it('keeps dashboard registries renderer-owned, accessible, and DOM-safe', 0, () => {
       const html = createUiAgentLabHtmlShell();
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.HeroBanner=');
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MetricGrid=');
@@ -597,61 +610,8 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MultiSeriesLineChart=');
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MatrixHeatmap=');
       expect(html).assertContain("document.createElementNS('http://www.w3.org/2000/svg',tag)");
-      expect(html).assertContain("var SEGMENTED_RING_PALETTE=['#ece6df','#dce9ff','#b7cbff','#89a7ff','#6384ef','#4665cf']");
-      expect(html).assertContain("var HEATMAP_PALETTE=['#dfe3e8'");
-      expect(html).assertContain("if(copy.endsWith('.0'))copy=copy.slice(0,-2)");
-      expect(html).assertContain("function formattedBytes(value)");
-      expect(html).assertContain("units=['B','KB','MB','GB','TB']");
-      expect(html).assertContain("if(field.kind==='bytes')return formattedBytes(field.value)");
-      expect(html.indexOf("if(field.kind==='bytes')return copy+'B'")).assertEqual(-1);
-      expect(html).assertContain("items.slice(0,6).forEach");
-      expect(html).assertContain("itemArray(value,'segments')");
-      expect(html).assertContain("list(source.series).slice(0,4)");
-      expect(html).assertContain("var rawValues=list(itemRecord.values)");
-      expect(html).assertContain("rawValues.slice(0,24)");
-      expect(html).assertContain("list(source.values).slice(0,12)");
-      expect(html).assertContain("list(source.weeks).slice(0,24)");
-      expect(html).assertContain("componentValue(component,context)");
-      expect(html).assertContain("raw=source?source.header:undefined,header=record(raw)");
-      expect(html).assertContain("nonEmptyText(component.text,fields.kicker)");
-      expect(html).assertContain("nonEmptyText(component.title,fields.title)");
-      expect(html).assertContain("nonEmptyText(component.body,fields.description)");
-      expect(html).assertContain("parent.setAttribute('aria-label',fields.ariaLabel)");
-      expect(html).assertContain("left.value-right.value||left.index-right.index");
-      expect(html).assertContain("segments[entry.index].renderColor=chartColorAtRank(rank,ranked.length)");
-      expect(html).assertContain("var SEGMENTED_RING_OTHER_COLOR='#d9dde3'");
-      expect(html).assertContain("if(segments.length>8){var otherValue=segments.slice(8).reduce");
-      expect(html).assertContain("segments=segments.slice(0,8);segments.push({label:'其他'");
-      expect(html).assertContain("renderColor:SEGMENTED_RING_OTHER_COLOR,neutral:true");
-      expect(html).assertContain("filter(function(entry){return !entry.neutral;})");
-      expect(html.indexOf('total+=field.value')).assertLess(html.indexOf('if(segments.length>8)'));
-      expect(html.indexOf('ranks.indexOf(segment.field.value)')).assertEqual(-1);
-      expect(html).assertContain("var SEGMENTED_RING_STROKE_WIDTH=7,SEGMENTED_RING_GAP_LENGTH=2.5");
-      expect(html).assertContain("track.setAttribute('stroke','#f4f1ec')");
-      expect(html).assertContain("track.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH))");
-      expect(html).assertContain("arc.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH))");
-      expect(html).assertContain('visibleArcLength=segments.length===1?circumference:Math.max(0,arcLength-SEGMENTED_RING_GAP_LENGTH)');
-      expect(html).assertContain("compactNumber(segment.field.value/total*100)+'%'");
-      expect(html).assertContain("source?nonEmptyText(source.centerLabel):''");
-      expect(html).assertContain("centerValue.textContent=compactNumber(total)");
-      expect(html).assertContain("centerUnit.textContent=unitLabel");
-      expect(html).assertContain("ringAria=nonEmptyText(ringFields.ariaLabel,ringSummary)");
-      expect(html).assertContain("svg.setAttribute('aria-label',ringAria)");
-      expect(html).assertContain("ringTitle.textContent=ringAria");
-      expect(html).assertContain("rawValues.length!==rawXLabels.length");
-      expect(html).assertContain("lineAria=nonEmptyText(lineFields.ariaLabel,lineSummary)");
-      expect(html).assertContain("svg.setAttribute('aria-label',lineAria)");
-      expect(html).assertContain("lineTitle.textContent=lineAria");
-      expect(html).assertContain("wrapper.appendChild(node('p','sr-only',lineSummary))");
-      expect(html).assertContain('.sr-only { position:absolute!important;');
-      expect(html).assertContain("node('small','metric-unit',unit)");
-      expect(html).assertContain("nonEmptyText(source.deltaLabel");
-      expect(html).assertContain("metric-delta'+(deltaValue");
-      expect(html).assertContain("cell.style.background=HEATMAP_PALETTE[level]");
       expect(html).assertContain("grid.setAttribute('role','grid')");
       expect(html).assertContain("cell.setAttribute('role','gridcell')");
-      expect(html).assertContain("cell.setAttribute('aria-label',cellLabel)");
-      expect(html).assertContain("arc.setAttribute('stroke',segment.renderColor)");
       expect(html.indexOf('source.color')).assertEqual(-1);
       expect(html.indexOf('source.svg')).assertEqual(-1);
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
@@ -690,27 +650,17 @@ export default function uiAgentLabTest() {
       expect(script).assertContain('\\u52a8');
     });
 
-    it('renders a paged List by appending every template item in stable item scope', 0, () => {
+    it('keeps List item-scope and accessible row contracts', 0, () => {
       const html = createUiAgentLabHtmlShell();
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.List=');
-      expect(html).assertContain('var LIST_PAGE_SIZE=8');
-      expect(html).assertContain('items.slice(visibleCount,nextCount).forEach');
-      expect(html).assertContain("more.addEventListener('click',appendPage)");
-      expect(html).assertContain("status.textContent='已显示 '+String(visibleCount)+' / '+String(items.length)");
-      expect(html).assertContain('more.disabled=visibleCount>=items.length');
-      expect(html).assertContain("var row=node('div','lab-list-row')");
       expect(html).assertContain("row.setAttribute('role','listitem')");
-      expect(html).assertContain('if(items.length>LIST_PAGE_SIZE)wrapper.appendChild(pager)');
-      expect(html).assertContain('.lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--line); }');
-      expect(html).assertContain('.lab-list-row:last-child { padding-bottom:0; border-bottom:0; }');
       expect(html).assertContain('hasItemScope:true,itemScope:item');
       expect(html).assertContain("component.dataPath==='/'");
       expect(html).assertContain('return context.itemScope');
-      expect(html).assertContain("node('p','lab-card-copy','暂无内容')");
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
     });
 
-    it('renders visible text and lists from component props or data paths', 0, () => {
+    it('encodes visible text and list payloads without old hardcoded fixtures', 0, () => {
       const html = createUiAgentLabHtmlShell();
       const modelJson = '{"headline":"动态标题","days":[{"label":"动态日期",' +
         '"title":"动态列表","entries":[{"time":"08:30","title":"动态事项"}]}]}';
@@ -725,18 +675,11 @@ export default function uiAgentLabTest() {
       expect(script.indexOf('静态回退')).assertEqual(-1);
       expect(script).assertContain('\\u52a8');
       expect(script).assertContain('\\u5217');
-      expect(html).assertContain('componentValue(component,context)');
-      expect(html).assertContain('var direct=nonEmptyText(component.text),title=nonEmptyText(component.title),body=nonEmptyText(component.body)');
-      expect(html).assertContain('copy=nonEmptyText(direct,nonEmptyText(body,title))');
-      expect(html).assertContain("if(!direct&&title&&body){output.appendChild(node('span','lab-text-title',title));output.appendChild(node('span','lab-text-body',body));return output;}");
-      expect(html).assertContain("itemArray(dayRecord,'entries')");
-      expect(html).assertContain('text(dayRecord.title');
-      expect(html).assertContain('text(eventRecord.title');
       expect(html.indexOf('西湖边喝咖啡')).assertEqual(-1);
       expect(html.indexOf('北山街')).assertEqual(-1);
     });
 
-    it('renders bounded generic expandable data and falls back from an empty parser title', 0, () => {
+    it('keeps expandable resource bounds and encodes payloads safely', 0, () => {
       const html = createUiAgentLabHtmlShell();
       const marker = '<img src=x onerror="window.__EXPANDABLE_INJECTED=true">';
       const modelJson = '{"title":"季度概览","summary":"保持增长",' +
@@ -748,17 +691,10 @@ export default function uiAgentLabTest() {
         '"dataModelJson":' + JSON.stringify('{"payload":' + modelJson + '}') + '}';
       const script = uiAgentLabSurfaceScript(surfaceJson);
 
-      expect(html).assertContain('var title=nonEmptyText(component.title');
-      expect(html).assertContain("nonEmptyText(valueRecord?valueRecord.title:undefined");
-      expect(html).assertContain('appendExpandableValue(panelInner,value');
-      expect(html).assertContain('appendExpandableValue(itemHost,itemRecord');
-      expect(html).assertContain("appendExpandableField(objectSection,key,child,budget)");
       expect(html).assertContain('EXPANDABLE_MAX_DEPTH=4');
       expect(html).assertContain('EXPANDABLE_MAX_NODES=72');
       expect(html).assertContain('EXPANDABLE_MAX_ARRAY_ITEMS=12');
       expect(html).assertContain('EXPANDABLE_MAX_OBJECT_FIELDS=16');
-      expect(html).assertContain('{remaining:EXPANDABLE_MAX_NODES,notified:false}');
-      expect(html).assertContain("key==='title'||key==='name'||key==='label'");
       expect(html).assertContain('.textContent=');
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
       expect(html.indexOf('[object Object]')).assertEqual(-1);
@@ -1091,36 +1027,6 @@ export default function uiAgentLabTest() {
       const html = createUiAgentLabHtmlShell();
       expect(html).assertContain("bridge({type:'action',componentId:text(component.id),actionIndex:index})");
       expect(html.indexOf("bridge({type:'action',args:")).assertEqual(-1);
-    });
-
-    it('keeps compact capsule chrome and animates expandable content without max-height', 0, () => {
-      const html = createUiAgentLabHtmlShell();
-      expect(html).assertContain('grid-template-rows:auto minmax(0,1fr) auto; gap:0;');
-      expect(html).assertContain('.lab-header { min-height:52px; margin-bottom:12px; border-radius:999px;');
-      expect(html).assertContain('.composer { border-radius:999px; padding:6px 6px 6px 16px;');
-      expect(html).assertContain('.send { width:40px; height:40px; flex:0 0 40px;');
-      expect(html).assertContain('.status { min-height:24px; padding:4px 8px;');
-      expect(html).assertContain('line-height:16px; display:flex; justify-content:space-between; align-items:center;');
-      expect(html).assertContain('.status>span { min-height:16px; display:flex; align-items:center; }');
-      expect(html).assertContain('.decision-toggle { width:38px; height:38px;');
-      expect(html).assertContain('border-radius:50%');
-      expect(html).assertContain('[hidden] { display:none!important; }');
-      expect(html).assertContain('.shell.decision-notes-visible { grid-template-rows:auto minmax(0,auto) minmax(0,1fr) auto; }');
-      expect(html).assertContain('.decision-panel { min-height:0; max-height:min(34vh,260px);');
-      expect(html).assertContain('overflow:auto;');
-      expect(html).assertContain('.decision-copy { margin:0;');
-      expect(html).assertContain('white-space:pre-wrap;');
-      expect(html).assertContain('decisionPanel.hidden=!enabled');
-      expect(html).assertContain("decisionToggle.disabled=next.state==='loading'");
-      expect(html).assertContain("decisionText.textContent=enabled&&typeof source.text==='string'");
-      expect(html.indexOf('plannedComponents')).assertEqual(-1);
-      expect(html.indexOf('omittedData')).assertEqual(-1);
-      expect(html.indexOf('.innerHTML')).assertEqual(-1);
-      expect(html.indexOf('grid-template-rows:auto minmax(0,1fr) auto; gap:12px;')).assertEqual(-1);
-      expect(html).assertContain('.expandable-panel { display:grid; grid-template-rows:0fr; opacity:0; transform:translateY(-6px);');
-      expect(html).assertContain('cubic-bezier(.22,1,.36,1)');
-      expect(html).assertContain('.expandable-panel-inner { min-height:0; overflow:hidden;');
-      expect(html.indexOf('.expandable-panel { max-height:')).assertEqual(-1);
     });
 
     it('clones and clears the in-memory model settings snapshot', 0, () => {

@@ -103,6 +103,7 @@ import trainPresaleExecutionTest from './TrainPresaleExecution.test';
 import trainPresaleWebAutomationTest from './TrainPresaleWebAutomation.test';
 import trainPresaleDebugTest from './TrainPresaleDebug.test';
 import uiAgentLabTest from './UiAgentLab.test';
+import uiAgentLabThemeTest from './UiAgentLabTheme.test';
 import capabilityRuntimeTest from './CapabilityRuntime.test';
 
 export default function testsuite() {
@@ -205,6 +206,7 @@ export default function testsuite() {
   trainPresaleWebAutomationTest();
   trainPresaleDebugTest();
   uiAgentLabTest();
+  uiAgentLabThemeTest();
   personaStoreTest();
   personaA2uiTest();
   personaMemoryUpdateTest();

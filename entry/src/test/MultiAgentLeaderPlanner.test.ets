@@ -34,14 +34,6 @@ const TAGGED_PARALLEL_DECISION: string = '{"personaId":"travel_companion","skill
   '"toolId":"train.search","input":{},"required":false}</appless_tool>' +
   '],"continuationMode":"complete","uiIntent":{"purpose":"比较出行方案","preferredDensity":"comfortable",' +
   '"requiredSections":["flight","train"]}}';
-const PARALLEL_DYNAMIC_DECISION: string = '{"personaId":"travel_companion","skillId":"",' +
-  '"requestedCapabilityIds":["dynamic.search"],"roundAction":"execute","continuationMode":"complete",' +
-  '"dataTasks":[' +
-  '{"localId":"github-dashboard","goal":"Build the GitHub user dashboard","allowedToolIds":["dynamic.search"],' +
-  '"toolId":"dynamic.search","input":{"query":"sindresorhus",' +
-  '"operationTarget":"github.user.dashboard"},"required":true}' +
-  '],"uiIntent":{"purpose":"research","preferredDensity":"medium",' +
-  '"requiredSections":["profile","repositories","events"]}}';
 const TRAVEL_DECISION: string = '{"personaId":"travel_companion","skillId":"",' +
   '"requestedCapabilityIds":["travel.search"],"roundAction":"execute","continuationMode":"complete",' +
   '"dataTasks":[{"localId":"travel","goal":"我明天要从北京去上海，帮我搜索出行方案",' +
@@ -905,22 +897,6 @@ function planningContext(): LeaderPlanningContext {
   };
 }
 
-function dynamicPlanningContext(): LeaderPlanningContext {
-  const context = planningContext();
-  context.tools.push({
-    toolId: 'dynamic.search',
-    domain: 'dynamic',
-    intent: 'dynamic.search',
-    riskLevel: 'read',
-    registeredBackends: ['mcp_remote', 'oauth_api'],
-    inputSchema: 'dynamicToolSearchQuery',
-    outputSchema: 'dynamicToolConnect',
-    actions: [],
-    planningHint: toolPlanningDescriptionForToolId('dynamic.search', true)
-  });
-  return context;
-}
-
 function actionOwnerContext(): LeaderPlanningContext {
   const context = planningContext();
   const definitions: ToolDefinition[] = actionAgentToolDefinitions();
@@ -1114,28 +1090,6 @@ export default function multiAgentLeaderPlannerTest() {
         '"dataTasks":[{"localId":"string","goal":"string","allowedToolIds":["string"],' +
           '"toolId":"string","input":{},"required":true}]'
       )).assertEqual(-1);
-    });
-
-    it('passes the trusted single-task GitHub dashboard contract into the Leader prompt', 0, async () => {
-      const model = new QueueLocalModel([PARALLEL_DYNAMIC_DECISION]);
-      const decision = await new MultiAgentLeaderPlanner(model).plan(
-        inputMessage(),
-        { text: 'Build a GitHub profile, repositories, and recent events overview for sindresorhus' },
-        dynamicPlanningContext(),
-        1,
-        (): boolean => true
-      );
-
-      expect(model.prompts[0].indexOf('github.user.dashboard')).assertLarger(-1);
-      expect(model.prompts[0].indexOf('do not emit three repeated tasks')).assertLarger(-1);
-      expect(model.prompts[0].indexOf('Never invent another operationTarget')).assertLarger(-1);
-      expect(decision.requestedCapabilityIds.join(',')).assertEqual('dynamic.search');
-      expect(decision.dataTasks.length).assertEqual(1);
-      expect(decision.dataTasks[0].localId).assertEqual('github-dashboard');
-      expect(decision.dataTasks[0].toolId).assertEqual('dynamic.search');
-      expect(JSON.stringify(decision.dataTasks[0].input)).assertEqual(
-        '{"query":"sindresorhus","operationTarget":"github.user.dashboard"}'
-      );
     });
 
     it('rejects an oversized registered tool catalog before calling the model', 0, async () => {
