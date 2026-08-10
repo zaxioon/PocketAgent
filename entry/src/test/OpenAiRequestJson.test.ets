@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { mergeOpenAiRequestJson } from '@loop/agent-core';
+import { buildA2uiChatRequestJson, mergeOpenAiRequestJson } from '@loop/agent-core';
 
 export default function openAiRequestJsonTest() {
   describe('OpenAiRequestJson', () => {
@@ -40,6 +40,24 @@ export default function openAiRequestJsonTest() {
       ignoredJson.forEach((customJson: string) => {
         expect(mergeOpenAiRequestJson(baseJson, customJson)).assertEqual(baseJson);
       });
+    });
+
+    it('applies the same guard to streaming A2UI request bodies', 0, () => {
+      const request = JSON.parse(
+        '{"model":"model-a","messages":[{"role":"user","content":"layout"}],' +
+        '"temperature":0.2,"stream":true}'
+      ) as Object;
+      const baseJson = JSON.stringify(request);
+      const merged = JSON.parse(buildA2uiChatRequestJson(
+        request,
+        '{"enable_thinking":false,"temperature":0}'
+      )) as Record<string, Object | string | number | boolean>;
+
+      expect(merged['model'] as string).assertEqual('model-a');
+      expect(merged['stream'] as boolean).assertTrue();
+      expect(merged['enable_thinking'] as boolean).assertFalse();
+      expect(merged['temperature'] as number).assertEqual(0);
+      expect(buildA2uiChatRequestJson(request, '{"stream":false}')).assertEqual(baseJson);
     });
   });
 }

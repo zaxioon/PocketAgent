@@ -36,9 +36,15 @@ import {
   buildUiAgentLabSnapshot,
   hydrateUiAgentLabMergedJsonl,
   hydrateUiAgentLabSnapshotForMergedLayout,
+  projectClosedUiAgentLabComponents,
+  UiAgentLabDecisionStreamGate,
   uiAgentLabDataJsonl,
+  uiAgentLabPartialDispatch,
+  uiAgentLabProgressWindowAvailable,
+  uiAgentLabRejectedLayoutJsonl,
   uiAgentLabLayoutDiagnosticText,
   uiAgentLabLayoutPrompt,
+  withUiAgentLabSurfaceStatus
 } from '../main/ets/pages/A2uiHome/lab/UiAgentLabHarness';
 
 interface UiLabHydrationShop {
@@ -124,6 +130,67 @@ function settings(): LocalModelSettings {
 
 export default function uiAgentLabTest() {
   describe('uiAgentLab', () => {
+    it('projects only complete streamed branches and keeps model order', 0, () => {
+      const components = JSON.parse('[{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["hero","metrics","activity"]},' +
+        '{"id":"hero","component":"HeroBanner","title":"GitHub overview"},' +
+        '{"id":"metrics","component":"MetricGrid","dataPath":"/results/0/data/metrics"}]') as Object[];
+      const projected = projectClosedUiAgentLabComponents(components);
+
+      expect(projected === null).assertFalse();
+      const records = projected as Record<string, Object>[];
+      expect(records.length).assertEqual(4);
+      expect(records.map((record: Record<string, Object>): Object => record['id']).join(','))
+        .assertEqual('root,content,hero,metrics');
+      expect((records[1]['children'] as string[]).join(',')).assertEqual('hero,metrics');
+    });
+
+    it('emits the first partial immediately then uses one fixed progress window', 0, () => {
+      expect(uiAgentLabPartialDispatch(false, -1)).assertEqual('immediate');
+      expect(uiAgentLabPartialDispatch(true, -1)).assertEqual('schedule');
+      expect(uiAgentLabPartialDispatch(true, 0)).assertEqual('none');
+      expect(uiAgentLabProgressWindowAvailable(-1)).assertTrue();
+      expect(uiAgentLabProgressWindowAvailable(32)).assertFalse();
+    });
+
+    it('keeps a valid partial only for timeout and fails closed for a rejected final candidate', 0, () => {
+      const baseline = '{"createSurface":{"surfaceId":"surface-policy","status":"ready"}}\n';
+      const partial = '{"createSurface":{"surfaceId":"surface-policy","status":"calling_tool"}}\n';
+      const progressive = withUiAgentLabSurfaceStatus(partial, 'surface-policy', 'calling_tool');
+
+      expect(uiAgentLabRejectedLayoutJsonl(null, progressive, baseline, 'surface-policy'))
+        .assertContain('"status":"ready"');
+      expect(uiAgentLabRejectedLayoutJsonl('invalid-final', progressive, baseline, 'surface-policy'))
+        .assertEqual(baseline);
+    });
+
+    it('opens decision-note streaming only on exact standalone tag boundaries', 0, () => {
+      const valid = new UiAgentLabDecisionStreamGate();
+      expect(valid.feed('<ui_decision_')).assertEqual('');
+      expect(valid.feed('notes>\nsummary\n</ui_decision_notes>')).assertEqual('');
+      expect(valid.feed('\n{"version":')).assertEqual('{"version":');
+      expect(valid.feed('"v0.9.1"}')).assertEqual('"v0.9.1"}');
+      expect(valid.hasProtocolStarted()).assertTrue();
+      expect(valid.isInvalid()).assertFalse();
+
+      const invalid = new UiAgentLabDecisionStreamGate();
+      invalid.feed('prefix<ui_decision_notes>\nsummary\n</ui_decision_notes>\n{}');
+      expect(invalid.isInvalid()).assertTrue();
+    });
+
+    it('adds surface revision and lifecycle generation guards to ArkWeb pushes', 0, () => {
+      const surfaceJson = '{"surfaceId":"revision-surface","rootId":"root","components":[],' +
+        '"dataModelJson":"{}"}';
+      const first = uiAgentLabSurfaceScript(surfaceJson, 7, 3);
+      const second = uiAgentLabSurfaceScript(surfaceJson, 8, 3);
+      const html = createUiAgentLabHtmlShell();
+
+      expect(first === second).assertFalse();
+      expect(html).assertContain('var latestSurfaceGeneration=-1,latestSurfaceRevision=-1');
+      expect(html).assertContain('if(generation<latestSurfaceGeneration)return');
+      expect(html).assertContain('if(revision<=latestSurfaceRevision)return');
+    });
+
     it('builds one interactive HTML shell with the allowlisted bridge', 0, () => {
       const html = createUiAgentLabHtmlShell();
       expect(html).assertContain('UiAgentLabBridge.postMessage');

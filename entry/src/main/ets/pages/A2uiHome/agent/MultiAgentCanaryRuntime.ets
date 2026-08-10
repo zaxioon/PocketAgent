@@ -36,6 +36,7 @@ import {
   ToolDefinition,
   ToolDefinitionLookup,
   UiLayoutPlanner,
+  UiRenderProgressSink,
   UiRenderResult,
   UiSurfaceWriteLease,
   UiSurfaceWriter,
@@ -451,11 +452,12 @@ class MailDetailInPlaceBridge implements UiTaskRenderer, UiSurfaceWriter, MailDe
     task: CreateUiTaskPayload,
     data: DataResult[],
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult> {
     const state = this.surfaces.get(surfaceId);
     if (state === undefined || state.uiTaskId !== task.taskId) {
-      return this.renderer.result(task, data, offers, surfaceId);
+      return this.renderer.result(task, data, offers, surfaceId, progressSink);
     }
     if (data.length !== 1 || data[0].toolId !== task.intent) {
       state.event = {

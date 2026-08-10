@@ -17,6 +17,12 @@ export interface UiAgentLabDecisionPayload {
   text: string;
 }
 
+interface UiAgentLabSurfacePayload {
+  surface: Object;
+  revision: number;
+  generation: number;
+}
+
 type UiAgentLabDataValue = Object | string | number | boolean | null | undefined;
 type UiAgentLabDataRecord = Record<string, UiAgentLabDataValue>;
 
@@ -84,9 +90,18 @@ export function uiAgentLabDecisionScript(payload: UiAgentLabDecisionPayload): st
   return 'window.__applyUiAgentLabDecision(JSON.parse(' + scriptString(serialized) + '));';
 }
 
-export function uiAgentLabSurfaceScript(surfaceJson: string): string {
+export function uiAgentLabSurfaceScript(
+  surfaceJson: string,
+  revision: number = 0,
+  generation: number = 0
+): string {
+  const payload: UiAgentLabSurfacePayload = {
+    surface: JSON.parse(resolveUiAgentLabSurfaceJson(surfaceJson)) as Object,
+    revision,
+    generation
+  };
   return 'window.__applyUiAgentLabSurface(JSON.parse(' +
-    scriptString(resolveUiAgentLabSurfaceJson(surfaceJson)) + '));';
+    scriptString(JSON.stringify(payload)) + '));';
 }
 
 export function strictUiAgentLabFiniteNumber(value: UiAgentLabDataValue): number | null {
@@ -514,8 +529,15 @@ export function createUiAgentLabHtmlShell(): string {
         if(typeof renderer!=='function')return safeError('不支持的组件','UI Lab catalog 不包含 '+text(component.component)+'。');
         try{return renderer(component,context,trail.concat([id]));}catch(_error){return safeError('组件渲染失败',text(component.component)+' 未能安全渲染。');}
       }
-      window.__applyUiAgentLabSurface=function(surface){
-        var source=record(surface); if(!source)return;
+      var latestSurfaceGeneration=-1,latestSurfaceRevision=-1;
+      window.__applyUiAgentLabSurface=function(next){
+        var payload=record(next),source=payload?record(payload.surface):null;
+        var generation=payload?payload.generation:undefined,revision=payload?payload.revision:undefined;
+        if(!source||!Number.isSafeInteger(generation)||!Number.isSafeInteger(revision)||generation<0||revision<0)return;
+        if(generation<latestSurfaceGeneration)return;
+        if(generation>latestSurfaceGeneration){latestSurfaceGeneration=generation;latestSurfaceRevision=-1;}
+        if(revision<=latestSurfaceRevision)return;
+        latestSurfaceRevision=revision;
         var components=list(source.components),byId=Object.create(null);
         components.slice(0,96).forEach(function(component){var item=record(component);if(item&&typeof item.id==='string'&&item.id&&!byId[item.id])byId[item.id]=item;});
         var model=Object.create(null);try{model=typeof source.dataModelJson==='string'?JSON.parse(source.dataModelJson):(record(source.dataModel)||Object.create(null));}catch(_error){model=Object.create(null);}

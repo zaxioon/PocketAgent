@@ -18,6 +18,7 @@ import { LinkedMessageBus } from '../message/LinkedMessageBus';
 import {
   CreateUiTaskPayload,
   UI_TASK_ORIGINAL_USER_INPUT_MAX_LENGTH,
+  UiRenderProgressSink,
   UiRenderResult,
   UiRenderResultPayload,
   UiRenderState,
@@ -561,8 +562,26 @@ export class UiAgent extends MessageDrivenAgent {
       return;
     }
     context.terminalRenderStarted = terminal;
+    const lease = new ContextSurfaceWriteLease(context);
+    let progressChain: Promise<void> = Promise.resolve();
+    const progressSink: UiRenderProgressSink = (progress: UiRenderResult): Promise<void> => {
+      progressChain = progressChain.then(async (): Promise<void> => {
+        if (!this.isActive(key, context) || !lease.isActive()) {
+          return;
+        }
+        this.validateRenderedJsonl(progress, false);
+        await this.writer.write(
+          context.turnId,
+          context.surfaceId,
+          progress.jsonl,
+          lease
+        );
+      });
+      return progressChain;
+    };
     const rendered: UiRenderResult =
-      await this.renderer.result(task, data, offers, context.surfaceId);
+      await this.renderer.result(task, data, offers, context.surfaceId, progressSink);
+    await progressChain;
     if (!this.isActive(key, context)) {
       return;
     }
@@ -571,7 +590,7 @@ export class UiAgent extends MessageDrivenAgent {
       context.turnId,
       context.surfaceId,
       rendered.jsonl,
-      new ContextSurfaceWriteLease(context)
+      lease
     );
     if (!this.isActive(key, context)) {
       return;

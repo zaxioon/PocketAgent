@@ -117,7 +117,7 @@ export { ComposioTool } from './src/main/ets/composio/ComposioTool';
 export * from './src/main/ets/composio/ComposioUserId';
 export { A2UI_VERSION, AGENUI_CATALOG_ID, buildCreateSurface, buildDeleteSurface, parseJsonl, extractJsonObjects, newSurfaceId } from './src/main/ets/a2ui/A2uiProtocol';
 export { A2uiComponentDef, CreateSurfaceBody, UpdateComponentsBody } from './src/main/ets/a2ui/A2uiTypes';
-export { A2uiModel } from './src/main/ets/a2ui/A2uiModel';
+export { A2uiModel, A2uiTextDeltaListener } from './src/main/ets/a2ui/A2uiModel';
 export { A2uiAgentRunner, A2uiLineListener, A2uiErrorListener, UiLayoutPlanner } from './src/main/ets/a2ui/A2uiAgentRunner';
 export {
   A2uiLayoutMergeDiagnostic,
@@ -126,6 +126,11 @@ export {
   mergeA2uiLayoutWithStatus
 } from './src/main/ets/a2ui/A2uiLayoutMerger';
 export {
+  A2uiStreamComponentBatch,
+  A2uiStreamComponentScanResult,
+  A2uiUpdateComponentsStreamScanner
+} from './src/main/ets/a2ui/A2uiUpdateComponentsStreamScanner';
+export {
   A2UI_CATALOG_RESERVED_COMPONENT_FIELDS,
   A2uiCatalogFieldSchema,
   A2uiCatalogValuePolicy,
@@ -133,7 +138,11 @@ export {
   A2uiComponentCatalogSchema,
   A2uiComponentWireSchema
 } from './src/main/ets/a2ui/A2uiComponentCatalogSchema';
-export { buildA2uiLayoutSystemPrompt, OpenAiA2uiModel } from './src/main/ets/a2ui/OpenAiA2uiModel';
+export {
+  buildA2uiChatRequestJson,
+  buildA2uiLayoutSystemPrompt,
+  OpenAiA2uiModel
+} from './src/main/ets/a2ui/OpenAiA2uiModel';
 export { createA2uiModelInfo, A2uiModelInfo } from './src/main/ets/a2ui/A2uiModelFactory';
 export { aiphoneErrorJsonl, aiphoneInfoJsonl, splitJsonl } from './src/main/ets/aiphone/AiphoneA2ui';
 export { runAiphoneTool } from './src/main/ets/aiphone/AiphoneToolExecutor';

@@ -79,6 +79,10 @@ struct UiAgentLab {
   private decisionNotesEnabled: boolean = false;
   private generation: number = 0;
   private pendingSurfaceJson: string = '';
+  private nextSurfaceRevision: number = 0;
+  private pendingSurfaceRevision: number = 0;
+  // Theme application extends this same chain so it cannot race surface pushes.
+  private surfacePushChain: Promise<void> = Promise.resolve();
   private currentSurface: A2uiSurfaceState | null = null;
   private pendingStatus: UiAgentLabStatusPayload = {
     state: 'ready',
@@ -131,6 +135,7 @@ struct UiAgentLab {
     this.decisionNotesEnabled = false;
     this.pendingDecision = { enabled: false, text: '' };
     this.pendingSurfaceJson = '';
+    this.pendingSurfaceRevision = 0;
     this.currentSurface = null;
     clearUiLabModelSettings();
     aiLogInfo('[AIPhone][UiAgentLabDisappear]');
@@ -192,9 +197,16 @@ struct UiAgentLab {
     if (!this.shellReady || this.pendingSurfaceJson.length === 0) {
       return;
     }
-    const script = uiAgentLabSurfaceScript(this.pendingSurfaceJson);
-    this.controller.runJavaScript(script).catch((_error: Error): void => {
-      aiLogError('[AIPhone][UiAgentLabSurfacePushFailed]');
+    const revision = this.pendingSurfaceRevision;
+    const lifecycleGeneration = this.generation;
+    const script = uiAgentLabSurfaceScript(this.pendingSurfaceJson, revision, lifecycleGeneration);
+    this.surfacePushChain = this.surfacePushChain.then(async (): Promise<void> => {
+      if (!this.shellReady || lifecycleGeneration !== this.generation) return;
+      try {
+        await this.controller.runJavaScript(script);
+      } catch (_error) {
+        aiLogError('[AIPhone][UiAgentLabSurfacePushFailed] revision=' + revision.toString());
+      }
     });
   }
 
@@ -202,6 +214,8 @@ struct UiAgentLab {
     const surface: A2uiSurfaceState = event.surface;
     this.currentSurface = surface;
     this.pendingSurfaceJson = JSON.stringify(surface);
+    this.nextSurfaceRevision++;
+    this.pendingSurfaceRevision = this.nextSurfaceRevision;
     this.pushPendingSurface();
     if (surface.status === 'ready') {
       this.busy = false;
@@ -237,6 +251,10 @@ struct UiAgentLab {
       });
       aiLogError('[AIPhone][UiAgentLabSurface] status=error');
       return;
+    }
+    if (surface.status === 'calling_tool') {
+      aiLogInfo('[AIPhone][UiAgentLabSurface] turnChars=' + event.turnId.length.toString() +
+        ' status=calling_tool components=' + surface.components.length.toString());
     }
     this.pushStatus({ state: 'loading', message: 'UI Agent 正在排版…', responseChars: 0 });
   }
