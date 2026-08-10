@@ -103,6 +103,7 @@ import trainPresaleExecutionTest from './TrainPresaleExecution.test';
 import trainPresaleWebAutomationTest from './TrainPresaleWebAutomation.test';
 import trainPresaleDebugTest from './TrainPresaleDebug.test';
 import uiAgentLabTest from './UiAgentLab.test';
+import capabilityRuntimeTest from './CapabilityRuntime.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -210,4 +211,5 @@ export default function testsuite() {
   htmlHomeSnapshotTest();
   htmlHomeRendererTest();
   htmlHomeActionPolicyTest();
+  capabilityRuntimeTest();
 }
