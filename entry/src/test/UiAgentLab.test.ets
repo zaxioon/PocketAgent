@@ -568,6 +568,42 @@ export default function uiAgentLabTest() {
       expect(html.indexOf('new Function')).assertEqual(-1);
     });
 
+    it('resolves List titles and ExpandableCard rows without implicit item enumeration', 0, () => {
+      const listTitleJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'List', '{"title":{"path":"/heading"}}', '{"heading":"Recent activity"}'
+      );
+      const rowFieldsJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'ExpandableCard',
+        '{"title":{"path":"/name"},"rows":[' +
+          '{"label":"Address","value":{"path":"/address"}},' +
+          '{"label":{"path":"/categoryLabel"},"value":{"path":"/category"}}]}',
+        '{"name":"North shop","address":"1 Main Street",' +
+          '"categoryLabel":"Type","category":"Cafe","internal":{"secret":"hidden"}}'
+      );
+      const invalidNumericRow = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'ExpandableCard',
+        '{"rows":[{"label":"Distance","value":{"path":"/distance"}}]}',
+        '{"distance":120}'
+      );
+      const listFields = JSON.parse(listTitleJson as string) as Record<string, string>;
+      const rowFields = JSON.parse(rowFieldsJson as string) as Record<string, Object | string>;
+      const rows = rowFields['rows'] as Object[];
+      const firstRow = rows[0] as Record<string, string>;
+      const secondRow = rows[1] as Record<string, string>;
+      const html = createUiAgentLabHtmlShell();
+
+      expect(listFields['title']).assertEqual('Recent activity');
+      expect(rowFields['title'] as string).assertEqual('North shop');
+      expect(firstRow['label']).assertEqual('Address');
+      expect(firstRow['value']).assertEqual('1 Main Street');
+      expect(secondRow['label']).assertEqual('Type');
+      expect(secondRow['value']).assertEqual('Cafe');
+      expect(invalidNumericRow).assertNull();
+      expect(html).assertContain("node('h3','lab-list-title',title)");
+      expect(html).assertContain("var value=hasLegacyDataPath?componentValue(component,context):undefined");
+      expect(html).assertContain('var directRows=list(component.rows).slice(0,8)');
+    });
+
     it('rejects numeric strings and non-exact path objects during executable catalog resolution', 0, () => {
       const invalidFields: string[] = [
         '{"items":[{"label":"Stars","value":{"path":"/dashboard/stars"}}]}',

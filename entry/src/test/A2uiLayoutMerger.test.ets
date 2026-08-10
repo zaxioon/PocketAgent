@@ -50,6 +50,7 @@ interface ComponentFieldSchema {
   valuePolicy: string;
   required?: boolean;
   minLength?: number;
+  minItems?: number;
   maxItems?: number;
   fields?: Record<string, ComponentFieldSchema>;
   items?: ComponentFieldSchema;
@@ -59,6 +60,7 @@ interface ComponentWireSchema {
   fields: Record<string, ComponentFieldSchema>;
   requireAny?: string[][];
   exactlyOne?: string[][];
+  atMostOne?: string[][];
 }
 
 const LAB_COMPONENT_NAMES: string[] = [
@@ -157,10 +159,11 @@ export default function a2uiLayoutMergerTest() {
       expect(prompt.includes('For repeated array items')).assertTrue();
       expect(prompt.includes('official A2UI v0.9 List shape')).assertTrue();
       expect(prompt.includes('compact Text template bound only to that field')).assertTrue();
-      expect(prompt.includes('Use ExpandableCard only when each item has additional details')).assertTrue();
-      expect(prompt.includes('offered action to carry')).assertTrue();
-      expect(prompt.includes('Never bind a whole provider object')).assertTrue();
-      expect(prompt.includes('Prefer one InfoRows binding over List or ExpandableCard')).assertTrue();
+      expect(prompt.includes('Use List for repeated named entities')).assertTrue();
+      expect(prompt.includes('use ExpandableCard direct rows')).assertTrue();
+      expect(prompt.includes('value must be path-only')).assertTrue();
+      expect(prompt.includes('do not generate dataPath="/"')).assertTrue();
+      expect(prompt.includes('Prefer one InfoRows binding over List or ExpandableCard')).assertFalse();
       expect(prompt.includes('Array<{label,value,time?}>')).assertTrue();
       expect(prompt.includes('When dataPath points to an ordinary object, omit labelPath, valuePath, and timePath')).assertTrue();
       expect(prompt.includes('Never invent /key or /value for an ordinary object')).assertTrue();
@@ -312,12 +315,14 @@ export default function a2uiLayoutMergerTest() {
       expect(infoRowsUsage.includes('labelPath 必须为每个 item 解析出 string')).assertTrue();
       expect(infoRowsUsage.includes('valuePath/timePath 允许个别 item 缺失或为 null')).assertTrue();
       expect(infoRowsUsage.includes('非空数组至少一个 item 必须有 primitive value')).assertTrue();
-      expect(infoRowsUsage.includes('优先于 List 或 ExpandableCard')).assertTrue();
-      expect(expandableUsage.includes('额外详情')).assertTrue();
-      expect(expandableUsage.includes('summary 或 description 已足够时改用')).assertTrue();
-      expect(expandableUsage.includes('不得绑定整个 provider object')).assertTrue();
+      expect(infoRowsUsage.includes('单个事实表或已经整理好的 label/value 信息行')).assertTrue();
+      expect(infoRowsUsage.includes('重复的具名实体应使用 List')).assertTrue();
+      expect(infoRowsUsage.includes('优先于 List 或 ExpandableCard')).assertFalse();
+      expect(expandableUsage.includes('direct rows')).assertTrue();
+      expect(expandableUsage.includes('省略 dataPath 不会隐式展示整个 item')).assertTrue();
+      expect(expandableUsage.includes('新生成不得使用 dataPath=/')).assertTrue();
       expect(listUsage.includes('{path:ARRAY_PATH,componentId:TEMPLATE_ID}')).assertTrue();
-      expect(listUsage.includes('最简单组件')).assertTrue();
+      expect(listUsage.includes('可选 title')).assertTrue();
       expect(heroUsage.includes('主内容容器中的第一个可见元素')).assertTrue();
       expect(heroUsage.includes('必须且只能生成一个 HeroBanner')).assertTrue();
       expect(heroUsage.includes('错误或无可展示数据的 baseline 不得强造 HeroBanner 概述')).assertTrue();
@@ -328,6 +333,8 @@ export default function a2uiLayoutMergerTest() {
       expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes('"name":"ThinkingStream"')).assertFalse();
       const metric = catalog[16].schema;
       const infoRows = catalog[4].schema;
+      const expandable = catalog[10].schema;
+      const list = catalog[14].schema;
       const metricItems = metric.fields['items'];
       const metricItemFields = metricItems.items?.fields;
       const ringSegments = catalog[17].schema.fields['segments'];
@@ -343,6 +350,16 @@ export default function a2uiLayoutMergerTest() {
       expect(infoRows.fields['labelPath'].minLength).assertEqual(1);
       expect(infoRows.fields['valuePath'].valuePolicy).assertEqual('literal');
       expect(infoRows.fields['timePath'].valuePolicy).assertEqual('literal');
+      const expandableRows = expandable.fields['rows'];
+      const expandableRowFields = expandableRows.items?.fields;
+      expect(expandableRows.type).assertEqual('array');
+      expect(expandableRows.minItems).assertEqual(1);
+      expect(expandableRows.maxItems).assertEqual(8);
+      expect(expandableRowFields?.['label'].valuePolicy).assertEqual('literal-or-path');
+      expect(expandableRowFields?.['value'].type).assertEqual('string');
+      expect(expandableRowFields?.['value'].valuePolicy).assertEqual('path-only');
+      expect(expandable.atMostOne?.[0].join(',')).assertEqual('dataPath,rows');
+      expect(list.fields['title'].valuePolicy).assertEqual('literal-or-path');
       expect(ringItemFields?.['label'].valuePolicy).assertEqual('literal-or-path');
       expect(ringItemFields?.['value'].valuePolicy).assertEqual('path-only');
       expect(catalog[17].schema.fields['labelPath'].valuePolicy).assertEqual('literal');
@@ -813,7 +830,7 @@ export default function a2uiLayoutMergerTest() {
       const valid =
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
         '{"id":"root","component":"SurfaceRoot","child":"items"},' +
-        '{"id":"items","component":"List","children":{' +
+        '{"id":"items","component":"List","title":{"path":"/summary/text"},"children":{' +
         '"path":"/results/0/data/providerData/recentActivity","componentId":"item-column"}},' +
         '{"id":"item-column","component":"Column","children":["item-card"]},' +
         '{"id":"item-card","component":"ExpandableCard",' +
@@ -824,6 +841,32 @@ export default function a2uiLayoutMergerTest() {
       const textTemplate = valid.replace('"component":"ExpandableCard"', '"component":"Text"');
       const literalTitlePath = textTemplate.replace('{"path":"/kind"}', '"/kind"');
       const literalBodyPath = textTemplate.replace('{"path":"/summary"}', '"/summary"');
+      const literalListTitlePath = valid.replace('{"path":"/summary/text"}', '"/summary/text"');
+      const directRows = valid.replace(
+        '"body":{"path":"/summary"}',
+        '"rows":[{"label":"摘要","value":{"path":"/summary"}},' +
+          '{"label":{"path":"/kind"},"value":{"path":"/summary"}}]'
+      );
+      const missingRowPath = directRows.replace(
+        '"value":{"path":"/summary"}',
+        '"value":{"path":"/missing"}'
+      );
+      const absoluteRowPath = directRows.replace(
+        '"value":{"path":"/summary"}',
+        '"value":{"path":"/results/0/data/providerData/recentActivity/0/summary"}'
+      );
+      const literalRowValue = directRows.replace(
+        '"value":{"path":"/summary"}',
+        '"value":"Pushed commits"'
+      );
+      const numericRowValue = directRows.replace(
+        '"value":{"path":"/summary"}',
+        '"value":1'
+      );
+      const rowsWithDataPath = directRows.replace(
+        '"component":"ExpandableCard",',
+        '"component":"ExpandableCard","dataPath":"/",'
+      );
 
       const merged = mergeA2uiLayout(
         itemBaseline, valid, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
@@ -844,6 +887,27 @@ export default function a2uiLayoutMergerTest() {
       )).assertEqual(itemBaseline);
       expect(mergeA2uiLayout(
         itemBaseline, literalBodyPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+      expect(mergeA2uiLayout(
+        itemBaseline, literalListTitlePath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+      expect(mergeA2uiLayout(
+        itemBaseline, directRows, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === itemBaseline).assertFalse();
+      expect(mergeA2uiLayout(
+        itemBaseline, missingRowPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+      expect(mergeA2uiLayout(
+        itemBaseline, absoluteRowPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+      expect(mergeA2uiLayout(
+        itemBaseline, literalRowValue, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+      expect(mergeA2uiLayout(
+        itemBaseline, numericRowValue, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(itemBaseline);
+      expect(mergeA2uiLayout(
+        itemBaseline, rowsWithDataPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       )).assertEqual(itemBaseline);
 
       const trainBaseline = BASELINE +

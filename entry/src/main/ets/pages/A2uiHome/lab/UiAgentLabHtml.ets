@@ -282,6 +282,7 @@ export function createUiAgentLabHtmlShell(): string {
     .surface-root,.lab-column { width:100%; display:flex; flex-direction:column; gap:12px; }
     .lab-list { display:flex; flex-direction:column; gap:10px; min-width:0; }
     .lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--hairline); }
+    .lab-list-title { margin:0; color:var(--ink); font-size:15px; line-height:1.35; overflow-wrap:anywhere; }
     .lab-list-items { display:flex; flex-direction:column; min-width:0; }
     .lab-list-row { min-width:0; padding:11px 0; border-bottom:1px solid var(--hairline); }
     .lab-list-row:first-child { padding-top:0; }
@@ -654,6 +655,7 @@ export function createUiAgentLabHtmlShell(): string {
       var LIST_PAGE_SIZE=8;
       UI_AGENT_LAB_COMPONENT_REGISTRY.List=function(component,context,trail){
         var wrapper=node('section','lab-list'),items=componentValue(component,context),templateId=text(component.child);
+        var title=nonEmptyText(component.title);if(title)wrapper.appendChild(node('h3','lab-list-title',title));
         if(!Array.isArray(items)||items.length===0){wrapper.appendChild(node('p','lab-card-copy','暂无内容'));return wrapper;}
         if(!templateId){wrapper.appendChild(safeError('List 缺少模板','没有可用的 componentId。'));return wrapper;}
         var itemHost=node('div','lab-list-items'),pager=node('div','list-pager'),status=node('span','list-page-status');itemHost.setAttribute('role','list');
@@ -944,13 +946,20 @@ export function createUiAgentLabHtmlShell(): string {
         parent.appendChild(objectSection);return true;
       }
       UI_AGENT_LAB_COMPONENT_REGISTRY.ExpandableCard=function(component,context){
-        var value=componentValue(component,context),valueRecord=record(value),wrapper=node('article','lab-card expandable-card');
+        var hasLegacyDataPath=typeof component.dataPath==='string'&&component.dataPath.length>0;
+        var value=hasLegacyDataPath?componentValue(component,context):undefined,valueRecord=record(value),wrapper=node('article','lab-card expandable-card');
         var title=nonEmptyText(component.title,nonEmptyText(valueRecord?valueRecord.title:undefined,nonEmptyText(valueRecord?valueRecord.name:undefined,nonEmptyText(valueRecord?valueRecord.label:undefined,'展开详情'))));
         var trigger=node('button','expandable-trigger'),label=node('span','',title),icon=node('span','','+');
         trigger.type='button';trigger.setAttribute('aria-expanded','false');trigger.appendChild(label);trigger.appendChild(icon);
         var panel=node('div','expandable-panel'),panelInner=node('div','expandable-panel-inner'),body=nonEmptyText(component.body),rendered=false;
         panel.setAttribute('aria-hidden','true');
         if(body){panelInner.appendChild(node('p','lab-card-copy',body));rendered=true;}
+        var directRows=list(component.rows).slice(0,8),directRowsHost=node('section','expandable-data');
+        directRows.forEach(function(item){
+          var row=record(item);if(!row)return;
+          appendExpandableField(directRowsHost,text(row.label),row.value,{remaining:1,notified:false});
+        });
+        if(directRowsHost.firstChild){panelInner.appendChild(directRowsHost);rendered=true;}
         if(value!==undefined)rendered=appendExpandableValue(panelInner,value,'',0,{remaining:EXPANDABLE_MAX_NODES,notified:false})||rendered;
         if(!rendered)panelInner.appendChild(node('p','lab-card-copy','暂无详细信息'));
         panel.appendChild(panelInner);
