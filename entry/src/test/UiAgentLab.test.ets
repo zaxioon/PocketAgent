@@ -39,6 +39,7 @@ import {
   projectClosedUiAgentLabComponents,
   UiAgentLabDecisionStreamGate,
   uiAgentLabDataJsonl,
+  uiAgentLabPartialDispatch,
   uiAgentLabProgressWindowAvailable,
   uiAgentLabRejectedLayoutJsonl,
   uiAgentLabLayoutDiagnosticText,
@@ -195,7 +196,11 @@ export default function uiAgentLabTest() {
       expect(lines[1]).assertEqual(jsonl.trim().split('\n')[1]);
     });
 
-    it('uses a fixed progress window instead of resetting an active timer', 0, () => {
+    it('emits the first partial immediately then uses one fixed progress window', 0, () => {
+      expect(uiAgentLabPartialDispatch(false, -1)).assertEqual('immediate');
+      expect(uiAgentLabPartialDispatch(true, -1)).assertEqual('schedule');
+      expect(uiAgentLabPartialDispatch(true, 0)).assertEqual('none');
+      expect(uiAgentLabPartialDispatch(true, 32)).assertEqual('none');
       expect(uiAgentLabProgressWindowAvailable(-1)).assertTrue();
       expect(uiAgentLabProgressWindowAvailable(0)).assertFalse();
       expect(uiAgentLabProgressWindowAvailable(32)).assertFalse();

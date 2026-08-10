@@ -251,6 +251,10 @@ struct UiAgentLab {
       aiLogError('[AIPhone][UiAgentLabSurface] status=error');
       return;
     }
+    if (surface.status === 'calling_tool') {
+      aiLogInfo('[AIPhone][UiAgentLabSurface] turnChars=' + event.turnId.length.toString() +
+        ' status=calling_tool components=' + surface.components.length.toString());
+    }
     this.pushStatus({ state: 'loading', message: 'UI Agent 正在排版…', responseChars: 0 });
   }
 

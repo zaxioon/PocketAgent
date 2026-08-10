@@ -48,6 +48,16 @@ export function uiAgentLabProgressWindowAvailable(timerId: number): boolean {
   return timerId < 0;
 }
 
+export type UiAgentLabPartialDispatch = 'immediate' | 'schedule' | 'none';
+
+export function uiAgentLabPartialDispatch(
+  partialEnqueued: boolean,
+  timerId: number
+): UiAgentLabPartialDispatch {
+  if (!partialEnqueued) return 'immediate';
+  return uiAgentLabProgressWindowAvailable(timerId) ? 'schedule' : 'none';
+}
+
 export class UiAgentLabDecisionStreamGate {
   private buffer: string = '';
   private protocolStarted: boolean = false;
@@ -961,6 +971,11 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     let progressTimerId: number = -1;
     let progressChain: Promise<void> = Promise.resolve();
     let lastValidatedPartial: string = '';
+    let partialEnqueued: boolean = false;
+    let deltaCount: number = 0;
+    let batchCount: number = 0;
+    let partialCount: number = 0;
+    const progressStartMs: number = Date.now();
 
     const emitPartial = (): void => {
       progressTimerId = -1;
@@ -993,11 +1008,29 @@ class UiAgentLabRenderer implements UiTaskRenderer {
       );
       if (partial === lastValidatedPartial) return;
       lastValidatedPartial = partial;
-      progressChain = progressChain.then((): Promise<void> => progressSink({ jsonl: partial }));
+      partialEnqueued = true;
+      partialCount++;
+      const emittedPartialCount: number = partialCount;
+      aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId +
+        ' partial=enqueue components=' + projected.length.toString() +
+        ' count=' + emittedPartialCount.toString() +
+        ' elapsedMs=' + (Date.now() - progressStartMs).toString());
+      progressChain = progressChain.then(async (): Promise<void> => {
+        await progressSink({ jsonl: partial });
+        aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId +
+          ' partial=complete components=' + projected.length.toString() +
+          ' count=' + emittedPartialCount.toString() +
+          ' elapsedMs=' + (Date.now() - progressStartMs).toString());
+      });
     };
     const schedulePartial = (): void => {
       if (progressSink === undefined || !streamActive) return;
-      if (!uiAgentLabProgressWindowAvailable(progressTimerId)) return;
+      const dispatch = uiAgentLabPartialDispatch(partialEnqueued, progressTimerId);
+      if (dispatch === 'immediate') {
+        emitPartial();
+        return;
+      }
+      if (dispatch === 'none') return;
       progressTimerId = setTimeout(emitPartial, UI_LAB_PROGRESS_COALESCE_MS);
     };
     const acceptBatches = (batches: A2uiStreamComponentBatch[], shouldSchedule: boolean = true): void => {
@@ -1013,6 +1046,19 @@ class UiAgentLabRenderer implements UiTaskRenderer {
           streamedComponents.push(batch.components[componentIndex]);
         }
       }
+      if (batches.length > 0) {
+        batchCount += batches.length;
+        let batchComponents: number = 0;
+        for (let index = 0; index < batches.length; index++) {
+          batchComponents += batches[index].components.length;
+        }
+        aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId +
+          ' scanner=batches batchCount=' + batches.length.toString() +
+          ' batchComponents=' + batchComponents.toString() +
+          ' totalBatches=' + batchCount.toString() +
+          ' totalComponents=' + streamedComponents.length.toString() +
+          ' elapsedMs=' + (Date.now() - progressStartMs).toString());
+      }
       if (shouldSchedule && batches.length > 0) schedulePartial();
     };
     const feedProtocolDelta = (delta: string): void => {
@@ -1027,6 +1073,11 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     };
     const onTextDelta = (delta: string): void => {
       if (!streamActive) return;
+      deltaCount++;
+      if (deltaCount === 1) {
+        aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId +
+          ' delta=first elapsedMs=' + (Date.now() - progressStartMs).toString());
+      }
       if (!notesEnabled) {
         feedProtocolDelta(delta);
         return;
@@ -1065,6 +1116,13 @@ class UiAgentLabRenderer implements UiTaskRenderer {
       emitPartial();
       streamActive = false;
       await progressChain;
+      aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId +
+        ' final deltas=' + deltaCount.toString() +
+        ' batches=' + batchCount.toString() +
+        ' components=' + streamedComponents.length.toString() +
+        ' partials=' + partialCount.toString() +
+        ' scannerFailed=' + scannerFailed.toString() +
+        ' elapsedMs=' + (Date.now() - progressStartMs).toString());
       if (candidate === null) {
         const hasPartial = lastValidatedPartial.length > 0;
         aiLogInfo('[UiAgentLabLayout] surface=' + surfaceId + ' planner=null fallback=' +

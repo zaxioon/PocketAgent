@@ -4,6 +4,7 @@ import {
   A2uiRuntimeDataModel,
   A2uiSurfaceStore,
   A2uiSurfaceState,
+  ActionOffer,
   ActionResultPayload,
   ActionExecutionContext,
   ActionExecutionResult,
@@ -31,10 +32,14 @@ import {
   TurnResultPayload,
   UiSurfaceWriteLease,
   UiSurfaceWriter,
+  UiRenderProgressSink,
+  UiRenderResult,
+  UiTaskRenderer,
   composioDynamicResultFromObservation,
   createSeedA2uiSurface,
   gmailDraftPreviewA2ui,
   gmailThreadResultsA2ui,
+  genericToolResultsA2ui,
   hotelSearchDataResult,
   parseA2uiJsonl,
   parseHotelSearchRequest,
@@ -838,6 +843,51 @@ class RecordingWriter implements UiSurfaceWriter {
   }
 }
 
+class ProgressRecordingRenderer implements UiTaskRenderer {
+  resultSinkCount: number = 0;
+  progressWriteCount: number = 0;
+
+  private render(surfaceId: string, title: string): UiRenderResult {
+    const result: DynamicGenericToolResult = {
+      sourceTag: 'test',
+      toolName: 'time',
+      title,
+      status: 'success',
+      summary: title,
+      rows: [],
+      rawPreview: ''
+    };
+    return { jsonl: genericToolResultsA2ui(surfaceId, 'time', [result]) };
+  }
+
+  skeleton(_task: CreateUiTaskPayload, surfaceId: string): Promise<UiRenderResult> {
+    return Promise.resolve(this.render(surfaceId, 'skeleton'));
+  }
+
+  async result(
+    _task: CreateUiTaskPayload,
+    _data: DataResult[],
+    _offers: ActionOffer[],
+    surfaceId: string,
+    progressSink?: UiRenderProgressSink
+  ): Promise<UiRenderResult> {
+    if (progressSink !== undefined) {
+      this.resultSinkCount++;
+      await progressSink(this.render(surfaceId, 'partial'));
+      this.progressWriteCount++;
+    }
+    return this.render(surfaceId, 'final');
+  }
+
+  error(_task: CreateUiTaskPayload, _message: string, surfaceId: string): Promise<UiRenderResult> {
+    return Promise.resolve(this.render(surfaceId, 'error'));
+  }
+
+  actionStatus(_payload: Object, surfaceId: string): Promise<UiRenderResult> {
+    return Promise.resolve(this.render(surfaceId, 'action'));
+  }
+}
+
 class TrackingBus extends LinkedMessageBus {
   readonly messages: AgentMessage[] = [];
 
@@ -1268,6 +1318,27 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(externalCalls).assertEqual(0);
       expect(model.prompts[0].indexOf('"toolId":"time"')).assertLarger(-1);
       expect(surfaces.length).assertLarger(0);
+      runtime.dispose();
+    });
+
+    it('forwards the UI progress sink through the ordinary mail-detail bridge branch', 0, async () => {
+      const renderer = new ProgressRecordingRenderer();
+      const options = canaryOptions(
+        new QueueModel([TIME_DECISION, TIME_DONE_DECISION]),
+        new RecordingGenericExecutor(),
+        new RecordingOpener(),
+        [],
+        []
+      );
+      options.dataExecutor = undefined;
+      options.uiRenderer = renderer;
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('查一下现在的时间', { text: '' }) as MultiAgentSettledOutcome;
+
+      expect(outcome.status).assertEqual('success');
+      expect(renderer.resultSinkCount).assertEqual(1);
+      expect(renderer.progressWriteCount).assertEqual(1);
       runtime.dispose();
     });
 
