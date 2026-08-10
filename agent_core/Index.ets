@@ -158,6 +158,10 @@ export * from './src/main/ets/aiphone/runtime/GmailToolA2ui';
 export * from './src/main/ets/aiphone/runtime/GmailToolNormalizer';
 export * from './src/main/ets/aiphone/runtime/GmailToolTypes';
 export * from './src/main/ets/aiphone/runtime/GoogleOAuthClient';
+export {
+  AIPHONE_COMPONENT_CATALOG_JSON,
+  UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+} from './src/main/ets/aiphone/runtime/A2uiComponentCatalogConst';
 export * from './src/main/ets/aiphone/runtime/HuaweiCalendarClient';
 export * from './src/main/ets/aiphone/runtime/LocalModelSettings';
 export * from './src/main/ets/aiphone/runtime/MailToolA2ui';

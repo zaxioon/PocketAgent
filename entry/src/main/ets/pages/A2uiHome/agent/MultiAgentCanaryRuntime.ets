@@ -75,6 +75,7 @@ import {
 import { mailDetailIdentityDigest, MultiAgentRuntime } from './MultiAgentRuntime';
 import { MultiAgentTurnOutcome } from './MultiAgentRuntimeTypes';
 import { isHtmlHomeActionAllowed } from '../html/HtmlHomeActionPolicy';
+import { HtmlHomeDocument } from '../html/HtmlHomeTypes';
 import {
   authorizeHotelDataTask,
   HotelActionContext,
@@ -188,6 +189,8 @@ export interface MultiAgentCanaryOptions {
   ) => Promise<void>;
   downstreamWriter?: UiSurfaceWriter;
   uiLayoutPlanner?: UiLayoutPlanner;
+  uiRenderer?: UiTaskRenderer;
+  surfaceDocumentProjector?: (surface: A2uiSurfaceState) => HtmlHomeDocument;
   settingsFingerprint?: string;
   submitTimeoutMs?: number;
   actionTimeoutMs?: number;
@@ -1599,15 +1602,18 @@ export class MultiAgentCanaryRuntime {
       onOwnedSurface,
       this.authority,
       visibility,
-      true
+      true,
+      options.surfaceDocumentProjector
     );
     this.surfaceWriter = writer;
     const structuredRenderer = new StructuredToolUiRenderer(
       options.uiLayoutPlanner === undefined ? null : options.uiLayoutPlanner,
       6000
     );
+    const primaryRenderer: UiTaskRenderer = options.uiRenderer === undefined ?
+      structuredRenderer : options.uiRenderer;
     const mailDetailBridge = new MailDetailInPlaceBridge(
-      structuredRenderer,
+      primaryRenderer,
       writer,
       this.currentHostGeneration,
       options.onMailDetail
@@ -1848,8 +1854,9 @@ export class MultiAgentCanaryRuntime {
     return this.runAction(route.action, context);
   }
 
-  currentActionContext(): MultiAgentCanaryActionContext | null {
-    const context = this.authority.context();
+  currentActionContext(action?: A2uiAction): MultiAgentCanaryActionContext | null {
+    const context = action !== undefined && action.args !== undefined ?
+      this.authority.contextFor(action.id, action.args) : this.authority.context();
     if (context === null) {
       return null;
     }
