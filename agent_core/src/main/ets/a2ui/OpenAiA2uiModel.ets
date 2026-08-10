@@ -3,6 +3,7 @@ import util from '@ohos.util';
 import { ChatMessage, ConversationContext } from '../agent/ConversationContext';
 import { LlmProvider } from '../model/LlmProvider';
 import { ChatCompletionSseParser } from '../model/ChatCompletionSseParser';
+import { mergeOpenAiRequestJson } from '../model/OpenAiRequestJson';
 import { AIPHONE_COMPONENT_CATALOG_JSON } from '../aiphone/runtime/A2uiComponentCatalogConst';
 import { aiLogInfoComplete } from '../aiphone/runtime/AiphoneLogger';
 import { A2UI_VERSION } from './A2uiProtocol';
@@ -13,6 +14,10 @@ interface ChatRequest {
   messages: ChatMessage[];
   temperature: number;
   stream: boolean;
+}
+
+export function buildA2uiChatRequestJson(request: Object, customParametersJson: string): string {
+  return mergeOpenAiRequestJson(JSON.stringify(request), customParametersJson);
 }
 
 interface ChatChoice {
@@ -195,7 +200,10 @@ export class OpenAiA2uiModel implements A2uiModel {
           'Content-Type': 'application/json; charset=utf-8',
           'Accept': 'text/event-stream'
         },
-        extraData: JSON.stringify(this.buildRequest(userTask, surfaceId, conversation)),
+        extraData: buildA2uiChatRequestJson(
+          this.buildRequest(userTask, surfaceId, conversation),
+          this.provider.customParametersJson
+        ),
         connectTimeout: 20000,
         readTimeout: 120000
       });

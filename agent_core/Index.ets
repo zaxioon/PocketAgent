@@ -139,7 +139,11 @@ export {
   A2uiComponentCatalogSchema,
   A2uiComponentWireSchema
 } from './src/main/ets/a2ui/A2uiComponentCatalogSchema';
-export { buildA2uiLayoutSystemPrompt, OpenAiA2uiModel } from './src/main/ets/a2ui/OpenAiA2uiModel';
+export {
+  buildA2uiChatRequestJson,
+  buildA2uiLayoutSystemPrompt,
+  OpenAiA2uiModel
+} from './src/main/ets/a2ui/OpenAiA2uiModel';
 export {
   AIPHONE_COMPONENT_CATALOG_JSON,
   UI_AGENT_LAB_COMPONENT_CATALOG_JSON

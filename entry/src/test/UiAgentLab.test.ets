@@ -2,6 +2,7 @@ import { describe, it, expect } from '@ohos/hypium';
 import {
   ActionOffer,
   A2uiSurfaceStore,
+  buildA2uiChatRequestJson,
   CreateUiTaskPayload,
   DataResult,
   LocalModelSettings,
@@ -50,6 +51,18 @@ import {
 interface UiLabHydrationShop {
   name: string;
   rank: number;
+}
+
+class UiLabA2uiRequestMessageFixture {
+  role: string = 'user';
+  content: string = 'layout';
+}
+
+class UiLabA2uiRequestFixture {
+  model: string = 'deepseek-v4-flash';
+  messages: UiLabA2uiRequestMessageFixture[] = [new UiLabA2uiRequestMessageFixture()];
+  temperature: number = 0.2;
+  stream: boolean = true;
 }
 
 interface UiLabHydrationNote {
@@ -201,6 +214,30 @@ export default function uiAgentLabTest() {
       expect(uiAgentLabPartialDispatch(true, -1)).assertEqual('schedule');
       expect(uiAgentLabPartialDispatch(true, 0)).assertEqual('none');
       expect(uiAgentLabPartialDispatch(true, 32)).assertEqual('none');
+    });
+
+    it('merges safe provider parameters into the UI A2UI request body', 0, () => {
+      const request: UiLabA2uiRequestFixture = new UiLabA2uiRequestFixture();
+      const merged = JSON.parse(buildA2uiChatRequestJson(
+        request,
+        '{"enable_thinking":false,"temperature":0}'
+      )) as Record<string, Object | string | number | boolean>;
+      expect(merged['model'] as string).assertEqual('deepseek-v4-flash');
+      expect(merged['stream'] as boolean).assertTrue();
+      expect(merged['enable_thinking'] as boolean).assertFalse();
+      expect(merged['temperature'] as number).assertEqual(0);
+
+      const baseJson = JSON.stringify(request);
+      expect(buildA2uiChatRequestJson(request, '{"model":"other"}')).assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, '{"messages":[]}')).assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, '{"stream":false,"enable_thinking":true}'))
+        .assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, '{"\\u006dodel":"other"}')).assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, '{"\\u006dessages":[]}')).assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, '{"\\u0073tream":false}')).assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, '"enable_thinking"')).assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, 'true')).assertEqual(baseJson);
+      expect(buildA2uiChatRequestJson(request, '{invalid')).assertEqual(baseJson);
     });
 
     it('keeps a valid partial only for timeout and fails closed for a rejected final candidate', 0, () => {
