@@ -5,7 +5,9 @@ import {
   A2uiComponentCatalogSchema,
   A2uiAgentRunner,
   A2uiComponent,
+  A2uiStreamComponentBatch,
   A2uiSurfaceState,
+  A2uiUpdateComponentsStreamScanner,
   CreateUiTaskPayload,
   DataResult,
   LlmProvider,
@@ -14,6 +16,7 @@ import {
   OpenAiCompatibleModel,
   UI_AGENT_LAB_COMPONENT_CATALOG_JSON,
   UiLayoutPlanner,
+  UiRenderProgressSink,
   UiRenderResult,
   UiTaskRenderer,
   UserInputPayload,
@@ -32,6 +35,7 @@ import {
 } from './UiAgentLabDecisionNotes';
 
 const UI_LAB_LAYOUT_TIMEOUT_MS: number = 60000;
+const UI_LAB_PROGRESS_COALESCE_MS: number = 32;
 const UI_LAB_SNAPSHOT_LIMIT: number = 12000;
 const UI_LAB_LAYOUT_PROMPT_LIMIT: number = 24000;
 const UI_LAB_CATALOG_SCHEMA: A2uiComponentCatalogSchema | null =
@@ -39,6 +43,82 @@ const UI_LAB_CATALOG_SCHEMA: A2uiComponentCatalogSchema | null =
 
 type UiLabJsonValue = Object | string | number | boolean | null | undefined;
 export type UiLabRecord = Record<string, UiLabJsonValue>;
+
+export function uiAgentLabProgressWindowAvailable(timerId: number): boolean {
+  return timerId < 0;
+}
+
+export class UiAgentLabDecisionStreamGate {
+  private buffer: string = '';
+  private protocolStarted: boolean = false;
+  private invalid: boolean = false;
+
+  feed(delta: string): string {
+    if (this.invalid || delta.length === 0) return '';
+    if (this.protocolStarted) return delta;
+    this.buffer += delta;
+    const openTag = '<ui_decision_notes>';
+    const closeTag = '</ui_decision_notes>';
+    const prefixLength = Math.min(this.buffer.length, openTag.length);
+    if (this.buffer.substring(0, prefixLength) !== openTag.substring(0, prefixLength)) {
+      this.invalid = true;
+      return '';
+    }
+    if (this.buffer.length <= openTag.length) return '';
+    let bodyStart = openTag.length;
+    if (this.buffer.charAt(bodyStart) === '\n') {
+      bodyStart++;
+    } else if (this.buffer.charAt(bodyStart) === '\r') {
+      if (this.buffer.length === bodyStart + 1) return '';
+      if (this.buffer.charAt(bodyStart + 1) !== '\n') {
+        this.invalid = true;
+        return '';
+      }
+      bodyStart += 2;
+    } else {
+      this.invalid = true;
+      return '';
+    }
+    const closeIndex = this.buffer.indexOf(closeTag, bodyStart);
+    if (closeIndex < 0) {
+      if (this.buffer.indexOf(openTag, bodyStart) >= 0 || this.buffer.length > 2600) this.invalid = true;
+      return '';
+    }
+    if ((closeIndex > bodyStart && this.buffer.charAt(closeIndex - 1) !== '\n') ||
+      this.buffer.indexOf(openTag, bodyStart) >= 0) {
+      this.invalid = true;
+      return '';
+    }
+    const afterClose = closeIndex + closeTag.length;
+    if (this.buffer.length === afterClose) return '';
+    let protocolStart = afterClose;
+    if (this.buffer.charAt(protocolStart) === '\n') {
+      protocolStart++;
+    } else if (this.buffer.charAt(protocolStart) === '\r') {
+      if (this.buffer.length === protocolStart + 1) return '';
+      if (this.buffer.charAt(protocolStart + 1) !== '\n') {
+        this.invalid = true;
+        return '';
+      }
+      protocolStart += 2;
+    } else {
+      this.invalid = true;
+      return '';
+    }
+    this.protocolStarted = true;
+    const protocolDelta = this.buffer.substring(protocolStart);
+    this.buffer = '';
+    return protocolDelta;
+  }
+
+  isInvalid(): boolean {
+    return this.invalid;
+  }
+
+  hasProtocolStarted(): boolean {
+    return this.protocolStarted;
+  }
+}
 
 export interface UiLabFact {
   label: string;
@@ -541,6 +621,157 @@ function surfaceShell(surfaceId: string, status: string, components: A2uiCompone
   return envelopeLine(create) + envelopeLine(update);
 }
 
+function clonedUiLabRecord(value: Object): UiLabRecord | null {
+  try {
+    const clone = JSON.parse(JSON.stringify(value)) as UiLabJsonValue;
+    return recordOf(clone);
+  } catch (_error) {
+    return null;
+  }
+}
+
+class UiAgentLabClosedTreeProjector {
+  private readonly orderedIds: string[];
+  private readonly records: Map<string, UiLabRecord>;
+  private readonly accepted: Set<string> = new Set<string>();
+  private readonly visiting: Set<string> = new Set<string>();
+  private readonly reachable: Set<string> = new Set<string>();
+
+  constructor(orderedIds: string[], records: Map<string, UiLabRecord>) {
+    this.orderedIds = orderedIds;
+    this.records = records;
+  }
+
+  project(): Object[] | null {
+    if (!this.records.has('root') || !this.close('root')) return null;
+    this.collectReachable('root');
+    const output: Object[] = [];
+    for (let index = 0; index < this.orderedIds.length; index++) {
+      const id = this.orderedIds[index];
+      const record = this.records.get(id);
+      if (record !== undefined && this.reachable.has(id)) output.push(record as Object);
+    }
+    return output;
+  }
+
+  private close(id: string): boolean {
+    const record = this.records.get(id);
+    if (record === undefined || this.visiting.has(id)) return false;
+    if (this.accepted.has(id)) return true;
+    this.visiting.add(id);
+
+    const child = record['child'];
+    if (child !== undefined) {
+      if (typeof child !== 'string' || child.length === 0 || !this.close(child)) {
+        this.visiting.delete(id);
+        return false;
+      }
+    }
+
+    const children = record['children'];
+    if (Array.isArray(children)) {
+      const childValues = children as UiLabJsonValue[];
+      const closedChildren: string[] = [];
+      for (let index = 0; index < childValues.length; index++) {
+        const childId: UiLabJsonValue = childValues[index];
+        if (typeof childId !== 'string' || childId.length === 0) {
+          this.visiting.delete(id);
+          return false;
+        }
+        if (this.close(childId)) closedChildren.push(childId);
+      }
+      if (childValues.length > 0 && closedChildren.length === 0) {
+        this.visiting.delete(id);
+        return false;
+      }
+      record['children'] = closedChildren;
+    } else if (children !== undefined) {
+      const dynamicChildren = recordOf(children);
+      const templateId = dynamicChildren === null ? undefined : dynamicChildren['componentId'];
+      if (typeof templateId !== 'string' || templateId.length === 0 || !this.close(templateId)) {
+        this.visiting.delete(id);
+        return false;
+      }
+    }
+
+    this.visiting.delete(id);
+    this.accepted.add(id);
+    return true;
+  }
+
+  private collectReachable(id: string): void {
+    if (this.reachable.has(id)) return;
+    const record = this.records.get(id);
+    if (record === undefined) return;
+    this.reachable.add(id);
+    const child = record['child'];
+    if (typeof child === 'string') this.collectReachable(child);
+    const children = record['children'];
+    if (Array.isArray(children)) {
+      for (let index = 0; index < children.length; index++) {
+        if (typeof children[index] === 'string') this.collectReachable(children[index] as string);
+      }
+    } else {
+      const dynamicChildren = recordOf(children);
+      const templateId = dynamicChildren === null ? undefined : dynamicChildren['componentId'];
+      if (typeof templateId === 'string') this.collectReachable(templateId);
+    }
+  }
+}
+
+/**
+ * Projects the complete streamed component objects to the largest currently
+ * closed tree rooted at `root`. Static container branches that have not arrived
+ * yet are omitted; single-child and List edges remain all-or-nothing.
+ * The returned projection is still untrusted and must pass the normal merger.
+ */
+export function projectClosedUiAgentLabComponents(components: Object[]): Object[] | null {
+  const orderedIds: string[] = [];
+  const records: Map<string, UiLabRecord> = new Map<string, UiLabRecord>();
+  for (let index = 0; index < components.length; index++) {
+    const record = clonedUiLabRecord(components[index]);
+    if (record === null || typeof record['id'] !== 'string' || (record['id'] as string).length === 0) {
+      return null;
+    }
+    const id = record['id'] as string;
+    if (records.has(id)) return null;
+    records.set(id, record);
+    orderedIds.push(id);
+  }
+  return new UiAgentLabClosedTreeProjector(orderedIds, records).project();
+}
+
+export function withUiAgentLabSurfaceStatus(jsonl: string, surfaceId: string, status: string): string {
+  const lines = jsonl.trim().split(/\r?\n/);
+  let replaced = false;
+  for (let index = 0; index < lines.length; index++) {
+    let envelope: UiLabRecord;
+    try {
+      envelope = JSON.parse(lines[index]) as UiLabRecord;
+    } catch (_error) {
+      continue;
+    }
+    const create = recordOf(envelope['createSurface']);
+    if (create === null || create['surfaceId'] !== surfaceId) continue;
+    create['status'] = status;
+    lines[index] = JSON.stringify(envelope);
+    replaced = true;
+  }
+  return replaced ? lines.join('\n') + '\n' : jsonl;
+}
+
+export function uiAgentLabRejectedLayoutJsonl(
+  candidate: string | null,
+  lastValidatedPartial: string,
+  baseline: string,
+  surfaceId: string
+): string {
+  if (candidate === null && lastValidatedPartial.length > 0) {
+    return withUiAgentLabSurfaceStatus(lastValidatedPartial, surfaceId, 'ready');
+  }
+  return baseline;
+}
+
 export function uiAgentLabDataJsonl(surfaceId: string, snapshot: UiLabSnapshot): string {
   const rootUpdate: UiLabUpdateDataModel = { surfaceId, path: '/', value: snapshot as Object };
   const rootEnvelope: UiLabDataEnvelope = { version: 'v0.9.1', updateDataModel: rootUpdate };
@@ -712,7 +943,8 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     task: CreateUiTaskPayload,
     data: DataResult[],
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult> {
     const snapshot = buildUiAgentLabSnapshot(task, data);
     const notesEnabled = this.decisionNotesEnabled();
@@ -720,18 +952,126 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     this.onLayoutDiagnostic(surfaceId, null);
     const baseline = surfaceShell(surfaceId, 'ready', baselineComponents(data, offers)) +
       uiAgentLabDataJsonl(surfaceId, snapshot);
+    const scanner = new A2uiUpdateComponentsStreamScanner();
+    const streamedComponents: Object[] = [];
+    let streamedVersion: string = 'v0.9.1';
+    let scannerFailed: boolean = false;
+    let streamActive: boolean = true;
+    const decisionStreamGate = new UiAgentLabDecisionStreamGate();
+    let progressTimerId: number = -1;
+    let progressChain: Promise<void> = Promise.resolve();
+    let lastValidatedPartial: string = '';
+
+    const emitPartial = (): void => {
+      progressTimerId = -1;
+      if (!streamActive || scannerFailed || progressSink === undefined || streamedComponents.length === 0) {
+        return;
+      }
+      const projected = projectClosedUiAgentLabComponents(streamedComponents);
+      if (projected === null || projected.length === 0) return;
+      const updateBody: UiLabUpdateComponents = {
+        surfaceId,
+        components: projected as A2uiComponent[]
+      };
+      const envelope: UiLabComponentsEnvelope = { version: streamedVersion, updateComponents: updateBody };
+      const merge = mergeA2uiLayoutWithStatus(
+        baseline,
+        JSON.stringify(envelope),
+        surfaceId,
+        offers,
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      if (!merge.accepted) return;
+      const partial = withUiAgentLabSurfaceStatus(
+        annotateActionSources(
+          hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data),
+          data,
+          offers
+        ),
+        surfaceId,
+        'calling_tool'
+      );
+      if (partial === lastValidatedPartial) return;
+      lastValidatedPartial = partial;
+      progressChain = progressChain.then((): Promise<void> => progressSink({ jsonl: partial }));
+    };
+    const schedulePartial = (): void => {
+      if (progressSink === undefined || !streamActive) return;
+      if (!uiAgentLabProgressWindowAvailable(progressTimerId)) return;
+      progressTimerId = setTimeout(emitPartial, UI_LAB_PROGRESS_COALESCE_MS);
+    };
+    const acceptBatches = (batches: A2uiStreamComponentBatch[], shouldSchedule: boolean = true): void => {
+      for (let index = 0; index < batches.length; index++) {
+        const batch = batches[index];
+        if (batch.surfaceId !== surfaceId) {
+          scannerFailed = true;
+          aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId + ' scanner=surface_mismatch');
+          return;
+        }
+        if (batch.version.length > 0) streamedVersion = batch.version;
+        for (let componentIndex = 0; componentIndex < batch.components.length; componentIndex++) {
+          streamedComponents.push(batch.components[componentIndex]);
+        }
+      }
+      if (shouldSchedule && batches.length > 0) schedulePartial();
+    };
+    const feedProtocolDelta = (delta: string): void => {
+      if (!streamActive || scannerFailed || delta.length === 0) return;
+      const scan = scanner.feed(delta);
+      if (scan.error.length > 0) {
+        scannerFailed = true;
+        aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId + ' scanner=' + scan.error);
+        return;
+      }
+      acceptBatches(scan.batches);
+    };
+    const onTextDelta = (delta: string): void => {
+      if (!streamActive) return;
+      if (!notesEnabled) {
+        feedProtocolDelta(delta);
+        return;
+      }
+      const protocolDelta = decisionStreamGate.feed(delta);
+      if (decisionStreamGate.isInvalid()) {
+        scannerFailed = true;
+        aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId + ' scanner=invalid_decision_notes_stream');
+        return;
+      }
+      feedProtocolDelta(protocolDelta);
+    };
     let timerId: number = -1;
     const timeout = new Promise<string | null>((resolve: (value: string | null) => void): void => {
       timerId = setTimeout((): void => resolve(null), UI_LAB_LAYOUT_TIMEOUT_MS);
     });
     try {
       const candidate = await Promise.race<string | null>([
-        this.planner.plan(uiAgentLabLayoutPrompt(task, snapshot, offers), surfaceId),
+        this.planner.plan(uiAgentLabLayoutPrompt(task, snapshot, offers), surfaceId, onTextDelta),
         timeout
       ]);
+      if (progressTimerId >= 0) {
+        clearTimeout(progressTimerId);
+        progressTimerId = -1;
+      }
+      if (candidate !== null && !scannerFailed &&
+        (!notesEnabled || decisionStreamGate.hasProtocolStarted())) {
+        const finalScan = scanner.finalize();
+        if (finalScan.error.length > 0) {
+          scannerFailed = true;
+          aiLogInfo('[UiAgentLabProgress] surface=' + surfaceId + ' scanner=' + finalScan.error);
+        } else {
+          acceptBatches(finalScan.batches, false);
+        }
+      }
+      emitPartial();
+      streamActive = false;
+      await progressChain;
       if (candidate === null) {
-        aiLogInfo('[UiAgentLabLayout] surface=' + surfaceId + ' planner=null fallback=true');
-        return { jsonl: baseline };
+        const hasPartial = lastValidatedPartial.length > 0;
+        aiLogInfo('[UiAgentLabLayout] surface=' + surfaceId + ' planner=null fallback=' +
+          (!hasPartial).toString() + ' partial=' + hasPartial.toString());
+        return {
+          jsonl: uiAgentLabRejectedLayoutJsonl(candidate, lastValidatedPartial, baseline, surfaceId)
+        };
       }
       const decisionOutput: UiAgentLabDecisionOutput = parseUiAgentLabDecisionOutput(
         candidate,
@@ -755,13 +1095,16 @@ class UiAgentLabRenderer implements UiTaskRenderer {
       this.onLayoutDiagnostic(surfaceId, merge.accepted || merge.diagnostic === undefined ? null : merge.diagnostic);
       return {
         jsonl: annotateActionSources(
-          merge.accepted ? hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data) : merge.jsonl,
+          merge.accepted ? hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data) :
+            uiAgentLabRejectedLayoutJsonl(candidate, lastValidatedPartial, baseline, surfaceId),
           data,
           offers
         )
       };
     } finally {
       if (timerId >= 0) clearTimeout(timerId);
+      if (progressTimerId >= 0) clearTimeout(progressTimerId);
+      streamActive = false;
     }
   }
 

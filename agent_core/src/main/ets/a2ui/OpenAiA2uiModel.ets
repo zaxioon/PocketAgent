@@ -6,7 +6,7 @@ import { ChatCompletionSseParser } from '../model/ChatCompletionSseParser';
 import { AIPHONE_COMPONENT_CATALOG_JSON } from '../aiphone/runtime/A2uiComponentCatalogConst';
 import { aiLogInfoComplete } from '../aiphone/runtime/AiphoneLogger';
 import { A2UI_VERSION } from './A2uiProtocol';
-import { A2uiModel } from './A2uiModel';
+import { A2uiModel, A2uiTextDeltaListener } from './A2uiModel';
 
 interface ChatRequest {
   model: string;
@@ -153,7 +153,12 @@ export class OpenAiA2uiModel implements A2uiModel {
     this.decisionNotesEnabled = decisionNotesEnabled;
   }
 
-  async generate(userTask: string, surfaceId: string, conversation?: ConversationContext): Promise<string> {
+  async generate(
+    userTask: string,
+    surfaceId: string,
+    conversation?: ConversationContext,
+    onTextDelta?: A2uiTextDeltaListener
+  ): Promise<string> {
     if (!this.provider.isConfigured()) {
       throw new Error('LLM provider is not configured.');
     }
@@ -173,7 +178,7 @@ export class OpenAiA2uiModel implements A2uiModel {
       rawChunks.push(chunk);
       if (streamParseError === null) {
         try {
-          this.consumeSsePayloads(sseParser.feed(chunk), contentParts);
+          this.consumeSsePayloads(sseParser.feed(chunk), contentParts, onTextDelta);
         } catch (error) {
           streamParseError = new Error(this.describeThrown(error));
         }
@@ -202,8 +207,8 @@ export class OpenAiA2uiModel implements A2uiModel {
       }
       if (streamParseError === null) {
         try {
-          this.consumeSsePayloads(sseParser.feed(decoderTail), contentParts);
-          this.consumeSsePayloads(sseParser.finish(), contentParts);
+          this.consumeSsePayloads(sseParser.feed(decoderTail), contentParts, onTextDelta);
+          this.consumeSsePayloads(sseParser.finish(), contentParts, onTextDelta);
         } catch (error) {
           streamParseError = new Error(this.describeThrown(error));
         }
@@ -220,6 +225,9 @@ export class OpenAiA2uiModel implements A2uiModel {
       let content = contentParts.join('').trim();
       if (content.length === 0) {
         content = this.parseContent(body).trim();
+        if (content.length > 0 && onTextDelta !== undefined) {
+          onTextDelta(content);
+        }
       }
       aiLogInfoComplete('[A2uiLayoutRaw] surface=' + surfaceId, content);
       return content;
@@ -262,7 +270,11 @@ export class OpenAiA2uiModel implements A2uiModel {
     };
   }
 
-  private consumeSsePayloads(payloads: string[], contentParts: string[]): void {
+  private consumeSsePayloads(
+    payloads: string[],
+    contentParts: string[],
+    onTextDelta?: A2uiTextDeltaListener
+  ): void {
     for (let index = 0; index < payloads.length; index++) {
       const payload: string = payloads[index];
       if (payload.length === 0 || payload === '[DONE]') {
@@ -276,6 +288,9 @@ export class OpenAiA2uiModel implements A2uiModel {
       const deltaContent = choices[0].delta?.content;
       if (typeof deltaContent === 'string' && deltaContent.length > 0) {
         contentParts.push(deltaContent);
+        if (onTextDelta !== undefined) {
+          onTextDelta(deltaContent);
+        }
       }
     }
   }

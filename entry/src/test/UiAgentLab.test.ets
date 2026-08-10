@@ -36,9 +36,14 @@ import {
   buildUiAgentLabSnapshot,
   hydrateUiAgentLabMergedJsonl,
   hydrateUiAgentLabSnapshotForMergedLayout,
+  projectClosedUiAgentLabComponents,
+  UiAgentLabDecisionStreamGate,
   uiAgentLabDataJsonl,
+  uiAgentLabProgressWindowAvailable,
+  uiAgentLabRejectedLayoutJsonl,
   uiAgentLabLayoutDiagnosticText,
   uiAgentLabLayoutPrompt,
+  withUiAgentLabSurfaceStatus,
 } from '../main/ets/pages/A2uiHome/lab/UiAgentLabHarness';
 
 interface UiLabHydrationShop {
@@ -111,6 +116,20 @@ interface UiLabDashboardModel {
   heatmap: UiLabDashboardHeatmap;
 }
 
+interface UiLabProgressTestDynamicChildren {
+  path: string;
+  componentId: string;
+}
+
+interface UiLabProgressTestComponent {
+  id: string;
+  component: string;
+  child?: string;
+  children?: string[] | UiLabProgressTestDynamicChildren;
+  title?: string;
+  dataPath?: string;
+}
+
 function settings(): LocalModelSettings {
   return {
     provider: 'test-provider',
@@ -124,6 +143,104 @@ function settings(): LocalModelSettings {
 
 export default function uiAgentLabTest() {
   describe('uiAgentLab', () => {
+    it('projects only complete streamed branches and keeps the model order', 0, () => {
+      const components: UiLabProgressTestComponent[] = [
+        { id: 'root', component: 'SurfaceRoot', child: 'content' },
+        { id: 'content', component: 'Column', children: ['hero', 'metrics', 'activity'] },
+        { id: 'hero', component: 'HeroBanner', title: 'GitHub 概览' },
+        { id: 'metrics', component: 'MetricGrid', dataPath: '/results/0/data/metrics' }
+      ];
+      const projected = projectClosedUiAgentLabComponents(components);
+      expect(projected === null).assertFalse();
+      const records = projected as Record<string, Object>[];
+      expect(records.length).assertEqual(4);
+      expect(records.map((record: Record<string, Object>): Object => record['id']).join(','))
+        .assertEqual('root,content,hero,metrics');
+      expect(((records[1]['children'] as string[]).join(','))).assertEqual('hero,metrics');
+    });
+
+    it('waits for required single-child and List template edges', 0, () => {
+      const rootOnly: UiLabProgressTestComponent[] = [
+        { id: 'root', component: 'SurfaceRoot', child: 'content' }
+      ];
+      const dynamicChildren: UiLabProgressTestDynamicChildren = {
+        path: '/results/0/data/events',
+        componentId: 'event-template'
+      };
+      const components: UiLabProgressTestComponent[] = [
+        { id: 'root', component: 'SurfaceRoot', child: 'content' },
+        { id: 'content', component: 'Column', children: ['hero', 'items'] },
+        { id: 'hero', component: 'HeroBanner', title: 'GitHub 概览' },
+        { id: 'items', component: 'List', children: dynamicChildren }
+      ];
+      const missingRootChild = projectClosedUiAgentLabComponents(rootOnly);
+      const projectedWithoutList = projectClosedUiAgentLabComponents(components);
+      expect(missingRootChild === null).assertTrue();
+      expect(projectedWithoutList === null).assertFalse();
+      const records = projectedWithoutList as Record<string, Object>[];
+      expect(records.map((record: Record<string, Object>): Object => record['id']).join(','))
+        .assertEqual('root,content,hero');
+      expect((records[1]['children'] as string[]).join(',')).assertEqual('hero');
+    });
+
+    it('marks progressive surfaces non-ready without changing other envelopes', 0, () => {
+      const jsonl =
+        '{"version":"v0.9.1","createSurface":{"surfaceId":"surface-progress","root":"root","status":"ready"}}\n' +
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-progress","components":[]}}\n';
+      const progressive = withUiAgentLabSurfaceStatus(jsonl, 'surface-progress', 'calling_tool');
+      const lines = progressive.trim().split('\n');
+      const create = JSON.parse(lines[0]) as Record<string, Object>;
+      const body = create['createSurface'] as Record<string, Object>;
+      expect(body['status'] as string).assertEqual('calling_tool');
+      expect(lines[1]).assertEqual(jsonl.trim().split('\n')[1]);
+    });
+
+    it('uses a fixed progress window instead of resetting an active timer', 0, () => {
+      expect(uiAgentLabProgressWindowAvailable(-1)).assertTrue();
+      expect(uiAgentLabProgressWindowAvailable(0)).assertFalse();
+      expect(uiAgentLabProgressWindowAvailable(32)).assertFalse();
+    });
+
+    it('keeps a valid partial only for timeout and fails closed for a rejected final candidate', 0, () => {
+      const baseline = '{"createSurface":{"surfaceId":"surface-policy","status":"ready"}}\n';
+      const partial = '{"createSurface":{"surfaceId":"surface-policy","status":"calling_tool"}}\n';
+      const timedOut = uiAgentLabRejectedLayoutJsonl(null, partial, baseline, 'surface-policy');
+      const rejected = uiAgentLabRejectedLayoutJsonl('invalid-final', partial, baseline, 'surface-policy');
+      expect(timedOut.indexOf('"status":"ready"')).assertLarger(-1);
+      expect(rejected).assertEqual(baseline);
+    });
+
+    it('opens decision-note streaming only on exact standalone tag boundaries', 0, () => {
+      const valid = new UiAgentLabDecisionStreamGate();
+      expect(valid.feed('<ui_decision_')).assertEqual('');
+      expect(valid.feed('notes>\n摘要\n</ui_decision_notes>')).assertEqual('');
+      expect(valid.feed('\n{"version":')).assertEqual('{"version":');
+      expect(valid.feed('"v0.9.1"}')).assertEqual('"v0.9.1"}');
+      expect(valid.hasProtocolStarted()).assertTrue();
+      expect(valid.isInvalid()).assertFalse();
+
+      const badOpen = new UiAgentLabDecisionStreamGate();
+      badOpen.feed('prefix<ui_decision_notes>\n摘要\n</ui_decision_notes>\n{}');
+      expect(badOpen.isInvalid()).assertTrue();
+      const badClose = new UiAgentLabDecisionStreamGate();
+      badClose.feed('<ui_decision_notes>\n摘要</ui_decision_notes>\n{}');
+      expect(badClose.isInvalid()).assertTrue();
+    });
+
+    it('adds surface revision and lifecycle generation guards to ArkWeb pushes', 0, () => {
+      const surfaceJson = '{"surfaceId":"revision-surface","rootId":"root","components":[],' +
+        '"dataModelJson":"{}"}';
+      const first = uiAgentLabSurfaceScript(surfaceJson, 7, 3);
+      const second = uiAgentLabSurfaceScript(surfaceJson, 8, 3);
+      const html = createUiAgentLabHtmlShell();
+      expect(first === second).assertFalse();
+      expect(first).assertContain('\\u0072\\u0065\\u0076\\u0069\\u0073\\u0069\\u006f\\u006e');
+      expect(first).assertContain('\\u0067\\u0065\\u006e\\u0065\\u0072\\u0061\\u0074\\u0069\\u006f\\u006e');
+      expect(html).assertContain('var latestSurfaceGeneration=-1,latestSurfaceRevision=-1');
+      expect(html).assertContain('if(generation<latestSurfaceGeneration)return');
+      expect(html).assertContain('if(revision<=latestSurfaceRevision)return');
+    });
+
     it('builds one interactive HTML shell with the allowlisted bridge', 0, () => {
       const html = createUiAgentLabHtmlShell();
       expect(html).assertContain('UiAgentLabBridge.postMessage');
