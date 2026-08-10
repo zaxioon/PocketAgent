@@ -2550,7 +2550,10 @@ function githubRepositoriesOutputSchema(): Object {
     '"fullName":{"type":"string"},"url":{"type":"string"},"description":{"type":"string"},' +
     '"language":{"type":"string"},"stars":{"type":"number"},"forks":{"type":"number"},' +
     '"updatedAt":{"type":"string"},"pushedAt":{"type":"string"}}}},' +
-    '"metrics":{"type":"object"},"languages":{"type":"array"},"provenance":{"type":"object"}}}') as Object;
+    '"metrics":{"type":"object"},"languages":{"type":"array","items":{"type":"object",' +
+    '"required":["language","repositoryCount","ratio"],"properties":{' +
+    '"language":{"type":"string"},"repositoryCount":{"type":"number"},"ratio":{"type":"number"}}}},' +
+    '"provenance":{"type":"object"}}}') as Object;
 }
 
 function githubEventsOutputSchema(): Object {
@@ -2565,8 +2568,12 @@ export function githubUserDashboardOutputSchema(): Object {
   return JSON.parse('{"type":"object","required":["schemaVersion","username","partial","sections",' +
     '"limitations"],"properties":{"schemaVersion":{"type":"string"},"username":{"type":"string"},' +
     '"partial":{"type":"boolean"},"profile":{"type":"object"},"repositories":{"type":"array"},' +
-    '"repositoryMetrics":{"type":"object"},"languages":{"type":"array"},' +
-    '"recentActivity":{"type":"array"},"activityMetadata":{"type":"object"},' +
+    '"repositoryMetrics":{"type":"object"},"languages":{"type":"array","items":{"type":"object",' +
+    '"required":["language","repositoryCount","ratio"],"properties":{' +
+    '"language":{"type":"string"},"repositoryCount":{"type":"number"},"ratio":{"type":"number"}}}},' +
+    '"recentActivity":{"type":"array","items":{"type":"object",' +
+    '"required":["time","summary"],"properties":{' +
+    '"time":{"type":"string"},"summary":{"type":"string"}}}},' +
     '"sections":{"type":"array"},"limitations":{"type":"array","items":{"type":"string"}}}}') as Object;
 }
 
@@ -2665,7 +2672,7 @@ function normalizedGitHubRepository(value: Object): Object | null {
   repository['name'] = name;
   repository['url'] = url;
   putGitHubText(repository, 'fullName', githubText(source, ['full_name', 'fullName']));
-  putGitHubText(repository, 'description', githubText(source, ['description']));
+  repository['description'] = githubText(source, ['description']);
   putGitHubText(repository, 'language', githubText(source, ['language']));
   putGitHubText(repository, 'visibility', githubText(source, ['visibility']));
   putGitHubText(repository, 'updatedAt', githubText(source, ['updated_at', 'updatedAt']));
@@ -2702,19 +2709,24 @@ function githubRepositoriesData(providerData: Object, username: string, provenan
   );
   let stars = 0;
   let forks = 0;
+  let languageRepositoryCount = 0;
   const languageCounts: Map<string, number> = new Map();
   repositories.forEach((repository: Object) => {
     const record = githubRecord(repository);
     stars += githubNumber(record, ['stars']) ?? 0;
     forks += githubNumber(record, ['forks']) ?? 0;
     const language = githubText(record, ['language']);
-    if (language.length > 0) languageCounts.set(language, (languageCounts.get(language) ?? 0) + 1);
+    if (language.length > 0) {
+      languageCounts.set(language, (languageCounts.get(language) ?? 0) + 1);
+      languageRepositoryCount++;
+    }
   });
   const languages: Object[] = [];
   languageCounts.forEach((count: number, language: string) => {
     const metric = emptyGitHubRecord();
     metric['language'] = language;
     metric['repositoryCount'] = count;
+    metric['ratio'] = count / languageRepositoryCount;
     languages.push(metric as Object);
   });
   languages.sort((left: Object, right: Object): number => {
@@ -3055,8 +3067,18 @@ async function callComposioGitHubTargetWithClient(
     successfulSections++;
   }
   if (sections[2].ok && events !== null) {
-    dashboard['recentActivity'] = events['recentActivity'];
-    dashboard['activityMetadata'] = events['activityMetadata'];
+    const recentActivity = events['recentActivity'];
+    const dashboardActivity: Object[] = [];
+    if (Array.isArray(recentActivity)) {
+      recentActivity.forEach((item: Object) => {
+        const event = githubRecord(item);
+        const activity = emptyGitHubRecord();
+        activity['time'] = githubText(event, ['occurredAt']);
+        activity['summary'] = githubText(event, ['summary', 'title']);
+        dashboardActivity.push(activity as Object);
+      });
+    }
+    dashboard['recentActivity'] = dashboardActivity as Object;
     successfulSections++;
   }
   const failedSections = specs.length - successfulSections;

@@ -803,7 +803,6 @@ export function createUiAgentLabHtmlShell(): string {
         var output=node('div','lab-text');
         if(!direct&&title&&body){output.appendChild(node('span','lab-text-title',title));output.appendChild(node('span','lab-text-body',body));return output;}
         output.textContent=copy;return output;
-        output.textContent=copy;return output;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.InfoRows=function(component,context){
         var wrapper=card(component.title,'','info-card'),rows=node('div','info-rows');

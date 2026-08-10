@@ -64,7 +64,7 @@ interface ComponentWireSchema {
 
 const LAB_COMPONENT_NAMES: string[] = [
   'SurfaceRoot', 'Column', 'Row', 'Text', 'InfoRows', 'ActionBar', 'ErrorNotice',
-  'ThinkingStream', 'ThinkingCard', 'ScheduleStack', 'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs',
+  'ThinkingCard', 'ScheduleStack', 'SkeletonCard', 'ExpandableCard', 'MediaSlider', 'SceneTabs',
   'MasonryGrid', 'List',
   'HeroBanner', 'MetricGrid', 'SegmentedRingChart', 'MultiSeriesLineChart', 'MatrixHeatmap'
 ];
@@ -145,6 +145,7 @@ export default function a2uiLayoutMergerTest() {
       expect(prompt.includes('REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS')).assertFalse();
       expect(prompt.includes('For repeated array items')).assertTrue();
       expect(prompt.includes('official A2UI v0.9 List shape')).assertTrue();
+      expect(prompt.includes('"name":"ThinkingStream"')).assertFalse();
       expect(prompt.includes('compact Text template bound only to that field')).assertTrue();
       expect(prompt.includes('Use List for repeated named entities')).assertTrue();
       expect(prompt.includes('use ExpandableCard direct rows')).assertTrue();
@@ -278,9 +279,9 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(BASELINE, LAB_CANDIDATE, SURFACE_ID, [])).assertEqual(BASELINE);
     });
 
-    it('keeps the UI Lab allowlist fixed while retaining baseline ThinkingStream', 0, () => {
+    it('keeps the UI Lab allowlist fixed and excludes renderer-only ThinkingStream', 0, () => {
       const catalog = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as ComponentCatalogEntry[];
-      expect(catalog.length).assertEqual(21);
+      expect(catalog.length).assertEqual(20);
       for (let index = 0; index < LAB_COMPONENT_NAMES.length; index++) {
         expect(catalog[index].name).assertEqual(LAB_COMPONENT_NAMES[index]);
       }
@@ -290,8 +291,8 @@ export default function a2uiLayoutMergerTest() {
         if (catalog[index].name === 'HeroBanner') heroUsage = catalog[index].usage;
       }
       const infoRowsUsage = catalog[4].usage;
-      const expandableUsage = catalog[11].usage;
-      const listUsage = catalog[15].usage;
+      const expandableUsage = catalog[10].usage;
+      const listUsage = catalog[14].usage;
       expect(infoRowsUsage.includes('dataPath 指向普通对象时必须省略')).assertTrue();
       expect(infoRowsUsage.includes('renderer 会把对象自身的真实字段名和值逐项转成 rows')).assertTrue();
       expect(infoRowsUsage.includes('禁止虚构 /key、/value')).assertTrue();
@@ -317,14 +318,14 @@ export default function a2uiLayoutMergerTest() {
       expect(heroUsage.includes('Column.children[0]')).assertTrue();
       expect(heroUsage.includes('不得让 root 只连接 HeroBanner 而留下孤立组件')).assertTrue();
       expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes('"name":"BentoGrid"')).assertFalse();
-      expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes('"name":"ThinkingStream"')).assertTrue();
-      const metric = catalog[17].schema;
+      expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes('"name":"ThinkingStream"')).assertFalse();
+      const metric = catalog[16].schema;
       const infoRows = catalog[4].schema;
-      const expandable = catalog[11].schema;
-      const list = catalog[15].schema;
+      const expandable = catalog[10].schema;
+      const list = catalog[14].schema;
       const metricItems = metric.fields['items'];
       const metricItemFields = metricItems.items?.fields;
-      const ringSegments = catalog[18].schema.fields['segments'];
+      const ringSegments = catalog[17].schema.fields['segments'];
       const ringItemFields = ringSegments.items?.fields;
       expect(metric.requireAny?.[0].join(',')).assertEqual('dataPath,items');
       expect(metric.exactlyOne?.[0].join(',')).assertEqual('dataPath,items');
@@ -349,21 +350,21 @@ export default function a2uiLayoutMergerTest() {
       expect(list.fields['title'].valuePolicy).assertEqual('literal-or-path');
       expect(ringItemFields?.['label'].valuePolicy).assertEqual('literal-or-path');
       expect(ringItemFields?.['value'].valuePolicy).assertEqual('path-only');
-      expect(catalog[18].schema.fields['labelPath'].valuePolicy).assertEqual('literal');
-      expect(catalog[18].schema.fields['valuePath'].valuePolicy).assertEqual('literal');
-      expect(catalog[18].usage.includes('已验证的占比、ratio 或类别构成信息')).assertTrue();
-      expect(catalog[18].usage.includes('单类别可显示 100% 环图')).assertTrue();
-      expect(catalog[18].usage.includes('通常 1-8 个类别的可读性最佳')).assertTrue();
-      expect(catalog[18].usage.includes('完整展开源数组')).assertTrue();
-      expect(catalog[18].usage.includes('direct segments 不是 List 或重复模板')).assertTrue();
-      expect(catalog[18].usage.includes('dataPath 指向类别对象数组')).assertTrue();
-      expect(catalog[18].usage.includes('每个 direct segment 的 label 与 value 必须对应同一源项')).assertTrue();
-      expect(catalog[18].usage.includes('各 value path 互不重复')).assertTrue();
-      expect(catalog[18].usage.includes('禁止只写 index 0 后期待 renderer 自动展开')).assertTrue();
-      expect(catalog[18].usage.includes('超过 8 个类别时仍必须传入完整数据')).assertTrue();
-      expect(catalog[18].usage.includes('UI Agent 不得自行计算、合并或截断')).assertTrue();
-      expect(catalog[18].usage.includes('renderer 会保留前 8 项并把其余项求和显示为固定的“其他”')).assertTrue();
-      expect(catalog[18].schema.exactlyOne?.[0].join(',')).assertEqual('dataPath,segments');
+      expect(catalog[17].schema.fields['labelPath'].valuePolicy).assertEqual('literal');
+      expect(catalog[17].schema.fields['valuePath'].valuePolicy).assertEqual('literal');
+      expect(catalog[17].usage.includes('已验证的占比、ratio 或类别构成信息')).assertTrue();
+      expect(catalog[17].usage.includes('单类别可显示 100% 环图')).assertTrue();
+      expect(catalog[17].usage.includes('通常 1-8 个类别的可读性最佳')).assertTrue();
+      expect(catalog[17].usage.includes('完整展开源数组')).assertTrue();
+      expect(catalog[17].usage.includes('direct segments 不是 List 或重复模板')).assertTrue();
+      expect(catalog[17].usage.includes('dataPath 指向类别对象数组')).assertTrue();
+      expect(catalog[17].usage.includes('每个 direct segment 的 label 与 value 必须对应同一源项')).assertTrue();
+      expect(catalog[17].usage.includes('各 value path 互不重复')).assertTrue();
+      expect(catalog[17].usage.includes('禁止只写 index 0 后期待 renderer 自动展开')).assertTrue();
+      expect(catalog[17].usage.includes('超过 8 个类别时仍必须传入完整数据')).assertTrue();
+      expect(catalog[17].usage.includes('UI Agent 不得自行计算、合并或截断')).assertTrue();
+      expect(catalog[17].usage.includes('renderer 会保留前 8 项并把其余项求和显示为固定的“其他”')).assertTrue();
+      expect(catalog[17].schema.exactlyOne?.[0].join(',')).assertEqual('dataPath,segments');
 
       const thinkingCandidate =
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
@@ -371,15 +372,17 @@ export default function a2uiLayoutMergerTest() {
         '{"id":"content","component":"Column","children":["hero","thinking"]},' +
         '{"id":"hero","component":"HeroBanner","title":"Verified"},' +
         '{"id":"thinking","component":"ThinkingStream","dataPath":"/genericToolResults"}]}}';
-      const thinkingAccepted = mergeA2uiLayoutWithStatus(
+      const thinkingRejected = mergeA2uiLayoutWithStatus(
         BASELINE, thinkingCandidate, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       );
-      expect(thinkingAccepted.accepted).assertTrue();
+      expect(thinkingRejected.accepted).assertFalse();
+      expect(thinkingRejected.diagnostic?.componentId).assertEqual('thinking');
+      expect(thinkingRejected.diagnostic?.rule).assertEqual('component_not_allowed');
       expect(UI_AGENT_LAB_COMPONENT_CATALOG_JSON.includes(
         '"segments":{"type":"array","valuePolicy":"literal","minItems":1,"maxItems"'
       )).assertFalse();
       expect(ringSegments.maxItems === undefined).assertTrue();
-      for (let index = 16; index < LAB_COMPONENT_NAMES.length; index++) {
+      for (let index = 15; index < LAB_COMPONENT_NAMES.length; index++) {
         expect(AIPHONE_COMPONENT_CATALOG_JSON.includes('"name":"' + LAB_COMPONENT_NAMES[index] + '"')).assertFalse();
       }
       expect(mergeA2uiLayout(

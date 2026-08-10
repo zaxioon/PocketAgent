@@ -29,7 +29,6 @@ const UI_AGENT_LAB_COMPONENT_CATALOG_BASE_JSON: string =
     '{"name":"InfoRows","role":"内容组件","usage":"展示单个事实表或已经整理好的 label/value 信息行；支持两种数据形态：dataPath 指向普通对象时必须省略 labelPath、valuePath、timePath，renderer 会把对象自身的真实字段名和值逐项转成 rows，禁止虚构 /key、/value；dataPath 指向对象数组时才可同时提供以 / 开头、相对于每个数组 item 的 labelPath 与 valuePath，renderer 会逐项展开为 label/value 行，可选 timePath 同样相对于 item，所有 mapping path 必须是 item 中真实存在的字段；也兼容 legacy dataPath 直接绑定 Array<{label,value,time?}>；任一 mapping path 出现时 labelPath/valuePath 必须成对；labelPath 必须为每个 item 解析出 string；valuePath/timePath 允许个别 item 缺失或为 null，缺失或空 value 由 renderer 显示 —；存在的 value 必须是 primitive，存在的 time 必须是 string，非空数组至少一个 item 必须有 primitive value；重复的具名实体应使用 List；title 只能由 direct title field 提供；不使用 children"},' +
     '{"name":"ActionBar","role":"交互组件","usage":"展示一组操作，按钮及其可见 label 只能来自 actions 中已提供的 offerId，renderer 不得内置操作文案；不使用 child、children 或 dataPath"},' +
     '{"name":"ErrorNotice","role":"状态组件","usage":"展示需要阅读、重试或修改输入的错误；全部可见标题和正文必须由 direct title、body fields 或 legacy dataPath 动态提供，可选 actions 必须引用已提供的 offerId"},' +
-    '{"name":"ThinkingStream","role":"状态组件","usage":"展示渐进事件列表，全部可见内容必须用 dataPath 绑定 Array<{id,title,detail,status}> 动态提供；可见 title 只能由 direct title field 提供，不使用 children 或 actions"},' +
     '{"name":"ThinkingCard","role":"状态组件","usage":"展示结构生成中的摘要、进度与事件；全部可见内容必须由 direct title、body、status fields 或 legacy dataPath 绑定 {label,progress,events} 动态提供；不承载业务 actions"},' +
     '{"name":"ScheduleStack","role":"复合内容组件","usage":"展示多日或多段日程卡，全部可见日期、标题、条目和指标必须用 dataPath 绑定 Array<{id,label,title,entries,metric?,tone?}> 动态提供；renderer 不得内置行程文案，不使用 children"},' +
     '{"name":"SkeletonCard","role":"局部加载组件","usage":"仅在最终布局已经确定且局部数据未返回时使用，status 必须为 loading；如有可见标题只能由 direct title field 提供；不使用 children、dataPath 或 actions"},' +
@@ -111,8 +110,6 @@ const UI_AGENT_LAB_COMPONENT_SCHEMAS_JSON: string =
     '"ErrorNotice":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',"body":' +
       LAB_LITERAL_OR_PATH_STRING + ',' + LAB_DATA_PATH_FIELD + ',' + LAB_ACTIONS_FIELD +
       ',"status":' + LAB_LITERAL_STRING + ',"tone":' + LAB_LITERAL_STRING) + ',' +
-    '"ThinkingStream":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',' +
-      LAB_DATA_PATH_FIELD) + ',' +
     '"ThinkingCard":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',"body":' +
       LAB_LITERAL_OR_PATH_STRING + ',"status":' + LAB_LITERAL_STRING + ',' + LAB_DATA_PATH_FIELD) + ',' +
     '"ScheduleStack":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',' + LAB_DATA_PATH_FIELD) + ',' +

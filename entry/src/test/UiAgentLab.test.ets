@@ -359,12 +359,12 @@ export default function uiAgentLabTest() {
       const entries = JSON.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON) as
         Record<string, Object | string>[];
       const names = entries.map((entry: Record<string, Object | string>): string => entry['name'] as string);
-      expect(names.length).assertEqual(21);
+      expect(names.length).assertEqual(20);
       expect(names.indexOf('InfoRows') >= 0).assertTrue();
       expect(names.indexOf('List') >= 0).assertTrue();
       expect(names.indexOf('ExpandableCard') >= 0).assertTrue();
       expect(names.indexOf('SegmentedRingChart') >= 0).assertTrue();
-      expect(names.indexOf('ThinkingStream') >= 0).assertTrue();
+      expect(names.indexOf('ThinkingStream')).assertEqual(-1);
     });
 
     it('formats bounded layout rejection diagnostics for the visible status area', 0, () => {
@@ -578,8 +578,8 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MultiSeriesLineChart=');
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.MatrixHeatmap=');
       expect(html).assertContain("document.createElementNS('http://www.w3.org/2000/svg',tag)");
-      expect(html).assertContain("var SEGMENTED_RING_PALETTE=['#ece6df','#dce9ff','#b7cbff','#89a7ff','#6384ef','#4665cf']");
-      expect(html).assertContain("var HEATMAP_PALETTE=['#dfe3e8'");
+      expect(html).assertContain("function segmentedRingPalette(){return [1,2,3,4,5,6].map(function(index){return cssColor('--chart-'+String(index));});}");
+      expect(html).assertContain("function heatmapPalette(){return [1,2,3,4,5,6].map(function(index){return cssColor('--chart-'+String(index));});}");
       expect(html).assertContain("if(copy.endsWith('.0'))copy=copy.slice(0,-2)");
       expect(html).assertContain("function formattedBytes(value)");
       expect(html).assertContain("units=['B','KB','MB','GB','TB']");
@@ -600,15 +600,15 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("parent.setAttribute('aria-label',fields.ariaLabel)");
       expect(html).assertContain("left.value-right.value||left.index-right.index");
       expect(html).assertContain("segments[entry.index].renderColor=chartColorAtRank(rank,ranked.length)");
-      expect(html).assertContain("var SEGMENTED_RING_OTHER_COLOR='#d9dde3'");
+      expect(html).assertContain('--chart-track:');
       expect(html).assertContain("if(segments.length>8){var otherValue=segments.slice(8).reduce");
       expect(html).assertContain("segments=segments.slice(0,8);segments.push({label:'其他'");
-      expect(html).assertContain("renderColor:SEGMENTED_RING_OTHER_COLOR,neutral:true");
+      expect(html).assertContain("renderColor:cssColor('--chart-1'),neutral:true");
       expect(html).assertContain("filter(function(entry){return !entry.neutral;})");
       expect(html.indexOf('total+=field.value')).assertLess(html.indexOf('if(segments.length>8)'));
       expect(html.indexOf('ranks.indexOf(segment.field.value)')).assertEqual(-1);
-      expect(html).assertContain("var SEGMENTED_RING_STROKE_WIDTH=7,SEGMENTED_RING_GAP_LENGTH=2.5");
-      expect(html).assertContain("track.setAttribute('stroke','#f4f1ec')");
+      expect(html).assertContain("function cssColor(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim();}");
+      expect(html).assertContain("track.setAttribute('stroke',cssColor('--chart-track'))");
       expect(html).assertContain("track.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH))");
       expect(html).assertContain("arc.setAttribute('stroke-width',String(SEGMENTED_RING_STROKE_WIDTH))");
       expect(html).assertContain('visibleArcLength=segments.length===1?circumference:Math.max(0,arcLength-SEGMENTED_RING_GAP_LENGTH)');
@@ -628,7 +628,7 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("node('small','metric-unit',unit)");
       expect(html).assertContain("nonEmptyText(source.deltaLabel");
       expect(html).assertContain("metric-delta'+(deltaValue");
-      expect(html).assertContain("cell.style.background=HEATMAP_PALETTE[level]");
+      expect(html).assertContain('cell.style.background=heatPalette[level]');
       expect(html).assertContain("grid.setAttribute('role','grid')");
       expect(html).assertContain("cell.setAttribute('role','gridcell')");
       expect(html).assertContain("cell.setAttribute('aria-label',cellLabel)");
