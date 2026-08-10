@@ -1,6 +1,8 @@
 import http from '@ohos.net.http';
+import util from '@ohos.util';
 import { ChatMessage, ConversationContext } from '../agent/ConversationContext';
 import { LlmProvider } from '../model/LlmProvider';
+import { ChatCompletionSseParser } from '../model/ChatCompletionSseParser';
 import { AIPHONE_COMPONENT_CATALOG_JSON } from '../aiphone/runtime/A2uiComponentCatalogConst';
 import { aiLogInfoComplete } from '../aiphone/runtime/AiphoneLogger';
 import { A2UI_VERSION } from './A2uiProtocol';
@@ -10,6 +12,7 @@ interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   temperature: number;
+  stream: boolean;
 }
 
 interface ChatChoice {
@@ -18,6 +21,18 @@ interface ChatChoice {
 
 interface ChatResponse {
   choices?: ChatChoice[];
+}
+
+interface ChatDelta {
+  content?: string | null;
+}
+
+interface ChatStreamChoice {
+  delta?: ChatDelta;
+}
+
+interface ChatStreamResponse {
+  choices?: ChatStreamChoice[];
 }
 
 export function buildA2uiLayoutSystemPrompt(
@@ -144,29 +159,70 @@ export class OpenAiA2uiModel implements A2uiModel {
     }
 
     const httpRequest = http.createHttp();
+    const decoder = util.TextDecoder.create('utf-8');
+    const sseParser = new ChatCompletionSseParser();
+    const rawChunks: string[] = [];
+    const contentParts: string[] = [];
+    let streamParseError: Error | null = null;
+    let streamEndResolve: () => void = () => {};
+    const streamEnd = new Promise<void>((resolve: () => void) => {
+      streamEndResolve = resolve;
+    });
+    httpRequest.on('dataReceive', (data: ArrayBuffer) => {
+      const chunk = decoder.decodeToString(new Uint8Array(data), { stream: true });
+      rawChunks.push(chunk);
+      if (streamParseError === null) {
+        try {
+          this.consumeSsePayloads(sseParser.feed(chunk), contentParts);
+        } catch (error) {
+          streamParseError = new Error(this.describeThrown(error));
+        }
+      }
+    });
+    httpRequest.on('dataEnd', () => {
+      streamEndResolve();
+    });
     try {
-      const response = await httpRequest.request(this.provider.chatCompletionsUrl(), {
+      const statusCode = await httpRequest.requestInStream(this.provider.chatCompletionsUrl(), {
         method: http.RequestMethod.POST,
         header: {
           'Authorization': `Bearer ${this.provider.apiKey}`,
           'Content-Type': 'application/json; charset=utf-8',
-          'Accept': 'application/json'
+          'Accept': 'text/event-stream'
         },
         extraData: JSON.stringify(this.buildRequest(userTask, surfaceId, conversation)),
-        expectDataType: http.HttpDataType.STRING,
         connectTimeout: 20000,
         readTimeout: 120000
       });
+      streamEndResolve();
+      await streamEnd;
+      const decoderTail: string = decoder.decodeToString(new Uint8Array(0), { stream: false });
+      if (decoderTail.length > 0) {
+        rawChunks.push(decoderTail);
+      }
+      if (streamParseError === null) {
+        try {
+          this.consumeSsePayloads(sseParser.feed(decoderTail), contentParts);
+          this.consumeSsePayloads(sseParser.finish(), contentParts);
+        } catch (error) {
+          streamParseError = new Error(this.describeThrown(error));
+        }
+      }
 
-      const statusCode = response.responseCode;
-      const body = `${response.result ?? ''}`;
+      const body = rawChunks.join('');
       if (statusCode < 200 || statusCode >= 300) {
         throw new Error(`LLM request failed with HTTP ${statusCode}: ${body}`);
       }
+      if (streamParseError !== null) {
+        throw streamParseError;
+      }
 
-      const content = this.parseContent(body);
+      let content = contentParts.join('').trim();
+      if (content.length === 0) {
+        content = this.parseContent(body).trim();
+      }
       aiLogInfoComplete('[A2uiLayoutRaw] surface=' + surfaceId, content);
-      return content.trim();
+      return content;
     } catch (error) {
       const message = error instanceof Error ? error.message : `${error}`;
       throw new Error(`A2UI LLM request failed: ${message}`);
@@ -201,11 +257,64 @@ export class OpenAiA2uiModel implements A2uiModel {
     return {
       model: this.provider.model,
       messages,
-      temperature: 0.2
+      temperature: 0.2,
+      stream: true
     };
   }
 
+  private consumeSsePayloads(payloads: string[], contentParts: string[]): void {
+    for (let index = 0; index < payloads.length; index++) {
+      const payload: string = payloads[index];
+      if (payload.length === 0 || payload === '[DONE]') {
+        continue;
+      }
+      const event = JSON.parse(payload) as ChatStreamResponse;
+      const choices = event.choices;
+      if (choices === undefined || choices.length === 0 || choices[0].delta === undefined) {
+        continue;
+      }
+      const deltaContent = choices[0].delta?.content;
+      if (typeof deltaContent === 'string' && deltaContent.length > 0) {
+        contentParts.push(deltaContent);
+      }
+    }
+  }
+
+  private describeThrown(error: Error | Object | string | number | boolean | null | undefined): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    if (error === undefined || error === null) {
+      return `${error}`;
+    }
+    try {
+      const json = JSON.stringify(error);
+      if (json !== undefined && json.length > 0 && json !== '{}') {
+        return json;
+      }
+    } catch (_jsonError) {
+    }
+    return `${error}`;
+  }
+
   private parseContent(body: string): string {
+    const trimmed = body.trim();
+    if (trimmed.startsWith('{')) {
+      return this.parseJsonContent(trimmed);
+    }
+
+    const contentParts: string[] = [];
+    const parser = new ChatCompletionSseParser();
+    this.consumeSsePayloads(parser.feed(body), contentParts);
+    this.consumeSsePayloads(parser.finish(), contentParts);
+    const content = contentParts.join('');
+    if (content.length === 0) {
+      throw new Error('No streaming message content returned.');
+    }
+    return content;
+  }
+
+  private parseJsonContent(body: string): string {
     const json = JSON.parse(body) as ChatResponse;
     const choices = json.choices;
     if (choices === undefined || choices.length === 0) {
