@@ -831,7 +831,7 @@ export struct ConfigPage {
           .margin({ bottom: 14 })
 
           this.InputLabel('Model', 0)
-          TextInput({ text: this.selectedModel, placeholder: 'qwen-max' })
+          TextInput({ text: this.selectedModel, placeholder: 'deepseek-v4-flash' })
             .height(42)
             .fontSize(13)
             .fontColor(COLOR_TEXT)

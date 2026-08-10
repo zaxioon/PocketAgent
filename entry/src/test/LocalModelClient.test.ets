@@ -23,12 +23,12 @@ export default function localModelClientTest() {
       expect(debug.indexOf('"historyTurns":3')).assertLarger(-1);
     });
 
-    it('defaults to DashScope qwen-max and reads its local rawfile key', 0, () => {
+    it('defaults to DashScope deepseek-v4-flash and reads its local rawfile key', 0, () => {
       configureLocalModelSettingsFromRawJson('{"DASHSCOPE_API_KEY":"test-key"}');
       const settings = defaultLocalModelSettings();
       expect(settings.provider).assertEqual('DashScope');
       expect(settings.baseUrl).assertEqual('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions');
-      expect(settings.model).assertEqual('qwen-max');
+      expect(settings.model).assertEqual('deepseek-v4-flash');
       expect(settings.apiKey).assertEqual('test-key');
       expect(settings.customParametersJson).assertEqual('{"enable_thinking":false}');
       expect(settings.ignoreToolSurfaceUpdates).assertFalse();

@@ -17,8 +17,8 @@ Appless 的默认原则很简单：缺少本地模型、provider key、设备权
 默认模型设置：
 
 ```text
-Base URL: http://127.0.0.1:11434
-Model: Qwen3-8B
+Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+Model: deepseek-v4-flash
 ```
 
 进入 app 设置页，点击连接测试。如果使用 OpenAI-compatible 云端端点，在同一页填写模型、Base URL、API key 和必要的自定义 JSON 参数。

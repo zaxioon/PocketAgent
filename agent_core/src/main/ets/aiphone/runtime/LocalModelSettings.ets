@@ -13,7 +13,7 @@ interface LocalModelRawConfig {
 
 const DEFAULT_PROVIDER: string = 'DashScope';
 const DEFAULT_BASE_URL: string = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
-const DEFAULT_MODEL: string = 'qwen-max';
+const DEFAULT_MODEL: string = 'deepseek-v4-flash';
 const DEFAULT_CUSTOM_PARAMETERS_JSON: string = '{"enable_thinking":false}';
 
 let dashScopeApiKey: string = '';
