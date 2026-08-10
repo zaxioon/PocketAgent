@@ -1918,6 +1918,7 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(prompt.indexOf('public X/Twitter posts')).assertLarger(-1);
       expect(prompt.indexOf('mailbox/email/inbox')).assertLarger(-1);
       expect(prompt.indexOf('Composio-backed app/toolkit')).assertLarger(-1);
+      expect(prompt.indexOf('github.user.dashboard')).assertEqual(-1);
       expect(prompt.indexOf('Video selection contract')).assertLarger(-1);
       expect(prompt.indexOf('Explicit Google Maps/Google Places/GMap/谷歌地图 requests use exactly maps.place.search'))
         .assertLarger(-1);
@@ -1940,6 +1941,25 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(catalogEnd - catalogStart).assertLess(64001);
       expect(prompt.length).assertLess(100001);
       expect(model.prompts.length).assertEqual(1);
+      runtime.dispose();
+    });
+
+    it('exposes trusted GitHub operation targets only for an authorized host profile', 0, async () => {
+      const model = new QueueModel([ANSWER_DECISION]);
+      const options = canaryOptions(
+        model,
+        new CanaryHotelExecutor(),
+        new RecordingOpener(),
+        [],
+        []
+      );
+      options.allowTrustedOperationTargets = true;
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      await runtime.submit('为 GitHub 用户 sindresorhus 生成数据看板', { text: '' });
+
+      expect(model.prompts[0].indexOf('github.user.dashboard')).assertLarger(-1);
+      expect(model.prompts[0].indexOf('operationTarget')).assertLarger(-1);
       runtime.dispose();
     });
 

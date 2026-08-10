@@ -203,6 +203,8 @@ export interface MultiAgentCanaryOptions {
     args: Object,
     onPartial?: (result: DataResult) => void
   ) => Promise<DataResult>;
+  /** Host-only planning capability. UI Lab enables trusted operationTarget values; Home keeps this disabled. */
+  allowTrustedOperationTargets?: boolean;
   bus?: LinkedMessageBus;
   conversationId?: string;
 }
@@ -1439,7 +1441,11 @@ function isLuckinOrderToolVisible(toolId: string, prompt: string): boolean {
   return true;
 }
 
-function canaryPlanningContext(previousPersonaId: string, prompt: string = ''): LeaderPlanningContext {
+function canaryPlanningContext(
+  previousPersonaId: string,
+  prompt: string = '',
+  allowTrustedOperationTargets: boolean = false
+): LeaderPlanningContext {
   const tools: LeaderToolMetadata[] = allToolDefinitions()
     .filter((definition: ToolDefinition): boolean =>
       definition.toolId !== 'gmail.message.send' &&
@@ -1462,7 +1468,7 @@ function canaryPlanningContext(previousPersonaId: string, prompt: string = ''): 
         inputSchema: definition.inputSchema,
         outputSchema: definition.outputSchema,
         actions,
-        planningHint: toolPlanningDescriptionForToolId(definition.toolId)
+        planningHint: toolPlanningDescriptionForToolId(definition.toolId, allowTrustedOperationTargets)
       };
     }
   );
@@ -1476,7 +1482,7 @@ function canaryPlanningContext(previousPersonaId: string, prompt: string = ''): 
     inputSchema: 'dynamicToolSearchQuery',
     outputSchema: 'dynamicToolConnect',
     actions: [],
-    planningHint: toolPlanningDescriptionForToolId('dynamic.search')
+    planningHint: toolPlanningDescriptionForToolId('dynamic.search', allowTrustedOperationTargets)
   });
   tools.push({
     toolId: memory.toolId,
@@ -1656,7 +1662,10 @@ export class MultiAgentCanaryRuntime {
       mailDetailBridge
     );
     this.aiphoneExecutor = aiphoneExecutor;
-    const initialContext = canaryPlanningContext(this.lastLeaderPersonaId);
+    const allowTrustedOperationTargets = options.allowTrustedOperationTargets === true;
+    const initialContext = canaryPlanningContext(
+      this.lastLeaderPersonaId, '', allowTrustedOperationTargets
+    );
     const dataTaskInputNormalizer: LeaderDataTaskInputNormalizer = (
       input: InputUserPayload,
       task: LeaderDecisionDataTask,
@@ -1674,7 +1683,7 @@ export class MultiAgentCanaryRuntime {
         leaderPlanner : new BimGatedLeaderPlanner(leaderPlanner, options.turnGate),
       planningContext: initialContext,
       planningContextProvider: (prompt: string): LeaderPlanningContext =>
-        canaryPlanningContext(this.lastLeaderPersonaId, prompt),
+        canaryPlanningContext(this.lastLeaderPersonaId, prompt, allowTrustedOperationTargets),
       currentLocalDateProvider: options.currentLocalDate,
       dataTaskInputNormalizer,
       dataAuthorizer: authorizeCanaryDataTask,
