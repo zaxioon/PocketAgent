@@ -15,6 +15,11 @@ import {
   uiAgentLabSurfaceScript,
   uiAgentLabStatusScript
 } from './lab/UiAgentLabHtml';
+import {
+  UiAgentLabTheme,
+  uiAgentLabThemeForToggle,
+  uiAgentLabThemeScript
+} from './lab/UiAgentLabTheme';
 
 type UiAgentLabBridgeValue = Object | string | number | boolean | null | undefined;
 type UiAgentLabBridgeMessage = Record<string, UiAgentLabBridgeValue>;
@@ -25,6 +30,7 @@ class UiAgentLabBridge {
   onAction: (componentId: string, actionIndex: number) => void =
     (_componentId: string, _actionIndex: number): void => {};
   onToggleDecisionNotes: (enabled: boolean) => void = (_enabled: boolean): void => {};
+  onToggleTheme: (enabled: boolean) => void = (_enabled: boolean): void => {};
 
   postMessage(raw: string): void {
     try {
@@ -57,6 +63,11 @@ class UiAgentLabBridge {
       if (keys === 'enabled,type' && parsed['type'] === 'toggleDecisionNotes' &&
         typeof parsed['enabled'] === 'boolean') {
         this.onToggleDecisionNotes(parsed['enabled'] as boolean);
+        return;
+      }
+      if (keys === 'enabled,type' && parsed['type'] === 'toggleTheme' &&
+        typeof parsed['enabled'] === 'boolean') {
+        this.onToggleTheme(parsed['enabled'] as boolean);
       }
     } catch (_error) {
     }
@@ -77,6 +88,7 @@ struct UiAgentLab {
   private shellReady: boolean = false;
   private busy: boolean = false;
   private decisionNotesEnabled: boolean = false;
+  private theme: UiAgentLabTheme = 'warm';
   private generation: number = 0;
   private pendingSurfaceJson: string = '';
   private nextSurfaceRevision: number = 0;
@@ -97,6 +109,7 @@ struct UiAgentLab {
   aboutToAppear(): void {
     this.settings = uiLabModelSettings();
     this.decisionNotesEnabled = false;
+    this.theme = 'warm';
     this.pendingDecision = { enabled: false, text: '' };
     const lifecycleGeneration = this.generation;
     this.harness = new UiAgentLabHarness(this.settings, (event: UiAgentLabSurfaceEvent): void => {
@@ -118,6 +131,9 @@ struct UiAgentLab {
     this.bridge.onToggleDecisionNotes = (enabled: boolean): void => {
       this.toggleDecisionNotes(enabled);
     };
+    this.bridge.onToggleTheme = (enabled: boolean): void => {
+      this.toggleTheme(enabled);
+    };
     aiLogInfo('[AIPhone][UiAgentLabAppear] model=' + this.settings.model +
       ' baseUrlChars=' + this.settings.baseUrl.length.toString());
   }
@@ -133,6 +149,7 @@ struct UiAgentLab {
     this.shellReady = false;
     this.busy = false;
     this.decisionNotesEnabled = false;
+    this.theme = 'warm';
     this.pendingDecision = { enabled: false, text: '' };
     this.pendingSurfaceJson = '';
     this.pendingSurfaceRevision = 0;
@@ -146,6 +163,7 @@ struct UiAgentLab {
       this.shellReady = true;
       this.pushStatus(this.pendingStatus);
       this.pushDecision(this.pendingDecision);
+      this.pushTheme();
       this.pushPendingSurface();
       return;
     }
@@ -193,6 +211,34 @@ struct UiAgentLab {
     aiLogInfo('[AIPhone][UiAgentLabDecisionToggle] enabled=' + this.decisionNotesEnabled.toString());
   }
 
+  private toggleTheme(enabled: boolean): void {
+    this.theme = uiAgentLabThemeForToggle(enabled);
+    this.pushTheme();
+    aiLogInfo('[AIPhone][UiAgentLabThemeToggle] theme=' + this.theme);
+  }
+
+  private enqueueShellScript(script: string, failureLog: string): void {
+    const lifecycleGeneration = this.generation;
+    this.surfacePushChain = this.surfacePushChain.then(async (): Promise<void> => {
+      if (!this.shellReady || lifecycleGeneration !== this.generation) return;
+      try {
+        await this.controller.runJavaScript(script);
+      } catch (_error) {
+        aiLogError(failureLog);
+      }
+    });
+  }
+
+  private pushTheme(): void {
+    if (!this.shellReady) return;
+    const lifecycleGeneration = this.generation;
+    const script = uiAgentLabThemeScript(this.theme, lifecycleGeneration);
+    this.enqueueShellScript(
+      script,
+      '[AIPhone][UiAgentLabThemePushFailed] theme=' + this.theme
+    );
+  }
+
   private pushPendingSurface(): void {
     if (!this.shellReady || this.pendingSurfaceJson.length === 0) {
       return;
@@ -200,14 +246,11 @@ struct UiAgentLab {
     const revision = this.pendingSurfaceRevision;
     const lifecycleGeneration = this.generation;
     const script = uiAgentLabSurfaceScript(this.pendingSurfaceJson, revision, lifecycleGeneration);
-    this.surfacePushChain = this.surfacePushChain.then(async (): Promise<void> => {
-      if (!this.shellReady || lifecycleGeneration !== this.generation) return;
-      try {
-        await this.controller.runJavaScript(script);
-      } catch (_error) {
-        aiLogError('[AIPhone][UiAgentLabSurfacePushFailed] revision=' + revision.toString());
-      }
-    });
+    this.enqueueShellScript(
+      script,
+      '[AIPhone][UiAgentLabSurfacePushFailed] revision=' + revision.toString()
+    );
+    this.pushTheme();
   }
 
   private applySurfaceEvent(event: UiAgentLabSurfaceEvent): void {

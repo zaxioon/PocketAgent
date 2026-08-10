@@ -103,6 +103,7 @@ import trainPresaleExecutionTest from './TrainPresaleExecution.test';
 import trainPresaleWebAutomationTest from './TrainPresaleWebAutomation.test';
 import trainPresaleDebugTest from './TrainPresaleDebug.test';
 import uiAgentLabTest from './UiAgentLab.test';
+import uiAgentLabThemeTest from './UiAgentLabTheme.test';
 import movieDemoContractTest from './MovieDemoContract.test';
 import bimStoreTest from './BimStore.test';
 import bimRuntimeTest from './BimRuntime.test';
@@ -210,6 +211,7 @@ export default function testsuite() {
   trainPresaleWebAutomationTest();
   trainPresaleDebugTest();
   uiAgentLabTest();
+  uiAgentLabThemeTest();
   bimStoreTest();
   bimRuntimeTest();
   bimHomePageTest();
