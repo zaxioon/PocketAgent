@@ -126,7 +126,9 @@ export default function a2uiParserTest() {
         '{"id":"card","component":"ExpandableCard","title":"Card","properties":{},"actions":[' +
           validAction + ']}',
         '{"id":"card","component":"ExpandableCard","title":"Card","actions":[' + validAction + ',' +
-          '{"id":"card.close","label":"Close","variant":"secondary","kind":"prompt"}]}'
+          '{"id":"card.close","label":"Close","variant":"secondary","kind":"prompt"}]}',
+        '{"id":"card","component":"ExpandableCard","dataPath":"/card","rows":[' +
+          '{"label":"Detail","value":{"path":"/detail"}}]}'
       ];
       let rejected: number = 0;
       for (let index = 0; index < invalidComponents.length; index++) {
@@ -205,9 +207,10 @@ export default function a2uiParserTest() {
       const parsed = parseA2uiEnvelope(
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab-list","components":[' +
         '{"id":"root","component":"SurfaceRoot","child":"items"},' +
-        '{"id":"items","component":"List","children":{"path":"/results/0/data/items","componentId":"item-card"}},' +
-        '{"id":"item-card","component":"ExpandableCard"}]}}',
-        'ui-lab'
+        '{"id":"items","component":"List","title":{"path":"/headings/items"},' +
+        '"children":{"path":"/results/0/data/items","componentId":"item-card"}},' +
+        '{"id":"item-card","component":"ExpandableCard","title":{"path":"/name"},' +
+        '"rows":[{"label":"Address","value":{"path":"/address"}}]}]}}'
       );
 
       expect(parsed.updateComponents !== undefined).assertTrue();
@@ -217,6 +220,15 @@ export default function a2uiParserTest() {
         expect(list.dataPath).assertEqual('/results/0/data/items');
         expect(list.child).assertEqual('item-card');
         expect(list.children?.length).assertEqual(0);
+        const listFields = JSON.parse(list.catalogFieldsJson as string) as Record<string, Object>;
+        expect((listFields['title'] as Record<string, string>)['path']).assertEqual('/headings/items');
+        const item = parsed.updateComponents.components[2];
+        const itemFields = JSON.parse(item.catalogFieldsJson as string) as Record<string, Object>;
+        const rows = itemFields['rows'] as Object[];
+        const firstRow = rows[0] as Record<string, Object | string>;
+        expect(rows.length).assertEqual(1);
+        expect(firstRow['label'] as string).assertEqual('Address');
+        expect((firstRow['value'] as Record<string, string>)['path']).assertEqual('/address');
       }
     });
 

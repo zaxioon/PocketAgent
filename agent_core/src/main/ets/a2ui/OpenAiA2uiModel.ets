@@ -93,15 +93,21 @@ export function buildA2uiLayoutSystemPrompt(
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
       '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
       'component rendered once per item; never replace this dynamic children object with a static children array. ' +
-      'Choose the simplest template that expresses each entity. InfoRows supports two source modes. When dataPath points ' +
+      'Every path or dataPath inside that template and all of its descendants is relative to the current array item ' +
+      'scope. Never repeat the absolute collection path or append an array index such as /0 inside the template. ' +
+      'Use List for repeated named entities. Its optional title may distinguish adjacent collections from different ' +
+      'tool results. Choose the simplest template that expresses each entity. Use InfoRows for a single fact table or ' +
+      'presentation-ready label/value rows. InfoRows supports two source modes. When dataPath points ' +
       'to an ordinary object, omit labelPath, valuePath, and timePath; the renderer turns that object own fields into rows. ' +
       'Never invent /key or /value for an ordinary object. When dataPath points to an object array, it may be a ' +
       'presentation-ready Array<{label,value,time?}> or use paired labelPath/valuePath plus optional timePath. Mapping ' +
       'paths must start with "/", be relative to each array item rather than the root snapshot, and name fields that ' +
-      'actually exist in the sampled items. Prefer one InfoRows binding over List or ExpandableCard when either mode fits. Otherwise, when ' +
-      'summary or description is sufficient, ' +
-      'use a compact Text template bound only to that field. Use ExpandableCard only when each item has additional details ' +
-      'worth revealing or an offered action to carry. Never bind a whole provider object merely to expose its raw fields.\n' :
+      'actually exist in the sampled items. When one summary or description line is sufficient, use a compact Text ' +
+      'template bound only to that field. When an item has multiple selected details and collapsing them materially ' +
+      'shortens the page, use ExpandableCard direct rows. Each row label may be literal or path-bound, while each business ' +
+      'value must be path-only; all paths remain relative to the item scope. Omitting dataPath must not expose the current ' +
+      'item. body and legacy dataPath remain compatible, but do not generate dataPath="/", bind an entire item/provider ' +
+      'object, or combine rows with dataPath.\n' :
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
       '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
       'component rendered once per item. For repeated entity results, use List with one ExpandableCard template so ' +

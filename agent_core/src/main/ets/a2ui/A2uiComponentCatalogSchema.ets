@@ -19,6 +19,7 @@ export interface A2uiComponentWireSchema {
   fields: Record<string, A2uiCatalogFieldSchema>;
   requireAny?: string[][];
   exactlyOne?: string[][];
+  atMostOne?: string[][];
 }
 
 interface A2uiCatalogEntry {
@@ -390,6 +391,25 @@ function validExactlyOne(record: CatalogJsonRecord, groups: string[][] | undefin
   return true;
 }
 
+function validAtMostOne(record: CatalogJsonRecord, groups: string[][] | undefined): boolean {
+  if (groups === undefined) {
+    return true;
+  }
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+    const group = groups[groupIndex];
+    let count: number = 0;
+    for (let fieldIndex = 0; fieldIndex < group.length; fieldIndex++) {
+      if (record[group[fieldIndex]] !== undefined) {
+        count++;
+      }
+    }
+    if (count > 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function validRuntimeActions(value: CatalogJsonValue): boolean {
   if (!Array.isArray(value)) {
     return false;
@@ -426,7 +446,7 @@ function validRuntimeRecord(
   allowedPaths: string[]
 ): boolean {
   if (!validRequiredFields(record, schema.fields) || !validRequireAny(record, schema.requireAny) ||
-    !validExactlyOne(record, schema.exactlyOne)) {
+    !validExactlyOne(record, schema.exactlyOne) || !validAtMostOne(record, schema.atMostOne)) {
     return false;
   }
   const keys = Object.keys(record);
@@ -505,7 +525,8 @@ export class A2uiComponentCatalogSchema {
       !validDeclaredRecord(record, schema.fields, allowedPaths, 0)) {
       return false;
     }
-    return validRequireAny(record, schema.requireAny) && validExactlyOne(record, schema.exactlyOne);
+    return validRequireAny(record, schema.requireAny) && validExactlyOne(record, schema.exactlyOne) &&
+      validAtMostOne(record, schema.atMostOne);
   }
 
   bindingPaths(componentName: string, component: Object): string[] {

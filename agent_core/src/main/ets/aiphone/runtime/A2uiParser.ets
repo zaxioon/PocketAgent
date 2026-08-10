@@ -124,6 +124,8 @@ function catalogFieldsJson(value: A2uiComponent, component: string, profile: A2u
   const source = value as Object as ParserJsonRecord;
   const needsPresentationFields = component === A2UI_COMPONENT_METRIC_GRID ||
     component === A2UI_COMPONENT_SEGMENTED_RING_CHART ||
+    (component === A2UI_COMPONENT_LIST && source['title'] !== undefined) ||
+    (component === A2UI_COMPONENT_EXPANDABLE_CARD && source['rows'] !== undefined) ||
     (component === A2UI_COMPONENT_INFO_ROWS &&
       (source['labelPath'] !== undefined || source['valuePath'] !== undefined || source['timePath'] !== undefined));
   if (profile !== 'ui-lab' && !needsPresentationFields) {
