@@ -17,6 +17,7 @@ import { DataResult } from '../message/DataResult';
 import { LinkedMessageBus } from '../message/LinkedMessageBus';
 import {
   CreateUiTaskPayload,
+  UI_TASK_ORIGINAL_USER_INPUT_MAX_LENGTH,
   UiRenderResult,
   UiRenderResultPayload,
   UiRenderState,
@@ -863,12 +864,16 @@ export class UiAgent extends MessageDrivenAgent {
     const personaId = values['personaId'];
     const skillId = values['skillId'];
     const intent = values['intent'];
+    const originalUserInput = values['originalUserInput'];
     const expectedOutputSchema = values['expectedOutputSchema'];
     if (typeof payloadTaskId !== 'string' || payloadTaskId !== taskId ||
       !Array.isArray(dataTaskIds) || !this.validDataTaskIds(dataTaskIds as Object[], taskId) ||
       (personaId !== undefined && (typeof personaId !== 'string' || personaId.trim().length === 0)) ||
       typeof skillId !== 'string' ||
       typeof intent !== 'string' || intent.trim().length === 0 ||
+      (originalUserInput !== undefined &&
+        (typeof originalUserInput !== 'string' || originalUserInput.trim().length === 0 ||
+          originalUserInput.length > UI_TASK_ORIGINAL_USER_INPUT_MAX_LENGTH)) ||
       typeof expectedOutputSchema !== 'string' || expectedOutputSchema.trim().length === 0) {
       return null;
     }
@@ -882,6 +887,8 @@ export class UiAgent extends MessageDrivenAgent {
     if (current.taskId !== next.taskId ||
       current.skillId !== next.skillId ||
       current.expectedOutputSchema !== next.expectedOutputSchema ||
+      (current.originalUserInput !== undefined &&
+        current.originalUserInput !== next.originalUserInput) ||
       (current.personaId !== undefined && current.personaId !== next.personaId) ||
       current.dataTaskIds.length !== next.dataTaskIds.length) {
       return false;
