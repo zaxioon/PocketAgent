@@ -682,7 +682,7 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("var row=node('div','lab-list-row')");
       expect(html).assertContain("row.setAttribute('role','listitem')");
       expect(html).assertContain('if(items.length>LIST_PAGE_SIZE)wrapper.appendChild(pager)');
-      expect(html).assertContain('.lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--line); }');
+      expect(html).assertContain('.lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--hairline); }');
       expect(html).assertContain('.lab-list-row:last-child { padding-bottom:0; border-bottom:0; }');
       expect(html).assertContain('hasItemScope:true,itemScope:item');
       expect(html).assertContain("component.dataPath==='/'");
@@ -1081,7 +1081,7 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('.status { min-height:24px; padding:4px 8px;');
       expect(html).assertContain('line-height:16px; display:flex; justify-content:space-between; align-items:center;');
       expect(html).assertContain('.status>span { min-height:16px; display:flex; align-items:center; }');
-      expect(html).assertContain('.decision-toggle { width:38px; height:38px;');
+      expect(html).assertContain('.decision-toggle,.theme-toggle { width:38px; height:38px;');
       expect(html).assertContain('border-radius:50%');
       expect(html).assertContain('[hidden] { display:none!important; }');
       expect(html).assertContain('.shell.decision-notes-visible { grid-template-rows:auto minmax(0,auto) minmax(0,1fr) auto; }');

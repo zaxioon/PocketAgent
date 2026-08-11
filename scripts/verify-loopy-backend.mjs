@@ -9,16 +9,24 @@ import {
   symlinkSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { delimiter, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
-const hvigorRoot = '/Applications/DevEco-Studio.app/Contents/tools/hvigor';
-const hvigor = '/Applications/DevEco-Studio.app/Contents/tools/hvigor/hvigor/bin/hvigor.js';
-const sdkHome = process.env.DEVECO_SDK_HOME || '/Applications/DevEco-Studio.app/Contents/sdk';
-const jbrHome = '/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home';
+const defaultDevEcoStudioHome = process.platform === 'win32'
+  ? 'D:/Manual/DevEco Studio'
+  : '/Applications/DevEco-Studio.app/Contents';
+const configuredSdkHome = process.env.DEVECO_SDK_HOME;
+const devEcoStudioHome = process.env.DEVECO_STUDIO_HOME ||
+  (configuredSdkHome ? dirname(configuredSdkHome) : defaultDevEcoStudioHome);
+const hvigorRoot = resolve(devEcoStudioHome, 'tools/hvigor');
+const hvigor = resolve(hvigorRoot, 'hvigor/bin/hvigor.js');
+const sdkHome = configuredSdkHome || resolve(devEcoStudioHome, 'sdk');
+const jbrHome = process.env.JAVA_HOME || (process.platform === 'win32'
+  ? resolve(devEcoStudioHome, 'jbr')
+  : resolve(devEcoStudioHome, 'jbr/Contents/Home'));
 const harOutput = resolve(repoRoot, 'agent_core/build/default/outputs/default/agent_core.har');
 
 const checks = [];
@@ -329,6 +337,25 @@ function openAiCompatibleUsesSharedRequestMerge(source) {
   const body = liveDeclarationBody(source, 'private buildRequestJson(');
   const code = maskNonCode(body);
   return /return\s+mergeOpenAiRequestJson\s*\(\s*baseJson\s*,\s*this\.provider\.customParametersJson\s*\)\s*;/.test(code);
+}
+
+function hasOpenAiStreamCompletionFallback(source) {
+  const body = liveDeclarationBody(source, 'private async completeOnce(');
+  const code = maskNonCode(body);
+  const request = code.search(/await\s+httpRequest\.requestInStream\s*\(/);
+  const tail = request < 0 ? '' : code.slice(request);
+  const resolveOffset = tail.search(/streamEndResolve\s*\(\s*\)\s*;/);
+  const awaitOffset = tail.search(/await\s+streamEnd\s*;/);
+  const dataEndResolves = /httpRequest\.on\s*\(\s*['"]dataEnd['"]\s*,\s*\(\s*\)\s*=>\s*\{\s*streamEndResolve\s*\(\s*\)\s*;\s*\}\s*\)/
+    .test(body);
+  return dataEndResolves && request >= 0 && resolveOffset >= 0 && awaitOffset > resolveOffset;
+}
+
+function canaryUsesRegistryPlanningProjection(source) {
+  const body = liveDeclarationBody(source, 'function canaryPlanningContext(');
+  const code = maskNonCode(body);
+  return /planningHint\s*:\s*toolPlanningDescriptionForToolId\s*\(\s*definition\.toolId\s*(?:,\s*allowTrustedOperationTargets\s*)?\)/
+    .test(code);
 }
 
 function hasProductionCanarySubmitTimeout(source) {
@@ -1026,8 +1053,9 @@ function runHarBuild() {
   const nodePathRoot = mkdtempSync(resolve(tmpdir(), 'aiphone-hvigor-'));
   const scopeRoot = resolve(nodePathRoot, '@ohos');
   mkdirSync(scopeRoot, { recursive: true });
-  symlinkSync(resolve(hvigorRoot, 'hvigor'), resolve(scopeRoot, 'hvigor'), 'dir');
-  symlinkSync(resolve(hvigorRoot, 'hvigor-ohos-plugin'), resolve(scopeRoot, 'hvigor-ohos-plugin'), 'dir');
+  const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
+  symlinkSync(resolve(hvigorRoot, 'hvigor'), resolve(scopeRoot, 'hvigor'), symlinkType);
+  symlinkSync(resolve(hvigorRoot, 'hvigor-ohos-plugin'), resolve(scopeRoot, 'hvigor-ohos-plugin'), symlinkType);
 
   let result;
   try {
@@ -1052,7 +1080,7 @@ function runHarBuild() {
         OHOS_SDK_HOME: resolve(sdkHome, 'default/openharmony'),
         JAVA_HOME: jbrHome,
         NODE_PATH: nodePathRoot,
-        PATH: `${resolve(jbrHome, 'bin')}:${process.env.PATH ?? ''}`
+        PATH: `${resolve(jbrHome, 'bin')}${delimiter}${process.env.PATH ?? ''}`
       },
       encoding: 'utf8'
     });
@@ -1202,9 +1230,8 @@ function verifySourceContracts() {
     hasProtectedOpenAiRequestMerge(openAiRequestJson),
     'custom parameters cannot replace model, messages, or stream'
   );
-  assertContains(
-    openAiModel,
-    'streamEndResolve();\n      await streamEnd;',
+  assert(
+    hasOpenAiStreamCompletionFallback(openAiModel),
     'OpenAI-compatible stream completion does not rely only on dataEnd'
   );
   assertContains(aiphoneA2ui, 'export function aiphoneInfoJsonl', 'AIPhone final answer helper exists');
@@ -1413,7 +1440,10 @@ function verifySourceContracts() {
   assertContains(runtimeDefinitions, 'Composio-backed app/toolkit requests', 'registry describes Composio dynamic routing');
   assertContains(runtimeDefinitions, 'Never add synonyms or inferred English terms', 'registry preserves exact Gmail keyword guidance');
   assertContains(runtimeDefinitions, 'toolPlanningDescriptionForToolId', 'registry owns the shared planning description projection');
-  assertContains(canaryRuntime, 'toolPlanningDescriptionForToolId(definition.toolId)', 'multi-agent canary consumes the registry planning projection');
+  assert(
+    canaryUsesRegistryPlanningProjection(canaryRuntime),
+    'multi-agent canary consumes the registry planning projection'
+  );
   assertContains(canaryRuntime, "definition.toolId !== 'gmail.message.send'", 'multi-agent planner excludes direct Gmail send');
   assertContains(canaryRuntime, 'domain: definition.domain', 'multi-agent planner projects registry domains');
   assertContains(canaryRuntime, 'registeredBackends: definition.backendPriority.slice()', 'multi-agent planner projects cloned registered backend candidates');
