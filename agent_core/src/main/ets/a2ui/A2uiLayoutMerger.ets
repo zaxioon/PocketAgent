@@ -177,7 +177,47 @@ function primitiveTextValue(value: JsonValue): boolean {
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
-function arrayFieldMappingFailure(record: JsonRecord, baselineValues: Map<string, JsonValue>): string {
+function arrayFieldMappingSourceFailure(
+  component: string,
+  labelPath: string,
+  valuePath: string,
+  timePath: JsonValue,
+  source: JsonValue
+): string {
+  if (!Array.isArray(source)) return 'mapping_source_not_array';
+  const items = source as JsonValue[];
+  if (component === A2UI_COMPONENT_SEGMENTED_RING_CHART && items.length === 0) {
+    return 'mapping_source_size_invalid';
+  }
+  let hasInfoValue: boolean = false;
+  for (let index = 0; index < items.length; index++) {
+    const label = itemValueAtPath(items[index], labelPath);
+    const value = itemValueAtPath(items[index], valuePath);
+    if (typeof label !== 'string') return 'mapping_label_not_string';
+    if (component === A2UI_COMPONENT_INFO_ROWS) {
+      if (value !== undefined && value !== null) {
+        if (!primitiveTextValue(value)) return 'mapping_value_not_primitive';
+        hasInfoValue = true;
+      }
+      if (timePath !== undefined) {
+        const time = itemValueAtPath(items[index], timePath as string);
+        if (time !== undefined && time !== null && typeof time !== 'string') return 'mapping_time_not_string';
+      }
+    } else if (typeof value !== 'number' || !Number.isFinite(value as number)) {
+      return 'mapping_value_not_number';
+    }
+  }
+  if (component === A2UI_COMPONENT_INFO_ROWS && items.length > 0 && !hasInfoValue) {
+    return 'mapping_value_missing';
+  }
+  return '';
+}
+
+function arrayFieldMappingFailure(
+  record: JsonRecord,
+  baselineValues: Map<string, JsonValue>,
+  itemScopeValues?: JsonValue[]
+): string {
   const labelPath = record['labelPath'];
   const valuePath = record['valuePath'];
   const timePath = record['timePath'];
@@ -197,32 +237,24 @@ function arrayFieldMappingFailure(record: JsonRecord, baselineValues: Map<string
   }
   const dataPath = record['dataPath'];
   if (typeof dataPath !== 'string') return 'mapping_data_path_missing';
-  const source = baselineValues.get(dataPath as string);
-  if (!Array.isArray(source)) return 'mapping_source_not_array';
-  const items = source as JsonValue[];
-  if (component === A2UI_COMPONENT_SEGMENTED_RING_CHART && items.length === 0) {
-    return 'mapping_source_size_invalid';
+  if (itemScopeValues === undefined) {
+    return arrayFieldMappingSourceFailure(
+      component as string,
+      labelPath as string,
+      valuePath as string,
+      timePath,
+      baselineValues.get(dataPath as string)
+    );
   }
-  let hasInfoValue: boolean = false;
-  for (let index = 0; index < items.length; index++) {
-    const label = itemValueAtPath(items[index], labelPath as string);
-    const value = itemValueAtPath(items[index], valuePath as string);
-    if (typeof label !== 'string') return 'mapping_label_not_string';
-    if (component === A2UI_COMPONENT_INFO_ROWS) {
-      if (value !== undefined && value !== null) {
-        if (!primitiveTextValue(value)) return 'mapping_value_not_primitive';
-        hasInfoValue = true;
-      }
-      if (timePath !== undefined) {
-        const time = itemValueAtPath(items[index], timePath as string);
-        if (time !== undefined && time !== null && typeof time !== 'string') return 'mapping_time_not_string';
-      }
-    } else if (typeof value !== 'number' || !Number.isFinite(value as number)) {
-      return 'mapping_value_not_number';
-    }
-  }
-  if (component === A2UI_COMPONENT_INFO_ROWS && items.length > 0 && !hasInfoValue) {
-    return 'mapping_value_missing';
+  for (let index = 0; index < itemScopeValues.length; index++) {
+    const failure = arrayFieldMappingSourceFailure(
+      component as string,
+      labelPath as string,
+      valuePath as string,
+      timePath,
+      itemValueAtPath(itemScopeValues[index], dataPath as string)
+    );
+    if (failure.length > 0) return failure;
   }
   return '';
 }
@@ -448,11 +480,6 @@ function candidateComponents(
       rememberDiagnostic(diagnostics, id, 'component_schema_invalid');
       return null;
     }
-    const mappingFailure = arrayFieldMappingFailure(record, baselineValues);
-    if (mappingFailure.length > 0) {
-      rememberDiagnostic(diagnostics, id, mappingFailure);
-      return null;
-    }
     if (record['component'] === A2UI_COMPONENT_HERO_BANNER) {
       heroCount++;
       if (heroCount > 1) return null;
@@ -499,6 +526,7 @@ function candidateComponents(
   }
   const listIds: string[] = [];
   const itemScopePathsById: Map<string, string[]> = new Map<string, string[]>();
+  const itemScopeValuesById: Map<string, JsonValue[]> = new Map<string, JsonValue[]>();
   listTemplateIds.forEach((templateId: string) => {
     const template = byId.get(templateId);
     if (template === undefined || template['component'] === A2UI_COMPONENT_LIST ||
@@ -517,9 +545,11 @@ function candidateComponents(
   for (let index = 0; index < listIds.length; index++) {
     const listRecord = byId.get(listIds[index]);
     const dynamicChildren = listRecord === undefined ? null : listChildren(listRecord);
-    const scopePaths = dynamicChildren === null ? null :
-      listItemScopePaths(baselineValues.get(dynamicChildren['path'] as string));
+    const scopeValue = dynamicChildren === null ? undefined :
+      baselineValues.get(dynamicChildren['path'] as string);
+    const scopePaths = dynamicChildren === null ? null : listItemScopePaths(scopeValue);
     if (scopePaths === null) return null;
+    const scopeValues = scopeValue as JsonValue[];
     const descendants: string[] = (childrenById.get(listIds[index]) ?? []).slice();
     const checked: Set<string> = new Set<string>();
     while (descendants.length > 0) {
@@ -529,6 +559,7 @@ function candidateComponents(
       }
       checked.add(descendantId);
       itemScopePathsById.set(descendantId, scopePaths);
+      itemScopeValuesById.set(descendantId, scopeValues);
       const descendant = byId.get(descendantId);
       if (descendant === undefined || descendant['component'] === A2UI_COMPONENT_LIST ||
         descendant['component'] === A2UI_COMPONENT_HERO_BANNER || descendant['actions'] !== undefined) {
@@ -544,8 +575,19 @@ function candidateComponents(
     const component = output[index];
     const record = byId.get(component.id);
     const allowedPaths = itemScopePathsById.get(component.id) ?? baselinePaths;
-    if (record === undefined ||
-      (catalog.usesWireSchema() && !catalog.validates(component.component, record, allowedPaths))) {
+    if (record === undefined) {
+      return null;
+    }
+    const mappingFailure = arrayFieldMappingFailure(
+      record,
+      baselineValues,
+      itemScopeValuesById.get(component.id)
+    );
+    if (mappingFailure.length > 0) {
+      rememberDiagnostic(diagnostics, component.id, mappingFailure);
+      return null;
+    }
+    if (catalog.usesWireSchema() && !catalog.validates(component.component, record, allowedPaths)) {
       return null;
     }
     if (component.dataPath !== undefined &&

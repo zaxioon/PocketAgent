@@ -200,6 +200,8 @@ export default function toolDefinitionRegistryTest() {
       expect(dynamic.indexOf('Composio-backed app/toolkit')).assertLarger(-1);
       expect(dynamic.indexOf('use social.feed.search')).assertLarger(-1);
       expect(dynamic.indexOf('exactly one provider operation')).assertLarger(-1);
+      expect(dynamic.indexOf('actions. One dynamic.search DataTask')).assertLarger(-1);
+      expect(dynamic.indexOf('actions. Do not One dynamic.search DataTask')).assertEqual(-1);
       expect(dynamic.indexOf('github.user.dashboard')).assertEqual(-1);
       expect(dynamic.indexOf('operationTarget')).assertEqual(-1);
       expect(uiLabDynamic.indexOf('github.user.dashboard')).assertLarger(-1);

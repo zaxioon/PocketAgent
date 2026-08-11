@@ -2,6 +2,7 @@ import {
   A2uiAction,
   A2uiApplyResult,
   A2uiEnvelope,
+  A2uiParserProfile,
   A2uiRuntimeDataModel,
   A2uiSurfaceState,
   A2uiSurfaceStore,
@@ -405,6 +406,7 @@ export class HotelRuntimeSurfaceWriter implements UiSurfaceWriter {
   private disposed: boolean = false;
   private readonly autoActivate: boolean;
   private readonly documentProjector: HotelSurfaceDocumentProjector | null;
+  private readonly parserProfile: A2uiParserProfile;
   private automaticGeneration: number = 0;
   private pinnedAutomaticTurnId: string = '';
 
@@ -415,7 +417,8 @@ export class HotelRuntimeSurfaceWriter implements UiSurfaceWriter {
     authority: HotelSurfaceAuthority,
     visibility: HotelVisibility,
     autoActivate: boolean = false,
-    documentProjector?: HotelSurfaceDocumentProjector
+    documentProjector?: HotelSurfaceDocumentProjector,
+    parserProfile: A2uiParserProfile = 'legacy'
   ) {
     this.conversationId = conversationId;
     this.downstream = downstream;
@@ -424,6 +427,7 @@ export class HotelRuntimeSurfaceWriter implements UiSurfaceWriter {
     this.visibility = visibility;
     this.autoActivate = autoActivate;
     this.documentProjector = documentProjector === undefined ? null : documentProjector;
+    this.parserProfile = parserProfile;
   }
 
   async write(
@@ -440,7 +444,7 @@ export class HotelRuntimeSurfaceWriter implements UiSurfaceWriter {
       this.automaticGeneration++;
       this.visibility.expect(turnId, this.automaticGeneration);
     }
-    const parsed = parseA2uiJsonl(jsonl);
+    const parsed = parseA2uiJsonl(jsonl, this.parserProfile);
     if (parsed.error.length > 0) {
       throw new Error(parsed.error);
     }

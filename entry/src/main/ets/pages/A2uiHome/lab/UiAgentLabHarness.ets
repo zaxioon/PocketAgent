@@ -1290,6 +1290,7 @@ export class UiAgentLabHarness {
       structuredToolCall: callStructuredToolForUiLab,
       allowTrustedOperationTargets: true,
       surfaceDocumentProjector: projectUiAgentLabSurface,
+      a2uiParserProfile: 'ui-lab',
       currentHostSurface: (): A2uiSurfaceState | null =>
         this.currentSurface === null ? null : cloneSurface(this.currentSurface),
       currentHostGeneration: (): number => this.generation,

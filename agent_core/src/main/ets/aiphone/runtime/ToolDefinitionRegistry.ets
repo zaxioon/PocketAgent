@@ -681,7 +681,7 @@ const DYNAMIC_SEARCH_PLANNING_SUFFIX: string =
 
 const LEGACY_DYNAMIC_SEARCH_PLANNING_DESCRIPTION: string = DYNAMIC_SEARCH_PLANNING_PREFIX +
   'For Composio, first call with the full user task to discover candidate tools; only call again with ' +
-  '{"operation":"execute","toolSlug":"returned slug","arguments":{...}} for read/search/list/get actions. Do not ' +
+  '{"operation":"execute","toolSlug":"returned slug","arguments":{...}} for read/search/list/get actions. ' +
   'One dynamic.search DataTask discovers and executes exactly one provider operation. When one user request needs ' +
   'multiple independent datasets from the same app or toolkit, emit multiple focused dynamic.search DataTasks in ' +
   'the same round even when their toolId is identical. Each task.goal must name exactly one operation target, and ' +

@@ -72,7 +72,12 @@ import {
   registeredPageSourceToolId,
   resolveVirtualRegisteredPageAction
 } from '../main/ets/pages/A2uiHome/agent/RegisteredPageActionRoute';
-import { MonotonicHotelIds } from '../main/ets/pages/A2uiHome/agent/MultiAgentHotelSupport';
+import {
+  HotelRuntimeSurfaceWriter,
+  HotelSurfaceAuthority,
+  HotelVisibility,
+  MonotonicHotelIds
+} from '../main/ets/pages/A2uiHome/agent/MultiAgentHotelSupport';
 import { BimRouteDecision, BimTurnGate } from '../main/ets/pages/A2uiHome/bim/BimRuntime';
 
 const SEARCH_TEXT: string = '帮我找深圳酒店';
@@ -1379,8 +1384,68 @@ function useLastRenderedSurfaceAsHost(
   };
 }
 
+class AlwaysActiveSurfaceWriteLease implements UiSurfaceWriteLease {
+  isActive(): boolean {
+    return true;
+  }
+}
+
 export default function multiAgentCanaryRuntimeTest() {
   describe('multiAgentCanaryRuntime', () => {
+    it('keeps UI Lab catalog bindings without widening the default parser profile', 0, async () => {
+      const jsonl = '{"version":"v0.9.1","createSurface":{"surfaceId":"profile-bindings",' +
+        '"root":"root","title":"Bindings","status":"ready"}}\n' +
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"profile-bindings","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["copy","hero","line"]},' +
+        '{"id":"copy","component":"Text","title":{"path":"/copy/title"}},' +
+        '{"id":"hero","component":"HeroBanner","title":{"path":"/hero/title"},' +
+        '"body":{"path":"/hero/body"}},' +
+        '{"id":"line","component":"MultiSeriesLineChart","title":{"path":"/chart/title"},' +
+        '"dataPath":"/chart"}]}}\n';
+      const lease: UiSurfaceWriteLease = new AlwaysActiveSurfaceWriteLease();
+      const uiLabSurfaces: A2uiSurfaceState[] = [];
+      const uiLabWriter = new HotelRuntimeSurfaceWriter(
+        'ui-lab-profile',
+        new RecordingWriter(),
+        (surface: A2uiSurfaceState): boolean => {
+          uiLabSurfaces.push(surface);
+          return true;
+        },
+        new HotelSurfaceAuthority(),
+        new HotelVisibility(),
+        true,
+        undefined,
+        'ui-lab'
+      );
+      await uiLabWriter.write('ui-lab-turn', 'profile-bindings', jsonl, lease);
+      expect(uiLabSurfaces.length).assertEqual(1);
+      const uiLabComponents = uiLabSurfaces[0].components;
+      expect(uiLabComponents[2].catalogFieldsJson?.includes('/copy/title')).assertTrue();
+      expect(uiLabComponents[3].catalogFieldsJson?.includes('/hero/title')).assertTrue();
+      expect(uiLabComponents[3].catalogFieldsJson?.includes('/hero/body')).assertTrue();
+      expect(uiLabComponents[4].catalogFieldsJson?.includes('/chart/title')).assertTrue();
+
+      const legacySurfaces: A2uiSurfaceState[] = [];
+      const legacyWriter = new HotelRuntimeSurfaceWriter(
+        'legacy-profile',
+        new RecordingWriter(),
+        (surface: A2uiSurfaceState): boolean => {
+          legacySurfaces.push(surface);
+          return true;
+        },
+        new HotelSurfaceAuthority(),
+        new HotelVisibility(),
+        true
+      );
+      await legacyWriter.write('legacy-turn', 'profile-bindings', jsonl, lease);
+      expect(legacySurfaces.length).assertEqual(1);
+      const legacyComponents = legacySurfaces[0].components;
+      expect(legacyComponents[2].catalogFieldsJson === undefined).assertTrue();
+      expect(legacyComponents[3].catalogFieldsJson === undefined).assertTrue();
+      expect(legacyComponents[4].catalogFieldsJson === undefined).assertTrue();
+    });
+
     it('keeps the existing runtime behavior when turnGate is undefined', 0, async () => {
       const options = canaryOptions(
         new QueueModel([ANSWER_DECISION]),

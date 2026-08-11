@@ -899,6 +899,74 @@ export default function a2uiLayoutMergerTest() {
       )).assertEqual(itemBaseline);
     });
 
+    it('validates mapped arrays within every List item scope', 0, () => {
+      const rootCollisions =
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/details",' +
+        '"value":[{"label":"Wrong root details","value":{"nested":true}}]}}\n' +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/shares",' +
+        '"value":[{"name":"Wrong root shares","share":"not-a-number"}]}}\n';
+      const validGroups =
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/groups","value":[' +
+        '{"details":[{"label":"Repositories","value":12}],"shares":[' +
+        '{"name":"TypeScript","share":75},{"name":"ArkTS","share":25}]},' +
+        '{"details":[{"label":"Repositories","value":8}],"shares":[' +
+        '{"name":"Java","share":60},{"name":"Kotlin","share":40}]}]}}\n';
+      const invalidInfoGroups =
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/groups","value":[' +
+        '{"details":[{"label":"Repositories","value":12}],"shares":[' +
+        '{"name":"TypeScript","share":100}]},' +
+        '{"details":{"label":"Repositories","value":8},"shares":[' +
+        '{"name":"Java","share":100}]}]}}\n';
+      const invalidRingGroups =
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/groups","value":[' +
+        '{"details":[{"label":"Repositories","value":12}],"shares":[' +
+        '{"name":"TypeScript","share":100}]},' +
+        '{"details":[{"label":"Repositories","value":8}],"shares":' +
+        '{"name":"Java","share":100}}]}}\n';
+      const candidate =
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"groups"},' +
+        '{"id":"groups","component":"List","children":{"path":"/groups","componentId":"group"}},' +
+        '{"id":"group","component":"Column","children":["details","ring"]},' +
+        '{"id":"details","component":"InfoRows","dataPath":"/details",' +
+        '"labelPath":"/label","valuePath":"/value"},' +
+        '{"id":"ring","component":"SegmentedRingChart","dataPath":"/shares",' +
+        '"labelPath":"/name","valuePath":"/share"}]}}';
+
+      const validMerged = mergeA2uiLayoutWithStatus(
+        BASELINE + rootCollisions + validGroups,
+        candidate,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(validMerged.accepted).assertTrue();
+      expect(validMerged.jsonl).assertContain('"dataPath":"/details"');
+      expect(validMerged.jsonl).assertContain('"dataPath":"/shares"');
+
+      const infoRejected = mergeA2uiLayoutWithStatus(
+        BASELINE + rootCollisions + invalidInfoGroups,
+        candidate,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(infoRejected.accepted).assertFalse();
+      expect(infoRejected.diagnostic?.componentId).assertEqual('details');
+      expect(infoRejected.diagnostic?.rule).assertEqual('mapping_source_not_array');
+
+      const ringRejected = mergeA2uiLayoutWithStatus(
+        BASELINE + rootCollisions + invalidRingGroups,
+        candidate,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(ringRejected.accepted).assertFalse();
+      expect(ringRejected.diagnostic?.componentId).assertEqual('ring');
+      expect(ringRejected.diagnostic?.rule).assertEqual('mapping_source_not_array');
+    });
+
     it('rejects business components when the UI Lab catalog is selected', 0, () => {
       expect(mergeA2uiLayout(
         BASELINE,
