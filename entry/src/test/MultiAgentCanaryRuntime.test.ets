@@ -30,6 +30,7 @@ import {
   ObservationDigest,
   TaskErrorPayload,
   TurnResultPayload,
+  UiRenderPhase,
   UiRenderProgressSink,
   UiRenderResult,
   UiTaskRenderer,
@@ -985,6 +986,7 @@ class ProgressRecordingRenderer implements UiTaskRenderer {
     _data: DataResult[],
     _offers: ActionOffer[],
     surfaceId: string,
+    _phase: UiRenderPhase,
     progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult> {
     if (progressSink !== undefined) {
@@ -2577,6 +2579,52 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(platforms[1]).assertEqual('slack');
       expect(model.prompts.length).assertEqual(2);
       expect(model.prompts[1].indexOf('LEADER_TASK_INPUT_INVALID')).assertLarger(-1);
+      runtime.dispose();
+    });
+
+    it('forwards structured partial callbacks for non-media tools only when explicitly enabled', 0, async () => {
+      const bus = new TrackingBus();
+      const options = canaryOptions(
+        new QueueModel([
+          c09SocialDecision('{"platforms":["x","slack"]}'),
+          C09_SOCIAL_DONE
+        ]),
+        new CanaryHotelExecutor(),
+        new RecordingOpener(),
+        [],
+        [],
+        bus
+      );
+      options.dataExecutor = undefined;
+      options.forwardStructuredToolPartials = true;
+      let partialPolicyCalls: number = 0;
+      options.uiPartialRenderPolicy = (): boolean => {
+        partialPolicyCalls++;
+        return true;
+      };
+      options.structuredToolCall = async (
+        toolId: string,
+        _prompt: string,
+        _args: Object,
+        onPartial?: (result: DataResult) => void
+      ): Promise<DataResult> => {
+        expect(toolId).assertEqual('social.feed.search');
+        expect(onPartial === undefined).assertFalse();
+        if (onPartial !== undefined) {
+          const partial = c09SocialFeedResult();
+          partial.status = 'partial';
+          onPartial(partial);
+        }
+        return c09SocialFeedResult();
+      };
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('帮我查看 X 和 Slack 上的消息', { text: '' });
+
+      expect(outcome.kind).assertEqual('settled');
+      expect(bus.count(AgentMessageType.TASK_RESULT_DATA_PARTIAL)).assertEqual(1);
+      expect(bus.count(AgentMessageType.TASK_RESULT_DATA)).assertEqual(1);
+      expect(partialPolicyCalls).assertEqual(1);
       runtime.dispose();
     });
 

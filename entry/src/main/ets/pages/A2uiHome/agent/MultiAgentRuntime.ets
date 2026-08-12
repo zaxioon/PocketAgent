@@ -552,7 +552,12 @@ export class MultiAgentRuntime {
       this.ownedActionExecutor = null;
       actionExecutor = options.actionExecutor;
     }
-    this.ui = new UiAgent(this.bus, uiRenderer, options.surfaceWriter);
+    this.ui = new UiAgent(
+      this.bus,
+      uiRenderer,
+      options.surfaceWriter,
+      options.uiPartialRenderPolicy
+    );
     this.action = new ActionAgent(
       this.bus,
       options.actionCatalog,

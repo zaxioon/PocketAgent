@@ -18,7 +18,9 @@ import { LinkedMessageBus } from '../message/LinkedMessageBus';
 import {
   CreateUiTaskPayload,
   UI_TASK_ORIGINAL_USER_INPUT_MAX_LENGTH,
+  UiPartialRenderPolicy,
   UiRenderProgressSink,
+  UiRenderPhase,
   UiRenderResult,
   UiRenderResultPayload,
   UiRenderState,
@@ -87,6 +89,7 @@ interface UiTurnContext {
   terminalRenderStarted: boolean;
   finalUiTaskReceived: boolean;
   renderedDataTaskIds: string[];
+  renderedPhase: UiRenderPhase | null;
   operationChain: Promise<void>;
   queuedMessages: Map<number, AgentMessage>;
   nextOperationId: number;
@@ -110,16 +113,23 @@ export class UiAgent extends MessageDrivenAgent {
   private readonly bus: LinkedMessageBus;
   private readonly renderer: UiTaskRenderer;
   private readonly writer: UiSurfaceWriter;
+  private readonly partialRenderPolicy: UiPartialRenderPolicy | null;
   private readonly contexts: Map<string, UiTurnContext> = new Map<string, UiTurnContext>();
   private readonly terminated: Set<string> = new Set<string>();
   private readonly terminatedOrder: string[] = [];
   private surfaceSuffix: number = 0;
 
-  constructor(bus: LinkedMessageBus, renderer: UiTaskRenderer, writer: UiSurfaceWriter) {
+  constructor(
+    bus: LinkedMessageBus,
+    renderer: UiTaskRenderer,
+    writer: UiSurfaceWriter,
+    partialRenderPolicy?: UiPartialRenderPolicy
+  ) {
     super(bus);
     this.bus = bus;
     this.renderer = renderer;
     this.writer = writer;
+    this.partialRenderPolicy = partialRenderPolicy === undefined ? null : partialRenderPolicy;
   }
 
   stop(): void {
@@ -482,12 +492,12 @@ export class UiAgent extends MessageDrivenAgent {
       }
       return;
     }
+    const terminal: boolean = context.finalUiTaskReceived && allTerminal;
+    const phase: UiRenderPhase = terminal ? 'complete' : 'partial';
     const unchanged: boolean =
-      readyTaskIds.join(',') === context.renderedDataTaskIds.join(',');
+      readyTaskIds.join(',') === context.renderedDataTaskIds.join(',') &&
+      phase === context.renderedPhase;
     if (unchanged) {
-      if (context.finalUiTaskReceived && allTerminal) {
-        this.finishRenderedData(context);
-      }
       return;
     }
     await this.renderData(
@@ -496,7 +506,7 @@ export class UiAgent extends MessageDrivenAgent {
       data,
       offers,
       readyTaskIds,
-      context.finalUiTaskReceived && allTerminal
+      terminal
     );
   }
 
@@ -509,8 +519,15 @@ export class UiAgent extends MessageDrivenAgent {
       const taskId = task.dataTaskIds[index];
       const pending = context.pendingDataByTaskId.get(taskId);
       if (pending === undefined || pending.data === undefined ||
-        pending.data.toolId !== 'media.aggregate.search' || pending.data.status !== 'partial' ||
+        pending.data.status !== 'partial' ||
         pending.terminalDataReceived || pending.partialRendered === true) {
+        continue;
+      }
+      const partialRenderPolicy = this.partialRenderPolicy;
+      const shouldRenderPartial = partialRenderPolicy === null ?
+        pending.data.toolId === 'media.aggregate.search' :
+        partialRenderPolicy(task, taskId, pending.data);
+      if (!shouldRenderPartial) {
         continue;
       }
       const data = pending.data;
@@ -579,8 +596,9 @@ export class UiAgent extends MessageDrivenAgent {
       });
       return progressChain;
     };
+    const phase: UiRenderPhase = terminal ? 'complete' : 'partial';
     const rendered: UiRenderResult =
-      await this.renderer.result(task, data, offers, context.surfaceId, progressSink);
+      await this.renderer.result(task, data, offers, context.surfaceId, phase, progressSink);
     await progressChain;
     if (!this.isActive(key, context)) {
       return;
@@ -596,6 +614,7 @@ export class UiAgent extends MessageDrivenAgent {
       return;
     }
     context.renderedDataTaskIds = readyTaskIds.slice();
+    context.renderedPhase = phase;
     if (terminal) {
       this.finishRenderedData(context);
     }
@@ -827,6 +846,7 @@ export class UiAgent extends MessageDrivenAgent {
       terminalRenderStarted: false,
       finalUiTaskReceived: false,
       renderedDataTaskIds: [],
+      renderedPhase: null,
       operationChain: Promise.resolve(),
       queuedMessages: new Map<number, AgentMessage>(),
       nextOperationId: 0

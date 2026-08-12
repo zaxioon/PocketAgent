@@ -24,7 +24,15 @@ export interface UiRenderResult {
   jsonl: string;
 }
 
+export type UiRenderPhase = 'partial' | 'complete';
+
 export type UiRenderProgressSink = (rendered: UiRenderResult) => Promise<void>;
+
+export type UiPartialRenderPolicy = (
+  task: CreateUiTaskPayload,
+  dataTaskId: string,
+  result: DataResult
+) => boolean;
 
 export interface UiTaskRenderer {
   skeleton(task: CreateUiTaskPayload, surfaceId: string): Promise<UiRenderResult>;
@@ -33,6 +41,7 @@ export interface UiTaskRenderer {
     data: DataResult[],
     offers: ActionOffer[],
     surfaceId: string,
+    phase: UiRenderPhase,
     progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult>;
   error(task: CreateUiTaskPayload, message: string, surfaceId: string): Promise<UiRenderResult>;
@@ -46,6 +55,7 @@ export interface SingleDataUiTaskRenderer {
     data: DataResult,
     offers: ActionOffer[],
     surfaceId: string,
+    phase: UiRenderPhase,
     progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult>;
   error(task: CreateUiTaskPayload, message: string, surfaceId: string): Promise<UiRenderResult>;
@@ -68,12 +78,13 @@ export class SingleDataUiTaskRendererAdapter implements UiTaskRenderer {
     data: DataResult[],
     offers: ActionOffer[],
     surfaceId: string,
+    phase: UiRenderPhase,
     progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult> {
     if (data.length !== 1) {
       return Promise.reject(new Error('Single-data renderer requires exactly one result'));
     }
-    return this.renderer.result(task, data[0], offers, surfaceId, progressSink);
+    return this.renderer.result(task, data[0], offers, surfaceId, phase, progressSink);
   }
 
   error(task: CreateUiTaskPayload, message: string, surfaceId: string): Promise<UiRenderResult> {

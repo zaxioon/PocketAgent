@@ -197,11 +197,17 @@ export default function a2uiLayoutMergerTest() {
       expect(prompt.includes('各 value path 互不重复')).assertTrue();
       expect(prompt.includes('禁止只写 index 0 后期待 renderer 自动展开')).assertTrue();
       expect(prompt.includes('rendered once per item')).assertTrue();
-      expect(prompt.includes('MUST output exactly one HeroBanner')).assertTrue();
-      expect(prompt.includes('Do not fabricate a HeroBanner summary for an error or no-display-data baseline')).assertTrue();
+      expect(prompt.includes('pageState=partial or pageState=complete')).assertTrue();
+      expect(prompt.includes('first visible element in the main content container MUST be a ThinkingCard')).assertTrue();
+      expect(prompt.includes('exact direct title="正在获取真实数据"')).assertTrue();
+      expect(prompt.includes('loading status of "calling_tool" or "loading"')).assertTrue();
+      expect(prompt.includes('SkeletonCard does not satisfy this lifecycle requirement')).assertTrue();
+      expect(prompt.includes('layout MUST NOT contain HeroBanner')).assertTrue();
+      expect(prompt.includes('layout MUST output exactly one HeroBanner')).assertTrue();
+      expect(prompt.includes('MUST NOT retain a partial loading ThinkingCard')).assertTrue();
       expect(prompt.includes('always the first visible element in the main content container')).assertTrue();
       expect(prompt.includes('SurfaceRoot.child must reference a Column')).assertTrue();
-      expect(prompt.includes('HeroBanner id must be Column.children[0]')).assertTrue();
+      expect(prompt.includes('required leading component id must be Column.children[0]')).assertTrue();
       expect(prompt.includes('leaving sibling components disconnected')).assertTrue();
       expect(prompt.includes('Every HeroBanner visible string must be rewritten from the current verified results')).assertFalse();
       expect(prompt.includes('never copy the REPLACE_WITH_A_SYNTHESIS_OF_VERIFIED_RESULTS placeholder')).assertFalse();
@@ -286,9 +292,13 @@ export default function a2uiLayoutMergerTest() {
         expect(catalog[index].name).assertEqual(LAB_COMPONENT_NAMES[index]);
       }
       let heroUsage: string = '';
+      let thinkingUsage: string = '';
+      let skeletonUsage: string = '';
       for (let index = 0; index < catalog.length; index++) {
         expect(Object.keys(catalog[index].schema.fields).length > 1).assertTrue();
         if (catalog[index].name === 'HeroBanner') heroUsage = catalog[index].usage;
+        if (catalog[index].name === 'ThinkingCard') thinkingUsage = catalog[index].usage;
+        if (catalog[index].name === 'SkeletonCard') skeletonUsage = catalog[index].usage;
       }
       const infoRowsUsage = catalog[4].usage;
       const expandableUsage = catalog[10].usage;
@@ -313,7 +323,17 @@ export default function a2uiLayoutMergerTest() {
       expect(listUsage.includes('可选 title')).assertTrue();
       expect(heroUsage.includes('主内容容器中的第一个可见元素')).assertTrue();
       expect(heroUsage.includes('必须且只能生成一个 HeroBanner')).assertTrue();
-      expect(heroUsage.includes('错误或无可展示数据的 baseline 不得强造 HeroBanner 概述')).assertTrue();
+      expect(heroUsage.includes('pageState=complete')).assertTrue();
+      expect(heroUsage.includes('pageState=partial 时不得生成 HeroBanner')).assertTrue();
+      expect(heroUsage.includes('不得保留 partial loading ThinkingCard')).assertTrue();
+      expect(thinkingUsage.includes('pageState=partial')).assertTrue();
+      expect(thinkingUsage.includes('第一个可见组件必须是 ThinkingCard')).assertTrue();
+      expect(thinkingUsage.includes('direct title 必须精确为 正在获取真实数据')).assertTrue();
+      expect(thinkingUsage.includes('status 必须使用 calling_tool 或 loading')).assertTrue();
+      expect(thinkingUsage.includes('pageState=complete 时不得保留上述 partial loading ThinkingCard')).assertTrue();
+      expect(skeletonUsage.includes('不得作为 pageState 生命周期的默认组件')).assertTrue();
+      expect(skeletonUsage.includes('不能替代 partial 阶段首位的 ThinkingCard')).assertTrue();
+      expect(skeletonUsage.includes('第一个可见组件必须是 SkeletonCard')).assertFalse();
       expect(heroUsage.includes('SurfaceRoot.child 必须指向 Column')).assertTrue();
       expect(heroUsage.includes('Column.children[0]')).assertTrue();
       expect(heroUsage.includes('不得让 root 只连接 HeroBanner 而留下孤立组件')).assertTrue();

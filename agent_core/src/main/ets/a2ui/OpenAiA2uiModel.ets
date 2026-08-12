@@ -58,13 +58,16 @@ export function buildA2uiLayoutSystemPrompt(
       'properties, and dataPath values strictly from the current task and catalog:\n' +
       outputExample + '\n';
   const uiLabRules = isUiLabCatalog ?
-    '- For every normal non-error UI Lab result with displayable verified data, you MUST output exactly one ' +
-      'HeroBanner. Do not fabricate a HeroBanner summary for an error or no-display-data baseline. HeroBanner is ' +
-      'always the first visible element in the main content container. If any other visible component exists, ' +
-      'SurfaceRoot.child must reference a Column and the HeroBanner id must be Column.children[0]. Never connect ' +
-      'root only to HeroBanner while leaving sibling components disconnected. If HeroBanner is the only visible ' +
-      'component, SurfaceRoot.child may reference it directly. HeroBanner requires title, uses text ' +
-      'as its kicker and body as a natural synthesis of all verified results, and must not mechanically list toolId values.\n' +
+    '- Read the exact pageState=partial or pageState=complete marker in the user task and obey its lifecycle contract. ' +
+      'For pageState=partial, the first visible element in the main content container MUST be a ThinkingCard with the ' +
+      'exact direct title="正在获取真实数据" and a loading status of "calling_tool" or "loading", and the layout MUST NOT ' +
+      'contain HeroBanner. SkeletonCard does not satisfy this lifecycle requirement. For pageState=complete, the layout ' +
+      'MUST output exactly one HeroBanner, MUST NOT retain a partial loading ThinkingCard, and HeroBanner is always the ' +
+      'first visible element in the main content container. If any other visible component exists, SurfaceRoot.child must reference a Column ' +
+      'and the required leading component id must be Column.children[0]. Never connect root only to the leading ' +
+      'component while leaving sibling components disconnected. If the leading component is the only visible ' +
+      'component, SurfaceRoot.child may reference it directly. HeroBanner requires title, uses text as its kicker and ' +
+      'body as a natural synthesis of all verified results, and must not mechanically list toolId values.\n' +
       '- /summary/count and /summary/text describe how many DataResult sets were collected, never the total number ' +
       'of business entities. HeroBanner must not present either value as an entity total. Never infer a total from ' +
       'a sampled array length. A business count may appear only when result.data explicitly labels a scalar as count ' +

@@ -37,6 +37,8 @@ import {
   ToolDefinition,
   ToolDefinitionLookup,
   UiLayoutPlanner,
+  UiPartialRenderPolicy,
+  UiRenderPhase,
   UiRenderProgressSink,
   UiRenderResult,
   UiSurfaceWriteLease,
@@ -192,6 +194,7 @@ export interface MultiAgentCanaryOptions {
   downstreamWriter?: UiSurfaceWriter;
   uiLayoutPlanner?: UiLayoutPlanner;
   uiRenderer?: UiTaskRenderer;
+  uiPartialRenderPolicy?: UiPartialRenderPolicy;
   surfaceDocumentProjector?: (surface: A2uiSurfaceState) => HtmlHomeDocument;
   a2uiParserProfile?: A2uiParserProfile;
   settingsFingerprint?: string;
@@ -206,6 +209,8 @@ export interface MultiAgentCanaryOptions {
     args: Object,
     onPartial?: (result: DataResult) => void
   ) => Promise<DataResult>;
+  /** UI Lab opt-in: forward DataAgent partial callbacks to every structured read adapter. */
+  forwardStructuredToolPartials?: boolean;
   /** Host-only planning capability. UI Lab enables trusted operationTarget values; Home keeps this disabled. */
   allowTrustedOperationTargets?: boolean;
   bus?: LinkedMessageBus;
@@ -455,11 +460,12 @@ class MailDetailInPlaceBridge implements UiTaskRenderer, UiSurfaceWriter, MailDe
     data: DataResult[],
     offers: ActionOffer[],
     surfaceId: string,
+    phase: UiRenderPhase,
     progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult> {
     const state = this.surfaces.get(surfaceId);
     if (state === undefined || state.uiTaskId !== task.taskId) {
-      return this.renderer.result(task, data, offers, surfaceId, progressSink);
+      return this.renderer.result(task, data, offers, surfaceId, phase, progressSink);
     }
     if (data.length !== 1 || data[0].toolId !== task.intent) {
       state.event = {
@@ -473,7 +479,7 @@ class MailDetailInPlaceBridge implements UiTaskRenderer, UiSurfaceWriter, MailDe
     }
     state.event = mailDetailFromData(data[0], state.request);
     return state.event.status === 'success' ?
-      this.mailRenderer.result(task, data, [], surfaceId) :
+      this.mailRenderer.result(task, data, [], surfaceId, phase) :
       this.mailRenderer.error(task, state.event.error, surfaceId);
   }
 
@@ -906,14 +912,16 @@ class CanaryStructuredDataExecutor implements DataTaskExecutor {
     args: Object,
     onPartial?: (result: DataResult) => void
   ) => Promise<DataResult>;
+  private readonly forwardStructuredToolPartials: boolean;
 
   constructor(structuredToolCall?: (
     toolId: string,
     prompt: string,
     args: Object,
     onPartial?: (result: DataResult) => void
-  ) => Promise<DataResult>) {
+  ) => Promise<DataResult>, forwardStructuredToolPartials: boolean = false) {
     this.structuredToolCall = structuredToolCall === undefined ? callStructuredTool : structuredToolCall;
+    this.forwardStructuredToolPartials = forwardStructuredToolPartials;
   }
 
   async execute(
@@ -964,7 +972,8 @@ class CanaryStructuredDataExecutor implements DataTaskExecutor {
       }
       prompt = query;
     }
-    const result = task.toolId === 'media.aggregate.search' && onPartial !== undefined ?
+    const result = onPartial !== undefined &&
+      (this.forwardStructuredToolPartials || task.toolId === 'media.aggregate.search') ?
       await this.structuredToolCall(task.toolId, prompt, task.args, onPartial) :
       await this.structuredToolCall(task.toolId, prompt, task.args);
     if (task.toolId !== 'calendar.events.search' || result.status === 'error') {
@@ -1694,8 +1703,12 @@ export class MultiAgentCanaryRuntime {
       dataAuthorizer: authorizeCanaryDataTask,
       dataPlanner: options.dataPlanner,
       dataExecutor: options.dataExecutor === undefined ?
-        new CanaryStructuredDataExecutor(options.structuredToolCall) : options.dataExecutor,
+        new CanaryStructuredDataExecutor(
+          options.structuredToolCall,
+          options.forwardStructuredToolPartials === true
+        ) : options.dataExecutor,
       uiRenderer: mailDetailBridge,
+      uiPartialRenderPolicy: options.uiPartialRenderPolicy,
       surfaceWriter: mailDetailBridge,
       actionCatalog: catalog,
       actionCompiler: new MultiAgentActionPlanCompiler(options.model),

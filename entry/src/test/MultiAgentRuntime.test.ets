@@ -39,6 +39,7 @@ import {
   TurnResultPayload,
   UiRenderResultPayload,
   UiRenderResult,
+  UiRenderPhase,
   UiSurfaceWriteLease,
   UiSurfaceWriter,
   UiTaskRenderer,
@@ -260,7 +261,8 @@ class SimpleRenderer implements UiTaskRenderer {
     _task: CreateUiTaskPayload,
     _data: DataResult[],
     _offers: ActionOffer[],
-    _surfaceId: string
+    _surfaceId: string,
+    _phase: UiRenderPhase
   ): Promise<UiRenderResult> {
     return { jsonl: JSON.stringify('result') };
   }
@@ -293,7 +295,8 @@ class RecordingRenderer implements UiTaskRenderer {
     _task: CreateUiTaskPayload,
     data: DataResult[],
     _offers: ActionOffer[],
-    _surfaceId: string
+    _surfaceId: string,
+    _phase: UiRenderPhase
   ): Promise<UiRenderResult> {
     this.resultCalls++;
     return { jsonl: JSON.stringify('result-' + data.length.toString()) };

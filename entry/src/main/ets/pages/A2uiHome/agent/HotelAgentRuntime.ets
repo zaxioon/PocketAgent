@@ -47,6 +47,7 @@ import {
   ToolDefinitionLookup,
   UiLayoutPlanner,
   UiAgent,
+  UiRenderPhase,
   UiRenderResult,
   UiRenderResultPayload,
   UiSurfaceWriteLease,
@@ -1003,7 +1004,8 @@ export class HotelUiRenderer implements SingleDataUiTaskRenderer {
     task: CreateUiTaskPayload,
     data: DataResult,
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    _phase: UiRenderPhase
   ): Promise<UiRenderResult> {
     const expectedToolId = task.intent === 'hotel.detail' ? 'hotel.detail' : 'hotel.search';
     const assessment = hotelDataAssessment(data, expectedToolId);

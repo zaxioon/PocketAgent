@@ -369,7 +369,7 @@ export default function structuredToolUiRendererTest() {
       ));
 
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [community], [], 'surface-community'
+        uiTask(), [community], [], 'surface-community', 'complete'
       );
 
       expect(rendered.jsonl.indexOf('t3_real')).assertLarger(-1);
@@ -471,7 +471,9 @@ export default function structuredToolUiRendererTest() {
       ];
 
       for (let index = 0; index < fixtures.length; index++) {
-        const rendered = await renderer.result(uiTask(), [fixtures[index]], [], 'surface-' + index.toString());
+        const rendered = await renderer.result(
+          uiTask(), [fixtures[index]], [], 'surface-' + index.toString(), 'complete'
+        );
         expect(rendered.jsonl.indexOf(markers[index])).assertLarger(-1);
         expect(rendered.jsonl.indexOf('"jsonl"')).assertEqual(-1);
       }
@@ -486,7 +488,9 @@ export default function structuredToolUiRendererTest() {
         '{"title":"高铁","body":"","summary":"train second","trains":[]}'
       ));
 
-      const rendered = await renderer.result(uiTask(['travel-data', 'train-data']), [travel, train], [], 'surface-multi');
+      const rendered = await renderer.result(
+        uiTask(['travel-data', 'train-data']), [travel, train], [], 'surface-multi', 'complete'
+      );
       const parsed = parseA2uiJsonl(rendered.jsonl);
       const store = new A2uiSurfaceStore();
       parsed.envelopes.forEach((envelope: A2uiEnvelope) => {
@@ -515,7 +519,8 @@ export default function structuredToolUiRendererTest() {
         uiTask(['input:round-1:travel', 'input:round-2:train']),
         [travel, train],
         [],
-        'surface-serial'
+        'surface-serial',
+        'complete'
       );
       const parsed = parseA2uiJsonl(rendered.jsonl);
       const store = new A2uiSurfaceStore();
@@ -543,7 +548,7 @@ export default function structuredToolUiRendererTest() {
       ));
 
       const rendered = await renderer.result(
-        uiTask(['mail-data', 'calendar-data']), [mail, calendar], [], 'surface-mail-calendar'
+        uiTask(['mail-data', 'calendar-data']), [mail, calendar], [], 'surface-mail-calendar', 'complete'
       );
       const parsed = parseA2uiJsonl(rendered.jsonl);
       const store = new A2uiSurfaceStore();
@@ -590,10 +595,10 @@ export default function structuredToolUiRendererTest() {
       const renderer = new StructuredToolUiRenderer();
 
       const rendered = await renderer.result(
-        uiTask(['first-data', 'second-data']), [first, second], [], 'surface-same-schema'
+        uiTask(['first-data', 'second-data']), [first, second], [], 'surface-same-schema', 'complete'
       );
       const repeated = await renderer.result(
-        uiTask(['first-data', 'second-data']), [first, second], [], 'surface-same-schema'
+        uiTask(['first-data', 'second-data']), [first, second], [], 'surface-same-schema', 'complete'
       );
       const parsed = parseA2uiJsonl(rendered.jsonl);
       const componentIds: Set<string> = new Set<string>();
@@ -655,7 +660,7 @@ export default function structuredToolUiRendererTest() {
         '"variant":"secondary","kind":"client","args":{"eventId":"event-second"}}]', '', 'second summary'
       ));
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(['first-data', 'second-data']), [first, second], [], 'surface-stored-results'
+        uiTask(['first-data', 'second-data']), [first, second], [], 'surface-stored-results', 'complete'
       );
       const parsed = parseA2uiJsonl(rendered.jsonl);
       const store = new A2uiSurfaceStore();
@@ -770,7 +775,7 @@ export default function structuredToolUiRendererTest() {
       const ambiguousOffers = await resolver.resolve(ambiguous, offerContext('calendar-ambiguous'));
       const missingOffers = await resolver.resolve(missing, offerContext('calendar-missing'));
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [exact], exactOffers, 'surface-calendar-update'
+        uiTask(), [exact], exactOffers, 'surface-calendar-update', 'complete'
       );
 
       expect(exactOffers.length).assertEqual(1);
@@ -798,7 +803,7 @@ export default function structuredToolUiRendererTest() {
       const renderer = new StructuredToolUiRenderer();
 
       const rendered = await renderer.result(
-        uiTask(['hotel-search-data', 'hotel-detail-data']), [search, detail], offers, 'surface-hotels'
+        uiTask(['hotel-search-data', 'hotel-detail-data']), [search, detail], offers, 'surface-hotels', 'complete'
       );
       const parsed = parseA2uiJsonl(rendered.jsonl);
       const store = new A2uiSurfaceStore();
@@ -835,14 +840,14 @@ export default function structuredToolUiRendererTest() {
         await resolver.resolve(detail, offerContext('hotel-detail-data'))
       );
       const baseline = await new StructuredToolUiRenderer().result(
-        uiTask(['hotel-search-data', 'hotel-detail-data']), [search, detail], offers, 'surface-cross-tool'
+        uiTask(['hotel-search-data', 'hotel-detail-data']), [search, detail], offers, 'surface-cross-tool', 'complete'
       );
       const planner = new RecordingPlanner();
       const booking = actionById(offers, 'hotel.booking.open') as ActionOffer;
       planner.candidate = layoutCandidate('surface-cross-tool', booking.offerId);
 
       const rendered = await new StructuredToolUiRenderer(planner, 100).result(
-        uiTask(['hotel-search-data', 'hotel-detail-data']), [search, detail], offers, 'surface-cross-tool'
+        uiTask(['hotel-search-data', 'hotel-detail-data']), [search, detail], offers, 'surface-cross-tool', 'complete'
       );
 
       expect(rendered.jsonl).assertEqual(baseline.jsonl);
@@ -885,7 +890,7 @@ export default function structuredToolUiRendererTest() {
       const offers = await resolver.resolve(result, offerContext('ride-client-data'));
       const planner = new RecordingPlanner();
       const rendered = await new StructuredToolUiRenderer(planner, 100).result(
-        uiTask(), [result], offers, 'surface-client-action'
+        uiTask(), [result], offers, 'surface-client-action', 'complete'
       );
 
       expect(offers.length).assertEqual(0);
@@ -921,7 +926,7 @@ export default function structuredToolUiRendererTest() {
       const duplicateOffers = await resolver.resolve(duplicateResult, offerContext('dedupe-data'));
       const prototypeOffers = await resolver.resolve(prototypeResult, offerContext('prototype-data'));
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [duplicateResult], duplicateOffers, 'surface-relabelled-client'
+        uiTask(), [duplicateResult], duplicateOffers, 'surface-relabelled-client', 'complete'
       );
 
       expect(duplicateOffers.length).assertEqual(0);
@@ -956,7 +961,7 @@ export default function structuredToolUiRendererTest() {
         result, offerContext('ride-exact-data')
       );
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [result], offers, 'surface-ride-exact'
+        uiTask(), [result], offers, 'surface-ride-exact', 'complete'
       );
 
       expect(offers.length).assertEqual(0);
@@ -1103,7 +1108,7 @@ export default function structuredToolUiRendererTest() {
       planner.candidate = layoutCandidate('surface-layout', booking.offerId);
       const renderer = new StructuredToolUiRenderer(planner, 100);
 
-      const rendered = await renderer.result(uiTask(), [data], offers, 'surface-layout');
+      const rendered = await renderer.result(uiTask(), [data], offers, 'surface-layout', 'complete');
 
       expect(rendered.jsonl.indexOf('"id":"hotel.booking.open"')).assertLarger(-1);
       expect(rendered.jsonl.indexOf('"hotelId":47675')).assertLarger(-1);
@@ -1122,11 +1127,13 @@ export default function structuredToolUiRendererTest() {
       const data = dataResult('hotel.detail', 'hotelRatePlans', hotelDetailResult() as Object);
       const offers = await resolver.resolve(data, offerContext());
       const booking = actionById(offers, 'hotel.booking.open') as ActionOffer;
-      const baseline = await new StructuredToolUiRenderer().result(uiTask(), [data], offers, 'surface-layout-only');
+      const baseline = await new StructuredToolUiRenderer().result(
+        uiTask(), [data], offers, 'surface-layout-only', 'complete'
+      );
       const accepted = new RecordingPlanner();
       accepted.candidate = layoutCandidate('surface-layout-only', booking.offerId);
       const acceptedRender = await new StructuredToolUiRenderer(accepted, 100).result(
-        uiTask(), [data], offers, 'surface-layout-only'
+        uiTask(), [data], offers, 'surface-layout-only', 'complete'
       );
 
       expect(acceptedRender.jsonl === baseline.jsonl).assertFalse();
@@ -1147,7 +1154,7 @@ export default function structuredToolUiRendererTest() {
         const planner = new RecordingPlanner();
         planner.candidate = candidates[index];
         const rendered = await new StructuredToolUiRenderer(planner, 100).result(
-          uiTask(), [data], offers, 'surface-layout-only'
+          uiTask(), [data], offers, 'surface-layout-only', 'complete'
         );
         expect(rendered.jsonl).assertEqual(baseline.jsonl);
       }
@@ -1158,7 +1165,9 @@ export default function structuredToolUiRendererTest() {
       const data = dataResult('hotel.detail', 'hotelRatePlans', hotelDetailResult() as Object);
       const offers = await resolver.resolve(data, offerContext());
       const booking = actionById(offers, 'hotel.booking.open') as ActionOffer;
-      const baseline = await new StructuredToolUiRenderer().result(uiTask(), [data], offers, 'surface-fallback');
+      const baseline = await new StructuredToolUiRenderer().result(
+        uiTask(), [data], offers, 'surface-fallback', 'complete'
+      );
       const malformed = new RecordingPlanner();
       malformed.candidate = '{"invalid":true}';
       const duplicate = new RecordingPlanner();
@@ -1180,7 +1189,7 @@ export default function structuredToolUiRendererTest() {
 
       for (let index = 0; index < planners.length; index++) {
         const rendered = await new StructuredToolUiRenderer(planners[index], 1).result(
-          uiTask(), [data], offers, 'surface-fallback'
+          uiTask(), [data], offers, 'surface-fallback', 'complete'
         );
         expect(rendered.jsonl).assertEqual(baseline.jsonl);
       }
@@ -1210,7 +1219,7 @@ export default function structuredToolUiRendererTest() {
       const task = uiTask();
       task.intent = 'show results with ' + secret;
 
-      await renderer.result(task, [result], [], 'surface-redaction');
+      await renderer.result(task, [result], [], 'surface-redaction', 'complete');
 
       expect(planner.prompt.length > 0).assertTrue();
       expect(planner.prompt.length <= 4096).assertTrue();
@@ -1232,7 +1241,9 @@ export default function structuredToolUiRendererTest() {
       result.status = 'error';
       result.error = { code: 'AUTH_REQUIRED', message: 'YouTube account authorization required' };
 
-      const rendered = await new StructuredToolUiRenderer().result(uiTask(), [result], [], 'surface-youtube-auth');
+      const rendered = await new StructuredToolUiRenderer().result(
+        uiTask(), [result], [], 'surface-youtube-auth', 'complete'
+      );
       const parsed = parseA2uiJsonl(rendered.jsonl);
       const serialized = JSON.stringify(parsed.envelopes);
 
@@ -1257,7 +1268,7 @@ export default function structuredToolUiRendererTest() {
       result.error = { code: 'AUTH_REQUIRED', message: 'YouTube account authorization required' };
 
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [result], [], 'surface-youtube-auth-no-link'
+        uiTask(), [result], [], 'surface-youtube-auth-no-link', 'complete'
       );
 
       expect(rendered.jsonl.indexOf('当前没有可用授权链接；不会伪造 YouTube 账号结果。')).assertLarger(-1);
@@ -1285,7 +1296,7 @@ export default function structuredToolUiRendererTest() {
       }];
 
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [result], [], 'surface-dynamic-provider'
+        uiTask(), [result], [], 'surface-dynamic-provider', 'complete'
       );
 
       expect(rendered.jsonl.indexOf('GenericToolResults')).assertLarger(-1);
@@ -1318,7 +1329,7 @@ export default function structuredToolUiRendererTest() {
           fetchedAt: '2026-07-23T00:00:00Z'
         }];
         const rendered = await new StructuredToolUiRenderer().result(
-          uiTask(), [result], [], 'surface-dynamic-' + index.toString()
+          uiTask(), [result], [], 'surface-dynamic-' + index.toString(), 'complete'
         );
         expect(rendered.jsonl.indexOf(messages[index])).assertLarger(-1);
         expect(rendered.jsonl.indexOf('结构化结果格式无效')).assertEqual(-1);
@@ -1339,7 +1350,7 @@ export default function structuredToolUiRendererTest() {
       }];
 
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [result], [], 'surface-github-auth'
+        uiTask(), [result], [], 'surface-github-auth', 'complete'
       );
 
       expect(rendered.jsonl.indexOf('GitHub authorization required')).assertLarger(-1);
@@ -1362,7 +1373,7 @@ export default function structuredToolUiRendererTest() {
       }];
 
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [result], [], 'surface-stale-github-auth'
+        uiTask(), [result], [], 'surface-stale-github-auth', 'complete'
       );
 
       expect(rendered.jsonl.indexOf('结构化结果格式无效')).assertLarger(-1);
@@ -1384,7 +1395,7 @@ export default function structuredToolUiRendererTest() {
       }];
 
       const rendered = await new StructuredToolUiRenderer().result(
-        uiTask(), [result], [], 'surface-dynamic-identity-mismatch'
+        uiTask(), [result], [], 'surface-dynamic-identity-mismatch', 'complete'
       );
 
       expect(rendered.jsonl.indexOf('结构化结果格式无效')).assertLarger(-1);
@@ -1405,10 +1416,10 @@ export default function structuredToolUiRendererTest() {
       const renderer = new StructuredToolUiRenderer();
 
       const missing = await renderer.result(
-        uiTask(), [missingRegistration], [], 'surface-dynamic-missing-registration'
+        uiTask(), [missingRegistration], [], 'surface-dynamic-missing-registration', 'complete'
       );
       const malformed = await renderer.result(
-        uiTask(), [malformedRegistration], [], 'surface-dynamic-malformed-registration'
+        uiTask(), [malformedRegistration], [], 'surface-dynamic-malformed-registration', 'complete'
       );
 
       expect(missing.jsonl.indexOf('结构化结果格式无效')).assertLarger(-1);
@@ -1432,9 +1443,15 @@ export default function structuredToolUiRendererTest() {
       detail.status = 'error';
       const malformed = dataResult('hotel.search', 'hotelSearchResults', object('{"ok":false}'));
 
-      const searchRender = await new StructuredToolUiRenderer().result(uiTask(), [search], [], 'surface-hotel-error-search');
-      const detailRender = await new StructuredToolUiRenderer().result(uiTask(), [detail], [], 'surface-hotel-error-detail');
-      const malformedRender = await new StructuredToolUiRenderer().result(uiTask(), [malformed], [], 'surface-hotel-malformed');
+      const searchRender = await new StructuredToolUiRenderer().result(
+        uiTask(), [search], [], 'surface-hotel-error-search', 'complete'
+      );
+      const detailRender = await new StructuredToolUiRenderer().result(
+        uiTask(), [detail], [], 'surface-hotel-error-detail', 'complete'
+      );
+      const malformedRender = await new StructuredToolUiRenderer().result(
+        uiTask(), [malformed], [], 'surface-hotel-malformed', 'complete'
+      );
 
       expect(searchRender.jsonl.indexOf('RollingGo search unavailable')).assertLarger(-1);
       expect(detailRender.jsonl.indexOf('RollingGo detail unavailable')).assertLarger(-1);
@@ -1448,8 +1465,10 @@ export default function structuredToolUiRendererTest() {
       const unknown = dataResult('unknown.read', 'unknownSchema', object('{"secret":"do not dump"}'));
       const malformed = dataResult('travel.search', 'travelOptions', object('{"unexpected":true}'));
 
-      const unknownRendered = await renderer.result(uiTask(), [unknown], [], 'surface-unknown');
-      const malformedRendered = await renderer.result(uiTask(), [malformed], [], 'surface-malformed');
+      const unknownRendered = await renderer.result(uiTask(), [unknown], [], 'surface-unknown', 'complete');
+      const malformedRendered = await renderer.result(
+        uiTask(), [malformed], [], 'surface-malformed', 'complete'
+      );
 
       expect(unknownRendered.jsonl.indexOf('error')).assertLarger(-1);
       expect(unknownRendered.jsonl.indexOf('do not dump')).assertEqual(-1);

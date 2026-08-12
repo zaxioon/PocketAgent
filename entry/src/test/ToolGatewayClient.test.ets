@@ -35,6 +35,8 @@ import {
   buildToolGatewayUrl,
   combineTravelStructuredResults,
   callStructuredTool,
+  callStructuredToolForUiLab,
+  callStructuredToolForUiLabWithExecutorForTest,
   callToolGateway,
   callStructuredHotelTool,
   configureComposioConfigFromRawJson,
@@ -61,6 +63,7 @@ import {
   foodStructuredDataA2ui,
   foodStructuredDataResult,
   foodStructuredDataResultFromProviders,
+  foodStructuredPartialDataResult,
   foodDistanceMeters,
   foodProviderProgressRows,
   foodRecordFromBaiduPlace,
@@ -120,6 +123,7 @@ import {
   trainStructuredDataResult,
   travelStructuredDataA2ui,
   travelStructuredDataResult,
+  UiLabDataResultThrottle,
   FoodProviderPartialSnapshot,
   FoodProviderResult,
   MailSearchStructuredData
@@ -525,8 +529,102 @@ function trainRowForPrice(
   return fields.join('|');
 }
 
+interface UiLabPartialSequence {
+  sequence: number;
+}
+
+function uiLabPartialSequenceResult(
+  toolId: string,
+  outputSchema: string,
+  sequence: number,
+  status: 'partial' | 'success' = 'partial'
+): DataResult {
+  const data: UiLabPartialSequence = { sequence };
+  const result = partialDataResult(toolId, outputSchema, data, [], []);
+  result.status = status;
+  return result;
+}
+
 export default function toolGatewayClientTest() {
   describe('toolGatewayClient', () => {
+    it('coalesces UI Lab partials with leading and trailing latest delivery', 0, () => {
+      const delivered: number[] = [];
+      const throttle = new UiLabDataResultThrottle(500, (result: DataResult): void => {
+        const data = result.data as Record<string, number>;
+        delivered.push(data['sequence']);
+      });
+      const snapshot = (sequence: number): DataResult => uiLabPartialSequenceResult(
+        'media.aggregate.search', 'aggregateSearch', sequence
+      );
+
+      throttle.enqueue(snapshot(1));
+      throttle.enqueue(snapshot(2));
+      throttle.enqueue(snapshot(3));
+      expect(delivered.join(',')).assertEqual('1');
+
+      throttle.flush();
+      expect(delivered.join(',')).assertEqual('1,3');
+
+      throttle.enqueue(snapshot(4));
+      expect(delivered.join(',')).assertEqual('1,3,4');
+      throttle.enqueue(snapshot(5));
+      throttle.cancel();
+      throttle.flush();
+      expect(delivered.join(',')).assertEqual('1,3,4');
+    });
+
+    it('accepts an injectable zero UI Lab partial throttle interval', 0, async () => {
+      const delivered: string[] = [];
+      const throttle = new UiLabDataResultThrottle(0, (result: DataResult): void => {
+        delivered.push(result.toolId);
+      });
+      throttle.enqueue(partialDataResult('first', 'genericToolResults', new Object(), [], []));
+      throttle.enqueue(partialDataResult('second', 'genericToolResults', new Object(), [], []));
+      expect(delivered.join(',')).assertEqual('first,second');
+
+      const result = await callStructuredToolForUiLab(
+        'not.registered',
+        'unsupported',
+        null,
+        (_partial: DataResult): void => {},
+        0
+      );
+      expect(result.status).assertEqual('error');
+      expect(result.error?.code).assertEqual('TOOL_NOT_ALLOWED');
+    });
+
+    it('cancels the queued UI Lab partial when the cumulative final result settles', 0, async () => {
+      const delivered: number[] = [];
+      const snapshot = (sequence: number, status: 'partial' | 'success'): DataResult =>
+        uiLabPartialSequenceResult('social.feed.search', 'socialHubFeed', sequence, status);
+      const final = await callStructuredToolForUiLabWithExecutorForTest(
+        'social.feed.search',
+        'messages',
+        new Object(),
+        (result: DataResult): void => {
+          const data = result.data as Record<string, number>;
+          delivered.push(data['sequence']);
+        },
+        500,
+        async (
+          _toolId: string,
+          _prompt: string,
+          _args: Object | null,
+          onPartial?: (result: DataResult) => void
+        ): Promise<DataResult> => {
+          if (onPartial !== undefined) {
+            onPartial(snapshot(1, 'partial'));
+            onPartial(snapshot(2, 'partial'));
+          }
+          return snapshot(3, 'success');
+        }
+      );
+
+      expect(delivered.join(',')).assertEqual('1');
+      expect((final.data as Record<string, number>)['sequence']).assertEqual(3);
+      expect(final.status).assertEqual('success');
+    });
+
     it('uses the lowest priced seat that is currently available', 0, () => {
       const row = trainRowForPrice(
         '9174800000M093300000O055300000',
@@ -4386,6 +4484,67 @@ export default function toolGatewayClientTest() {
       expect(rows[1].value).assertEqual('等待中');
       expect(rows[2].label).assertEqual('美团');
       expect(rows[2].value.indexOf('未配置')).assertLarger(-1);
+    });
+
+    it('converts cumulative food provider snapshots into valid structured partial results', 0, () => {
+      const rice: A2uiFoodData = {
+        name: '米粉店',
+        category: '餐饮',
+        address: '科技园',
+        distance: '100米',
+        sourceTags: ['高德']
+      };
+      const amap: FoodProviderResult = {
+        provider: '高德',
+        foods: [rice],
+        error: '',
+        attempted: true,
+        succeeded: true,
+        operation: 'search'
+      };
+      const tencent: FoodProviderResult = {
+        provider: '腾讯地图',
+        foods: [],
+        error: 'provider unavailable',
+        attempted: true,
+        succeeded: false,
+        operation: 'search'
+      };
+      const firstSnapshot: FoodProviderPartialSnapshot = {
+        provider: '高德',
+        completed: 1,
+        total: 2,
+        foods: [rice],
+        issues: [],
+        results: [amap]
+      };
+      const secondSnapshot: FoodProviderPartialSnapshot = {
+        provider: '腾讯地图',
+        completed: 2,
+        total: 2,
+        foods: [rice],
+        issues: [tencent],
+        results: [amap, tencent]
+      };
+
+      const first = foodStructuredPartialDataResult(['高德', '腾讯地图'], firstSnapshot);
+      const second = foodStructuredPartialDataResult(['高德', '腾讯地图'], secondSnapshot);
+      const firstData = first.data as FoodStructuredData;
+      const secondData = second.data as FoodStructuredData;
+
+      expect(first.toolId).assertEqual('food.search');
+      expect(first.outputSchema).assertEqual('foodChoices');
+      expect(first.status).assertEqual('partial');
+      expect(first.error === undefined).assertTrue();
+      expect(firstData.foods.length).assertEqual(1);
+      expect(firstData.rows.length).assertEqual(2);
+      expect(firstData.rows[1].value).assertEqual('等待中');
+      expect(second.status).assertEqual('partial');
+      expect(second.error === undefined).assertTrue();
+      expect(secondData.summary.indexOf('2/2')).assertLarger(-1);
+      expect(secondData.rows[1].value).assertContain('provider unavailable');
+      expect(second.sources.length).assertEqual(2);
+      expect(second.warnings.length).assertEqual(1);
     });
 
     it('keeps food partial component signatures stable when only provider data changes', 0, () => {

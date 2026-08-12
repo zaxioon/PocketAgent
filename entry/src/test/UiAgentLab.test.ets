@@ -40,8 +40,10 @@ import {
   UiAgentLabDecisionStreamGate,
   uiAgentLabDataJsonl,
   uiAgentLabPartialDispatch,
+  uiAgentLabProgressListener,
   uiAgentLabProgressWindowAvailable,
   uiAgentLabRejectedLayoutJsonl,
+  uiAgentLabLayoutMatchesPhase,
   uiAgentLabLayoutDiagnosticText,
   uiAgentLabLayoutPrompt,
   withUiAgentLabSurfaceStatus
@@ -130,6 +132,16 @@ function settings(): LocalModelSettings {
 
 export default function uiAgentLabTest() {
   describe('uiAgentLab', () => {
+    it('does not register progressive surface deltas by default', 0, () => {
+      let deltaCount: number = 0;
+      const listener = uiAgentLabProgressListener((_delta: string): void => {
+        deltaCount++;
+      });
+
+      expect(listener === undefined).assertTrue();
+      expect(deltaCount).assertEqual(0);
+    });
+
     it('projects only complete streamed branches and keeps model order', 0, () => {
       const components = JSON.parse('[{"id":"root","component":"SurfaceRoot","child":"content"},' +
         '{"id":"content","component":"Column","children":["hero","metrics","activity"]},' +
@@ -158,10 +170,48 @@ export default function uiAgentLabTest() {
       const partial = '{"createSurface":{"surfaceId":"surface-policy","status":"calling_tool"}}\n';
       const progressive = withUiAgentLabSurfaceStatus(partial, 'surface-policy', 'calling_tool');
 
-      expect(uiAgentLabRejectedLayoutJsonl(null, progressive, baseline, 'surface-policy'))
+      expect(uiAgentLabRejectedLayoutJsonl(null, progressive, baseline, 'surface-policy', 'complete'))
         .assertContain('"status":"ready"');
-      expect(uiAgentLabRejectedLayoutJsonl('invalid-final', progressive, baseline, 'surface-policy'))
+      expect(uiAgentLabRejectedLayoutJsonl(null, progressive, baseline, 'surface-policy', 'partial'))
+        .assertContain('"status":"partial"');
+      expect(uiAgentLabRejectedLayoutJsonl('invalid-final', progressive, baseline, 'surface-policy', 'complete'))
         .assertEqual(baseline);
+    });
+
+    it('accepts only the lifecycle-specific leading component', 0, () => {
+      const partial = '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-phase","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["loading","facts"]},' +
+        '{"id":"loading","component":"ThinkingCard","title":"正在获取真实数据","status":"calling_tool"},' +
+        '{"id":"facts","component":"InfoRows","dataPath":"/results/0/facts"}]}}';
+      const complete = '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-phase","components":[' +
+        '{"id":"root","component":"SurfaceRoot","child":"content"},' +
+        '{"id":"content","component":"Column","children":["hero","facts"]},' +
+        '{"id":"hero","component":"HeroBanner","title":"完整结果"},' +
+        '{"id":"facts","component":"InfoRows","dataPath":"/results/0/facts"}]}}';
+      const completeWithSkeleton = complete.replace(
+        '"children":["hero","facts"]', '"children":["hero","skeleton","facts"]'
+      ).replace(
+        '{"id":"facts"', '{"id":"skeleton","component":"SkeletonCard","status":"loading"},{"id":"facts"'
+      );
+
+      expect(uiAgentLabLayoutMatchesPhase(partial, 'surface-phase', 'partial')).assertTrue();
+      expect(uiAgentLabLayoutMatchesPhase(partial, 'surface-phase', 'complete')).assertFalse();
+      expect(uiAgentLabLayoutMatchesPhase(complete, 'surface-phase', 'complete')).assertTrue();
+      expect(uiAgentLabLayoutMatchesPhase(completeWithSkeleton, 'surface-phase', 'complete')).assertTrue();
+      expect(uiAgentLabLayoutMatchesPhase(complete, 'surface-phase', 'partial')).assertFalse();
+      expect(uiAgentLabLayoutMatchesPhase(
+        partial.replace('"status":"calling_tool"', '"status":"ready"'), 'surface-phase', 'partial'
+      )).assertFalse();
+      expect(uiAgentLabLayoutMatchesPhase(
+        partial.replace('正在获取真实数据', '仍在加载'), 'surface-phase', 'partial'
+      )).assertFalse();
+      expect(uiAgentLabLayoutMatchesPhase(
+        complete.replace(
+          '{"id":"facts"',
+          '{"id":"loading","component":"ThinkingCard","title":"正在获取真实数据","status":"loading"},{"id":"facts"'
+        ), 'surface-phase', 'complete'
+      )).assertFalse();
     });
 
     it('opens decision-note streaming only on exact standalone tag boundaries', 0, () => {
@@ -958,7 +1008,7 @@ export default function uiAgentLabTest() {
       const snapshot = buildUiAgentLabSnapshot(task, [data]);
       const visible = snapshot.results[0].data as Record<string, Object>;
       const sampledProvider = visible['providerData'] as Record<string, Object>;
-      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
+      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[], 'complete');
 
       expect(Object.keys(visible).length).assertEqual(1);
       expect(visible['results'] === undefined).assertTrue();
@@ -1012,7 +1062,8 @@ export default function uiAgentLabTest() {
         data: JSON.parse('{"headline":"动态标题","count":3,"rows":[{"name":"第一项"}]}') as Object
       };
       const snapshot = buildUiAgentLabSnapshot(task, [data]);
-      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
+      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[], 'complete');
+      const partialPrompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[], 'partial');
       expect(prompt).assertContain('intent="展示真实结果"');
       expect(prompt.indexOf('MUST include at least one suitable chart component')).assertEqual(-1);
       expect(prompt.indexOf('prefer adding SegmentedRingChart')).assertEqual(-1);
@@ -1021,11 +1072,20 @@ export default function uiAgentLabTest() {
       expect(prompt).assertContain('动态标题');
       expect(prompt).assertContain('Choose presentation by the meaning and shape');
       expect(prompt).assertContain('do not prescribe a chart type');
+      expect(prompt).assertContain('pageState=complete');
+      expect(prompt.endsWith('dataSnapshotComplete=true')).assertTrue();
       expect(prompt).assertContain('MUST output exactly one HeroBanner');
-      expect(prompt).assertContain('Do not fabricate a HeroBanner summary for an error or no-display-data baseline');
+      expect(prompt).assertContain('MUST NOT retain a partial loading ThinkingCard');
+      expect(partialPrompt).assertContain('pageState=partial');
+      expect(partialPrompt.endsWith('dataSnapshotComplete=false')).assertTrue();
+      expect(partialPrompt.indexOf('dataSnapshotComplete=true')).assertEqual(-1);
+      expect(partialPrompt).assertContain('MUST be ThinkingCard with the exact direct title="正在获取真实数据"');
+      expect(partialPrompt).assertContain('status="calling_tool" or status="loading"');
+      expect(partialPrompt).assertContain('SkeletonCard does not satisfy this lifecycle requirement');
+      expect(partialPrompt).assertContain('MUST NOT contain HeroBanner');
       expect(prompt).assertContain('always the first visible element in the main content container');
       expect(prompt).assertContain('SurfaceRoot.child must reference a Column');
-      expect(prompt).assertContain('HeroBanner id must be Column.children[0]');
+      expect(prompt).assertContain('required leading component id must be Column.children[0]');
       expect(prompt).assertContain('leaving sibling components disconnected');
       expect(prompt).assertContain('/summary/count and /summary/text describe the number of DataResult sets');
       expect(prompt).assertContain('not the number of business entities');
@@ -1052,7 +1112,7 @@ export default function uiAgentLabTest() {
       }
       longData['zz_payload'] = 'p'.repeat(11000);
       snapshot.results[0].data = longData as Object;
-      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[]);
+      const prompt = uiAgentLabLayoutPrompt(task, snapshot, [] as ActionOffer[], 'complete');
       const snapshotPrefix = 'dataSnapshot=';
       const snapshotStart = prompt.indexOf(snapshotPrefix) + snapshotPrefix.length;
       const completeMarker = '\ndataSnapshotComplete=true';

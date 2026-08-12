@@ -31,6 +31,7 @@ import {
   TrainStructuredData,
   TravelStructuredData,
   UiLayoutPlanner,
+  UiRenderPhase,
   UiRenderResult,
   UiTaskRenderer,
   aggregateSearchA2ui,
@@ -820,7 +821,8 @@ export class StructuredToolUiRenderer implements UiTaskRenderer {
     task: CreateUiTaskPayload,
     data: DataResult[],
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    _phase: UiRenderPhase
   ): Promise<UiRenderResult> {
     if (data.length === 0) {
       return rendered(errorJsonl(surfaceId, '没有可展示的结构化结果。'));

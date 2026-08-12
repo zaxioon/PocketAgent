@@ -10412,6 +10412,30 @@ export function foodStructuredDataResultFromProviders(
   return error;
 }
 
+export function foodStructuredPartialDataResult(
+  providerNames: string[],
+  snapshot: FoodProviderPartialSnapshot
+): DataResult {
+  const rows = foodProviderProgressRows(providerNames, snapshot.results);
+  const data: FoodStructuredData = {
+    title: '外卖聚合搜索',
+    body: '真实 provider 结果仍在聚合中；页面会随来源完成持续更新。',
+    summary: '已完成 ' + snapshot.completed.toString() + '/' + snapshot.total.toString() +
+      ' 个来源，当前有 ' + snapshot.foods.length.toString() + ' 个可展示结果。',
+    foods: snapshot.foods,
+    rows: rows
+  };
+  const converted = foodStructuredDataResultFromProviders(data, snapshot.results);
+  return {
+    toolId: 'food.search',
+    outputSchema: 'foodChoices',
+    status: 'partial',
+    sources: converted.sources,
+    data: converted.data,
+    warnings: converted.warnings
+  };
+}
+
 async function callStructuredFoodTool(
   prompt: string,
   args: Object | null,
@@ -15462,7 +15486,14 @@ export async function callStructuredTool(
     return callStructuredFlightTool(prompt);
   }
   if (toolId === 'food.search') {
-    return callStructuredFoodTool(prompt, args);
+    const partialPublisher = onPartial;
+    const foodObserver: FoodStructuredPartialObserver | null =
+      partialPublisher === undefined ? null : (
+        providerNames: string[], snapshot: FoodProviderPartialSnapshot
+      ): void => {
+        partialPublisher(foodStructuredPartialDataResult(providerNames, snapshot));
+      };
+    return callStructuredFoodTool(prompt, args, foodObserver);
   }
   if (toolId === 'maps.place.search' || toolId === 'maps.place.details') {
     return callStructuredMapsTool(toolId, prompt, mapsArgs(args));
@@ -15523,11 +15554,83 @@ export async function callStructuredTool(
   );
 }
 
+export const UI_LAB_PARTIAL_THROTTLE_MS: number = 500;
+
+/** UI Lab-only leading/trailing throttle. The newest cumulative snapshot wins inside each window. */
+export class UiLabDataResultThrottle {
+  private readonly intervalMs: number;
+  private readonly callback: (result: DataResult) => void;
+  private timerId: number = -1;
+  private pending: DataResult | null = null;
+
+  constructor(intervalMs: number, callback: (result: DataResult) => void) {
+    this.intervalMs = intervalMs > 0 ? intervalMs : 0;
+    this.callback = callback;
+  }
+
+  enqueue(result: DataResult): void {
+    if (this.intervalMs === 0) {
+      this.callback(result);
+      return;
+    }
+    if (this.timerId < 0) {
+      this.callback(result);
+      this.startWindow();
+      return;
+    }
+    this.pending = result;
+  }
+
+  flush(): void {
+    if (this.timerId >= 0) {
+      clearTimeout(this.timerId);
+      this.timerId = -1;
+    }
+    this.emitPending();
+  }
+
+  cancel(): void {
+    if (this.timerId >= 0) {
+      clearTimeout(this.timerId);
+      this.timerId = -1;
+    }
+    this.pending = null;
+  }
+
+  private startWindow(): void {
+    this.timerId = setTimeout((): void => {
+      this.timerId = -1;
+      if (this.pending === null) {
+        return;
+      }
+      this.emitPending();
+      this.startWindow();
+    }, this.intervalMs);
+  }
+
+  private emitPending(): void {
+    if (this.pending === null) {
+      return;
+    }
+    const pending = this.pending;
+    this.pending = null;
+    this.callback(pending);
+  }
+}
+
 /** Trusted UI Lab execution entrypoint. The profile is supplied by host code, never model-generated args. */
-export async function callStructuredToolForUiLab(
+async function callStructuredToolForUiLabWithExecutor(
   toolId: string,
   prompt: string,
-  args: Object | null
+  args: Object | null,
+  onPartial?: (result: DataResult) => void,
+  partialThrottleMs: number = UI_LAB_PARTIAL_THROTTLE_MS,
+  structuredToolCall: (
+    toolId: string,
+    prompt: string,
+    args: Object | null,
+    onPartial?: (result: DataResult) => void
+  ) => Promise<DataResult> = callStructuredTool
 ): Promise<DataResult> {
   if (toolId === 'dynamic.search') {
     const profile: DynamicReadExecutionProfile = {
@@ -15536,7 +15639,60 @@ export async function callStructuredToolForUiLab(
     };
     return callStructuredDynamicTool(prompt, args, profile);
   }
-  return callStructuredTool(toolId, prompt, args);
+  if (onPartial === undefined) {
+    return structuredToolCall(toolId, prompt, args);
+  }
+  const throttle = new UiLabDataResultThrottle(partialThrottleMs, onPartial);
+  try {
+    return await structuredToolCall(
+      toolId,
+      prompt,
+      args,
+      (result: DataResult): void => throttle.enqueue(result)
+    );
+  } finally {
+    // The terminal result is the newest cumulative snapshot; never emit an older queued partial after it.
+    throttle.cancel();
+  }
+}
+
+export async function callStructuredToolForUiLab(
+  toolId: string,
+  prompt: string,
+  args: Object | null,
+  onPartial?: (result: DataResult) => void,
+  partialThrottleMs: number = UI_LAB_PARTIAL_THROTTLE_MS
+): Promise<DataResult> {
+  return callStructuredToolForUiLabWithExecutor(
+    toolId,
+    prompt,
+    args,
+    onPartial,
+    partialThrottleMs
+  );
+}
+
+export async function callStructuredToolForUiLabWithExecutorForTest(
+  toolId: string,
+  prompt: string,
+  args: Object | null,
+  onPartial: (result: DataResult) => void,
+  partialThrottleMs: number,
+  structuredToolCall: (
+    toolId: string,
+    prompt: string,
+    args: Object | null,
+    onPartial?: (result: DataResult) => void
+  ) => Promise<DataResult>
+): Promise<DataResult> {
+  return callStructuredToolForUiLabWithExecutor(
+    toolId,
+    prompt,
+    args,
+    onPartial,
+    partialThrottleMs,
+    structuredToolCall
+  );
 }
 
 class CurrentHotelToolLookup implements ToolDefinitionLookup {

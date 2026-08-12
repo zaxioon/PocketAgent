@@ -17,6 +17,7 @@ import {
   RegisteredActionExecutor,
   TurnResultStatus,
   UiLayoutPlanner,
+  UiPartialRenderPolicy,
   UiSurfaceWriter,
   UiTaskRenderer,
   VirtualActionIntentResolver,
@@ -55,6 +56,7 @@ export interface MultiAgentRuntimeOptions {
   uiRenderer?: UiTaskRenderer;
   uiLayoutPlanner?: UiLayoutPlanner;
   uiLayoutTimeoutMs?: number;
+  uiPartialRenderPolicy?: UiPartialRenderPolicy;
   surfaceWriter: UiSurfaceWriter;
   actionCatalog: ActionCatalog;
   actionOfferResolver?: ActionOfferResolver;

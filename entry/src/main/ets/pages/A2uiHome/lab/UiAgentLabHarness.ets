@@ -16,6 +16,7 @@ import {
   OpenAiCompatibleModel,
   UI_AGENT_LAB_COMPONENT_CATALOG_JSON,
   UiLayoutPlanner,
+  UiRenderPhase,
   UiRenderProgressSink,
   UiRenderResult,
   UiTaskRenderer,
@@ -36,6 +37,8 @@ import {
 
 const UI_LAB_LAYOUT_TIMEOUT_MS: number = 60000;
 const UI_LAB_PROGRESS_COALESCE_MS: number = 32;
+const UI_LAB_PROGRESSIVE_SURFACE_ENABLED: boolean = false;
+const UI_LAB_PARTIAL_LOADING_TITLE: string = '正在获取真实数据';
 const UI_LAB_SNAPSHOT_LIMIT: number = 12000;
 const UI_LAB_LAYOUT_PROMPT_LIMIT: number = 24000;
 const UI_LAB_CATALOG_SCHEMA: A2uiComponentCatalogSchema | null =
@@ -46,6 +49,12 @@ export type UiLabRecord = Record<string, UiLabJsonValue>;
 
 export function uiAgentLabProgressWindowAvailable(timerId: number): boolean {
   return timerId < 0;
+}
+
+export function uiAgentLabProgressListener(
+  onTextDelta: (delta: string) => void
+): ((delta: string) => void) | undefined {
+  return UI_LAB_PROGRESSIVE_SURFACE_ENABLED ? onTextDelta : undefined;
 }
 
 export type UiAgentLabPartialDispatch = 'immediate' | 'schedule' | 'none';
@@ -779,12 +788,82 @@ export function uiAgentLabRejectedLayoutJsonl(
   candidate: string | null,
   lastValidatedPartial: string,
   baseline: string,
-  surfaceId: string
+  surfaceId: string,
+  phase: UiRenderPhase
 ): string {
   if (candidate === null && lastValidatedPartial.length > 0) {
-    return withUiAgentLabSurfaceStatus(lastValidatedPartial, surfaceId, 'ready');
+    return withUiAgentLabSurfaceStatus(
+      lastValidatedPartial,
+      surfaceId,
+      phase === 'partial' ? 'partial' : 'ready'
+    );
   }
   return baseline;
+}
+
+function uiAgentLabComponentsOf(jsonl: string, surfaceId: string): A2uiComponent[] {
+  const lines = jsonl.trim().split(/\r?\n/);
+  let components: A2uiComponent[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    let envelope: UiLabRecord;
+    try {
+      envelope = JSON.parse(lines[index]) as UiLabRecord;
+    } catch (_error) {
+      continue;
+    }
+    const update = recordOf(envelope['updateComponents']);
+    if (update === null || update['surfaceId'] !== surfaceId || !Array.isArray(update['components'])) continue;
+    components = update['components'] as A2uiComponent[];
+  }
+  return components;
+}
+
+function firstVisibleUiAgentLabComponent(components: A2uiComponent[]): A2uiComponent | null {
+  const byId: Map<string, A2uiComponent> = new Map<string, A2uiComponent>();
+  for (let index = 0; index < components.length; index++) {
+    byId.set(components[index].id, components[index]);
+  }
+  let current = byId.get('root');
+  const visited: Set<string> = new Set<string>();
+  while (current !== undefined) {
+    if (visited.has(current.id)) return null;
+    visited.add(current.id);
+    if (current.component !== 'SurfaceRoot' && current.component !== 'Column' && current.component !== 'Row') {
+      return current;
+    }
+    let nextId = current.child;
+    if ((nextId === undefined || nextId.length === 0) && Array.isArray(current.children) && current.children.length > 0) {
+      nextId = current.children[0];
+    }
+    if (nextId === undefined || nextId.length === 0) return null;
+    current = byId.get(nextId);
+  }
+  return null;
+}
+
+export function uiAgentLabLayoutMatchesPhase(
+  jsonl: string,
+  surfaceId: string,
+  phase: UiRenderPhase
+): boolean {
+  const components = uiAgentLabComponentsOf(jsonl, surfaceId);
+  const first = firstVisibleUiAgentLabComponent(components);
+  if (first === null) return false;
+  let heroCount = 0;
+  let partialLoadingThinkingCount = 0;
+  for (let index = 0; index < components.length; index++) {
+    if (components[index].component === 'HeroBanner') heroCount++;
+    if (components[index].component === 'ThinkingCard' &&
+      (components[index].title === UI_LAB_PARTIAL_LOADING_TITLE ||
+        components[index].status === 'calling_tool' || components[index].status === 'loading')) {
+      partialLoadingThinkingCount++;
+    }
+  }
+  if (phase === 'partial') {
+    return first.component === 'ThinkingCard' && first.title === UI_LAB_PARTIAL_LOADING_TITLE &&
+      (first.status === 'calling_tool' || first.status === 'loading') && heroCount === 0;
+  }
+  return first.component === 'HeroBanner' && heroCount === 1 && partialLoadingThinkingCount === 0;
 }
 
 export function uiAgentLabDataJsonl(surfaceId: string, snapshot: UiLabSnapshot): string {
@@ -818,12 +897,29 @@ function actionOf(offer: ActionOffer, sourceToolId: string): A2uiAction {
   return action;
 }
 
-function baselineComponents(data: DataResult[], offers: ActionOffer[]): A2uiComponent[] {
-  const children: string[] = ['summary'];
+function baselineComponents(
+  data: DataResult[],
+  offers: ActionOffer[],
+  phase: UiRenderPhase
+): A2uiComponent[] {
+  const leading: A2uiComponent = phase === 'partial' ? {
+    id: 'loading',
+    component: 'ThinkingCard',
+    title: UI_LAB_PARTIAL_LOADING_TITLE,
+    body: '已获取 ' + data.length.toString() + ' 组真实数据，更多真实数据仍在加载。',
+    status: 'calling_tool'
+  } : {
+    id: 'hero',
+    component: 'HeroBanner',
+    text: '结果概览',
+    title: '已获取真实数据',
+    body: '已获取 ' + data.length.toString() + ' 组真实数据。'
+  };
+  const children: string[] = [leading.id];
   const components: A2uiComponent[] = [
     { id: 'root', component: 'SurfaceRoot', child: 'content' },
     { id: 'content', component: 'Column', children },
-    { id: 'summary', component: 'Text', dataPath: '/summary/text' }
+    leading
   ];
   for (let index = 0; index < data.length; index++) {
     const id = 'result-' + index.toString();
@@ -873,7 +969,8 @@ function annotateActionSources(jsonl: string, data: DataResult[], offers: Action
 export function uiAgentLabLayoutPrompt(
   task: CreateUiTaskPayload,
   snapshot: UiLabSnapshot,
-  offers: ActionOffer[]
+  offers: ActionOffer[],
+  phase: UiRenderPhase
 ): string {
   const promptOffers: UiLabPromptOffer[] = offers.slice(0, 24).map(
     (offer: ActionOffer): UiLabPromptOffer => {
@@ -884,7 +981,7 @@ export function uiAgentLabLayoutPrompt(
     'Choose presentation by the meaning and shape of the actual values. Do not assume a business schema and do not prescribe a chart type.\n' +
     'When result.data.providerData exists, it is the schema-preserving provider payload. Prefer paths below providerData and do not bind generic rows or rawPreview compatibility fields.\n' +
     'If result.data.providerDataMeta.truncated is true, the provider payload is incomplete. Never treat a retained array length as the original total; use only explicit provider counts or providerDataMeta array counts.\n' +
-    'For every normal non-error UI Lab result with displayable verified data, you MUST output exactly one HeroBanner. Do not fabricate a HeroBanner summary for an error or no-display-data baseline. HeroBanner is always the first visible element in the main content container. If any other visible component exists, SurfaceRoot.child must reference a Column and the HeroBanner id must be Column.children[0]. Never connect root only to HeroBanner while leaving sibling components disconnected. If HeroBanner is the only visible component, SurfaceRoot.child may reference it directly. Its title is required; use text as a kicker and body to naturally synthesize all verified results without mechanically listing toolId values.\n' +
+    'Obey the exact pageState lifecycle marker below. When pageState=partial, the first visible element in the main content container MUST be ThinkingCard with the exact direct title="正在获取真实数据" and status="calling_tool" or status="loading", and the layout MUST NOT contain HeroBanner. SkeletonCard does not satisfy this lifecycle requirement. When pageState=complete, you MUST output exactly one HeroBanner, MUST NOT retain a partial loading ThinkingCard, and HeroBanner is always the first visible element in the main content container. If any other visible component exists, SurfaceRoot.child must reference a Column and the required leading component id must be Column.children[0]. Never connect root only to the leading component while leaving sibling components disconnected. If the leading component is the only visible component, SurfaceRoot.child may reference it directly. HeroBanner title is required; use text as a kicker and body to naturally synthesize all verified results without mechanically listing toolId values.\n' +
     '/summary/count and /summary/text describe the number of DataResult sets, not the number of business entities. HeroBanner must never present them as an entity total.\n' +
     'Never infer a total from a sampled array length. State a business count only when result.data explicitly labels a scalar as count or total, or when result.data.summary text explicitly supports it.\n' +
     'For chart components, bind the narrowest matching snapshot paths through fields allowed by the catalog. Never output SVG, path, points, rect, viewBox, coordinates, dimensions, geometry, stroke settings, or colors; the renderer owns them.\n' +
@@ -893,6 +990,7 @@ export function uiAgentLabLayoutPrompt(
     'Author-composed text and labels may be literals where the catalog allows them. When binding snapshot data, use the exact one-key object {"path":"/exact/path/from/dataSnapshot"}. Never print a path string such as "/results/0/data/value" as literal UI text.\n' +
     'Actions may contain only an offered offerId; never output action arguments.\n' +
     'Honor the original user request when choosing the presentation; intent is a shorter Leader summary.\n' +
+    'pageState=' + phase + '\n' +
     'intent=' + JSON.stringify(task.intent) + '\n' +
     'originalUserInput=' + JSON.stringify(originalUserInputOf(task)) + '\n';
   const verifiedOffers = 'verifiedOffers=' + JSON.stringify(promptOffers) + '\n';
@@ -913,7 +1011,7 @@ export function uiAgentLabLayoutPrompt(
   });
   const omittedSnapshot: UiLabSnapshot = { summary: snapshot.summary, results: omittedResults };
   const snapshots: UiLabSnapshot[] = [snapshot, compactSnapshot, omittedSnapshot];
-  const completeMarker = '\ndataSnapshotComplete=true';
+  const completeMarker = '\ndataSnapshotComplete=' + (phase === 'complete' ? 'true' : 'false');
   const prefix = instructions + verifiedOffers + 'dataSnapshot=';
   for (let index = 0; index < snapshots.length; index++) {
     const encodedSnapshot = JSON.stringify(snapshots[index]);
@@ -948,7 +1046,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     const rendered: UiRenderResult = {
       jsonl: surfaceShell(surfaceId, 'calling_tool', [
         { id: 'root', component: 'SurfaceRoot', child: 'thinking' },
-        { id: 'thinking', component: 'ThinkingCard', title: '正在获取真实数据', body: task.intent, status: 'calling_tool' }
+        { id: 'thinking', component: 'ThinkingCard', title: UI_LAB_PARTIAL_LOADING_TITLE, body: task.intent, status: 'calling_tool' }
       ])
     };
     return Promise.resolve(rendered);
@@ -959,13 +1057,16 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     data: DataResult[],
     offers: ActionOffer[],
     surfaceId: string,
+    phase: UiRenderPhase,
     progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult> {
     const snapshot = buildUiAgentLabSnapshot(task, data);
     const notesEnabled = this.decisionNotesEnabled();
     this.onDecisionNotes(surfaceId, null);
     this.onLayoutDiagnostic(surfaceId, null);
-    const baseline = surfaceShell(surfaceId, 'ready', baselineComponents(data, offers)) +
+    const finalSurfaceStatus = phase === 'partial' ? 'partial' : 'ready';
+    const progressSurfaceStatus = phase === 'partial' ? 'partial' : 'calling_tool';
+    const baseline = surfaceShell(surfaceId, finalSurfaceStatus, baselineComponents(data, offers, phase)) +
       uiAgentLabDataJsonl(surfaceId, snapshot);
     const scanner = new A2uiUpdateComponentsStreamScanner();
     const streamedComponents: Object[] = [];
@@ -1001,7 +1102,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
         offers,
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       );
-      if (!merge.accepted) return;
+      if (!merge.accepted || !uiAgentLabLayoutMatchesPhase(merge.jsonl, surfaceId, phase)) return;
       const partial = withUiAgentLabSurfaceStatus(
         annotateActionSources(
           hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data),
@@ -1009,7 +1110,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
           offers
         ),
         surfaceId,
-        'calling_tool'
+        progressSurfaceStatus
       );
       if (partial === lastValidatedPartial) return;
       lastValidatedPartial = partial;
@@ -1101,7 +1202,11 @@ class UiAgentLabRenderer implements UiTaskRenderer {
     });
     try {
       const candidate = await Promise.race<string | null>([
-        this.planner.plan(uiAgentLabLayoutPrompt(task, snapshot, offers), surfaceId, onTextDelta),
+        this.planner.plan(
+          uiAgentLabLayoutPrompt(task, snapshot, offers, phase),
+          surfaceId,
+          uiAgentLabProgressListener(onTextDelta)
+        ),
         timeout
       ]);
       if (progressTimerId >= 0) {
@@ -1133,7 +1238,7 @@ class UiAgentLabRenderer implements UiTaskRenderer {
         aiLogInfo('[UiAgentLabLayout] surface=' + surfaceId + ' planner=null fallback=' +
           (!hasPartial).toString() + ' partial=' + hasPartial.toString());
         return {
-          jsonl: uiAgentLabRejectedLayoutJsonl(candidate, lastValidatedPartial, baseline, surfaceId)
+          jsonl: uiAgentLabRejectedLayoutJsonl(candidate, lastValidatedPartial, baseline, surfaceId, phase)
         };
       }
       const decisionOutput: UiAgentLabDecisionOutput = parseUiAgentLabDecisionOutput(
@@ -1147,19 +1252,21 @@ class UiAgentLabRenderer implements UiTaskRenderer {
         offers,
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       );
+      const phaseAccepted = merge.accepted && uiAgentLabLayoutMatchesPhase(merge.jsonl, surfaceId, phase);
       aiLogInfo(
-        '[UiAgentLabLayout] surface=' + surfaceId + ' mergeAccepted=' + merge.accepted.toString() +
-        ' reason=' + merge.reason +
+        '[UiAgentLabLayout] surface=' + surfaceId + ' mergeAccepted=' + phaseAccepted.toString() +
+        ' reason=' + (merge.accepted && !phaseAccepted ? 'phase_component_mismatch' : merge.reason) +
         (merge.diagnostic === undefined ? '' :
           ' componentId=' + boundedDiagnosticToken(merge.diagnostic.componentId, 'unknown') +
           ' rule=' + boundedDiagnosticToken(merge.diagnostic.rule, 'candidate_rejected'))
       );
-      this.onDecisionNotes(surfaceId, merge.accepted ? decisionOutput.decisionNotes : null);
-      this.onLayoutDiagnostic(surfaceId, merge.accepted || merge.diagnostic === undefined ? null : merge.diagnostic);
+      this.onDecisionNotes(surfaceId, phaseAccepted ? decisionOutput.decisionNotes : null);
+      this.onLayoutDiagnostic(surfaceId, phaseAccepted ? null :
+        (merge.diagnostic === undefined ? { componentId: 'root', rule: 'phase_component_mismatch' } : merge.diagnostic));
       return {
         jsonl: annotateActionSources(
-          merge.accepted ? hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data) :
-            uiAgentLabRejectedLayoutJsonl(candidate, lastValidatedPartial, baseline, surfaceId),
+          phaseAccepted ? hydrateUiAgentLabMergedJsonl(merge.jsonl, surfaceId, snapshot, data) :
+            uiAgentLabRejectedLayoutJsonl(candidate, lastValidatedPartial, baseline, surfaceId, phase),
           data,
           offers
         )
@@ -1287,6 +1394,8 @@ export class UiAgentLabHarness {
           }
         }
       ),
+      forwardStructuredToolPartials: true,
+      uiPartialRenderPolicy: (): boolean => true,
       structuredToolCall: callStructuredToolForUiLab,
       allowTrustedOperationTargets: true,
       surfaceDocumentProjector: projectUiAgentLabSurface,

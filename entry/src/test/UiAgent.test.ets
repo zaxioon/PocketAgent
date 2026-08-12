@@ -14,6 +14,7 @@ import {
   TaskErrorPayload,
   UiAgent,
   UiRenderProgressSink,
+  UiRenderPhase,
   UiRenderResult,
   UiRenderResultPayload,
   UiSurfaceWriteLease,
@@ -67,6 +68,7 @@ class RecordingRenderer implements UiTaskRenderer {
   readonly resultBatchSizes: number[] = [];
   readonly resultOfferIds: string[] = [];
   readonly resultOfferHotelIds: number[] = [];
+  readonly resultPhases: UiRenderPhase[] = [];
 
   async skeleton(task: CreateUiTaskPayload, surfaceId: string): Promise<UiRenderResult> {
     this.calls.push(`skeleton:${task.taskId}:${surfaceId}`);
@@ -77,9 +79,11 @@ class RecordingRenderer implements UiTaskRenderer {
     task: CreateUiTaskPayload,
     data: DataResult[],
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    phase: UiRenderPhase
   ): Promise<UiRenderResult> {
     this.calls.push(`result:${task.taskId}:${surfaceId}`);
+    this.resultPhases.push(phase);
     this.resultBatchSizes.push(data.length);
     const batchIds: number[] = [];
     for (let index = 0; index < data.length; index++) {
@@ -123,9 +127,10 @@ class ProgressiveResultRenderer extends RecordingRenderer {
     data: DataResult[],
     offers: ActionOffer[],
     surfaceId: string,
+    phase: UiRenderPhase,
     progressSink?: UiRenderProgressSink
   ): Promise<UiRenderResult> {
-    await super.result(task, data, offers, surfaceId);
+    await super.result(task, data, offers, surfaceId, phase);
     if (progressSink !== undefined) {
       await progressSink(render('partial-1'));
       await progressSink(render('partial-2'));
@@ -143,9 +148,10 @@ class ProposalRenderer extends RecordingRenderer {
     task: CreateUiTaskPayload,
     data: DataResult[],
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    phase: UiRenderPhase
   ): Promise<UiRenderResult> {
-    const base = await super.result(task, data, offers, surfaceId);
+    const base = await super.result(task, data, offers, surfaceId, phase);
     this.proposalSurfaceId = surfaceId;
     return base;
   }
@@ -167,9 +173,10 @@ class EarlyWorkflowRenderer extends ProposalRenderer {
     task: CreateUiTaskPayload,
     data: DataResult[],
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    phase: UiRenderPhase
   ): Promise<UiRenderResult> {
-    const proposed = await super.result(task, data, offers, surfaceId);
+    const proposed = await super.result(task, data, offers, surfaceId, phase);
     proposed.jsonl =
       '{"surfaceUpdate":{"actions":[{"name":"workflow.run","args":{"planId":"early"}}]}}';
     return proposed;
@@ -195,9 +202,10 @@ class JsonlProbeRenderer extends RecordingRenderer {
     task: CreateUiTaskPayload,
     data: DataResult[],
     offers: ActionOffer[],
-    surfaceId: string
+    surfaceId: string,
+    phase: UiRenderPhase
   ): Promise<UiRenderResult> {
-    const rendered = await super.result(task, data, offers, surfaceId);
+    const rendered = await super.result(task, data, offers, surfaceId, phase);
     rendered.jsonl = this.resultJsonl;
     return rendered;
   }
@@ -280,7 +288,8 @@ class DeferredSkeletonRenderer implements UiTaskRenderer {
     _task: CreateUiTaskPayload,
     _data: DataResult[],
     _offers: ActionOffer[],
-    _surfaceId: string
+    _surfaceId: string,
+    _phase: UiRenderPhase
   ): Promise<UiRenderResult> {
     return render('result');
   }
@@ -457,6 +466,25 @@ function dataResultMessage(
   };
 }
 
+function partialDataResultMessage(
+  conversationId: string,
+  turnId: string,
+  taskId: string,
+  hotelId: number,
+  toolId: string = 'hotel.search'
+): AgentMessage {
+  const result: DataResult = hotelDataResult(hotelId);
+  result.status = 'partial';
+  result.toolId = toolId;
+  return {
+    type: AgentMessageType.TASK_RESULT_DATA_PARTIAL,
+    conversationId,
+    turnId,
+    taskId,
+    payload: result
+  };
+}
+
 function offersReadyMessage(
   conversationId: string,
   turnId: string,
@@ -583,6 +611,82 @@ export default function uiAgentTest() {
       expect(JSON.parse(writer.writes[2].jsonl) as string).assertEqual('partial-2');
       expect(JSON.parse(writer.writes[3].jsonl) as string).assertEqual('final');
       expect(writer.writes[1].surfaceId).assertEqual(writer.writes[3].surfaceId);
+      agent.stop();
+      observer.close();
+    });
+
+    it('keeps the legacy aggregate partial default while ignoring generic partials', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const renderer = new RecordingRenderer();
+      const writer = new RecordingSurfaceWriter();
+      const agent = new UiAgent(bus, renderer, writer);
+      const observer = bus.openReader();
+      agent.start();
+
+      bus.publish(uiTaskMessage());
+      await receiveUiState(observer, 'skeleton');
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 101));
+      await settle();
+
+      expect(writer.writes.length).assertEqual(1);
+      expect(renderer.resultPhases.length).assertEqual(0);
+
+      bus.publish(partialDataResultMessage(
+        'conversation-a', 'turn-1', 'data-1', 202, 'media.aggregate.search'
+      ));
+      await settle();
+
+      expect(renderer.resultHotelIds.join(',')).assertEqual('202');
+      expect(renderer.resultPhases.join(',')).assertEqual('partial');
+      expect(writer.writes.length).assertEqual(2);
+
+      publishData(bus, 'conversation-a', 'turn-1', 'data-1', 303);
+      await receiveUiState(observer, 'result');
+
+      expect(renderer.resultHotelIds.join(',')).assertEqual('202,303');
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,complete');
+      expect(writer.writes[0].surfaceId).assertEqual(writer.writes[2].surfaceId);
+      agent.stop();
+      observer.close();
+    });
+
+    it('renders every accepted generic partial on the same surface before one complete result', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const renderer = new RecordingRenderer();
+      const writer = new RecordingSurfaceWriter();
+      const agent = new UiAgent(
+        bus,
+        renderer,
+        writer,
+        (_task: CreateUiTaskPayload, _dataTaskId: string, result: DataResult): boolean =>
+          result.status === 'partial'
+      );
+      const observer = bus.openReader();
+      agent.start();
+
+      bus.publish(uiTaskMessage());
+      await receiveUiState(observer, 'skeleton');
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 101));
+      await settle();
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 202));
+      await settle();
+
+      expect(renderer.resultHotelIds.join(',')).assertEqual('101,202');
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,partial');
+      expect(writer.writes.length).assertEqual(3);
+      expect(writer.writes[0].surfaceId).assertEqual(writer.writes[1].surfaceId);
+      expect(writer.writes[1].surfaceId).assertEqual(writer.writes[2].surfaceId);
+
+      publishData(bus, 'conversation-a', 'turn-1', 'data-1', 303);
+      await receiveUiState(observer, 'result');
+      await settle();
+
+      expect(renderer.resultHotelIds.join(',')).assertEqual('101,202,303');
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,partial,complete');
+      expect(renderer.calls.filter(
+        (call: string): boolean => call.startsWith('result:')
+      ).length).assertEqual(3);
+      expect(writer.writes.length).assertEqual(4);
       agent.stop();
       observer.close();
     });
@@ -857,14 +961,66 @@ export default function uiAgentTest() {
       bus.publish(serialFinalUiTaskMessage([firstTaskId, secondTaskId]));
       await receiveUiState(observer, 'result');
 
-      expect(writer.writes.length).assertEqual(3);
+      expect(writer.writes.length).assertEqual(4);
       expect(writer.writes[0].jsonl).assertEqual(JSON.stringify('skeleton:input-serial:ui'));
       expect(writer.writes[1].jsonl).assertEqual(JSON.stringify('result:101'));
       expect(writer.writes[2].jsonl).assertEqual(JSON.stringify('result:101,202'));
+      expect(writer.writes[3].jsonl).assertEqual(JSON.stringify('result:101,202'));
       expect(writer.writes[0].surfaceId).assertEqual(writer.writes[1].surfaceId);
       expect(writer.writes[1].surfaceId).assertEqual(writer.writes[2].surfaceId);
-      expect(renderer.resultBatchSizes.join(',')).assertEqual('1,2');
+      expect(writer.writes[2].surfaceId).assertEqual(writer.writes[3].surfaceId);
+      expect(renderer.resultBatchSizes.join(',')).assertEqual('1,2,2');
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,partial,complete');
 
+      agent.stop();
+      observer.close();
+    });
+
+    it('rerenders terminal data as complete when the final UI task arrives later', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const renderer = new RecordingRenderer();
+      const writer = new RecordingSurfaceWriter();
+      const agent = new UiAgent(bus, renderer, writer);
+      const observer = bus.openReader();
+      agent.start();
+
+      const dataTaskId = 'input-serial:round-1:k1';
+      bus.publish(semanticDataTaskMessage(dataTaskId, 1));
+      await settle();
+      publishData(bus, 'conversation-a', 'turn-multi', dataTaskId, 303);
+      await settle();
+
+      expect(renderer.resultPhases.join(',')).assertEqual('partial');
+      expect(renderer.resultHotelIds.join(',')).assertEqual('303');
+      expect(writer.writes.length).assertEqual(2);
+
+      bus.publish(serialFinalUiTaskMessage([dataTaskId]));
+      await receiveUiState(observer, 'result');
+      await settle();
+
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,complete');
+      expect(renderer.resultHotelIds.join(',')).assertEqual('303,303');
+      expect(writer.writes.length).assertEqual(3);
+      expect(writer.writes[0].surfaceId).assertEqual(writer.writes[1].surfaceId);
+      expect(writer.writes[1].surfaceId).assertEqual(writer.writes[2].surfaceId);
+
+      bus.publish(serialFinalUiTaskMessage([dataTaskId]));
+      publishData(bus, 'conversation-a', 'turn-multi', dataTaskId, 404);
+      await settle();
+      bus.publish(turnMessage(AgentMessageType.INPUT_USER, 'marker', 'marker', 'marker'));
+      let duplicateFinishes = 0;
+      let observed = await receive(observer);
+      while (observed.type !== AgentMessageType.INPUT_USER) {
+        if (observed.type === AgentMessageType.TASK_RESULT_UI &&
+          (observed.payload as UiRenderResultPayload).state === 'result') {
+          duplicateFinishes++;
+        }
+        observed = await receive(observer);
+      }
+
+      expect(duplicateFinishes).assertEqual(0);
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,complete');
+      expect(writer.writes.length).assertEqual(3);
       agent.stop();
       observer.close();
     });
