@@ -250,7 +250,9 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("component.component==='SurfaceRoot'||component.component==='Column'||component.component==='Row'");
       expect(html).assertContain('generation>latestSurfaceGeneration');
       expect(html).assertContain('latestSurfaceRevision=-1;seenComponentInstanceKeys=Object.create(null)');
-      expect(html).assertContain('if(latestSurfaceSource)renderSurfaceSource(latestSurfaceSource)');
+      expect(html).assertContain('var previousTheme=document.documentElement.dataset.theme');
+      expect(html).assertContain('if(previousTheme&&previousTheme!==theme&&latestSurfaceSource)renderSurfaceSource(latestSurfaceSource)');
+      expect(html.indexOf('if(latestSurfaceSource)renderSurfaceSource(latestSurfaceSource)')).assertEqual(-1);
     });
 
     it('builds one interactive HTML shell with the allowlisted bridge', 0, () => {

@@ -1259,10 +1259,11 @@ export function createUiAgentLabHtmlShell(): string {
         latestSurfaceSource=source;renderSurfaceSource(source);
       };
       function applyTheme(theme){
+        var previousTheme=document.documentElement.dataset.theme;
         document.documentElement.dataset.theme=theme;
         themeToggle.setAttribute('aria-pressed',theme==='cool'?'true':'false');
         themeToggle.setAttribute('aria-label',theme==='cool'?'切换到奶油咖啡主题':'启用现代冷色主题');
-        if(latestSurfaceSource)renderSurfaceSource(latestSurfaceSource);
+        if(previousTheme&&previousTheme!==theme&&latestSurfaceSource)renderSurfaceSource(latestSurfaceSource);
       }
       window.__applyUiAgentLabTheme=function(next){
         var source=record(next),theme=source?source.theme:undefined,generation=source?source.generation:undefined;
