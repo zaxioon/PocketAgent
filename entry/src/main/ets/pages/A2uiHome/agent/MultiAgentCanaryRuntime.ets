@@ -108,8 +108,6 @@ import {
   resolveVirtualRegisteredPageAction
 } from './RegisteredPageActionRoute';
 import {
-  BimGatedLeaderPlanner,
-  BimTurnGate,
   bimTravelQueryIsComplete,
   originalQueryFromBimPrompt
 } from '../bim/BimRuntime';
@@ -178,7 +176,6 @@ interface SocialFeedTaskInput {
 
 export interface MultiAgentCanaryOptions {
   model: LocalModel;
-  turnGate?: BimTurnGate;
   opener: SystemUriOpener;
   pageAction?: RegisteredPageAction;
   currentPageSnapshot?: () => RegisteredPageSnapshot | null;
@@ -803,7 +800,7 @@ function normalizeCanaryTaskInput(
     const taskSource = task.input as Record<string, Object | string | number | boolean | null | undefined>;
     const taskQuery = taskSource['query'];
     const fieldQuery = queryFromTravelTaskFields(task.input, task.toolId);
-    const isBimTurn = input.text.indexOf('[BIM_CONTEXT]') === 0;
+    const isBimTurn = input.text.indexOf('[BIM_SNAPSHOTS]') === 0;
     let query = originalInput.text;
     if (isBimTurn) {
       if (validBimTravelQuery(originalInput.text, currentLocalDate)) {
@@ -1693,8 +1690,7 @@ export class MultiAgentCanaryRuntime {
     this.runtime = new MultiAgentRuntime({
       conversationId,
       bus: options.bus,
-      planner: options.turnGate === undefined ?
-        leaderPlanner : new BimGatedLeaderPlanner(leaderPlanner, options.turnGate),
+      planner: leaderPlanner,
       planningContext: initialContext,
       planningContextProvider: (prompt: string): LeaderPlanningContext =>
         canaryPlanningContext(this.lastLeaderPersonaId, prompt, allowTrustedOperationTargets),
@@ -1755,9 +1751,6 @@ export class MultiAgentCanaryRuntime {
       directActionAdmission: (action: A2uiAction, context: ActionExecutionContext): boolean =>
         this.admitHotelDetailFollowUp(action, context),
       turnGenerationObserver: (turnId: string, hostGeneration: number): void => {
-        if (options.turnGate !== undefined) {
-          options.turnGate.bind(turnId, hostGeneration);
-        }
         this.rememberTurnHostGeneration(turnId, hostGeneration);
       }
     });
