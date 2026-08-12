@@ -166,7 +166,10 @@ export default function a2uiLayoutMergerTest() {
       expect(genericPrompt.includes(genericExample)).assertTrue();
       expect(genericPrompt.includes('The following is a complete protocol-shape example only')).assertTrue();
       expect(genericPrompt.includes('For repeated array items')).assertTrue();
-      expect(genericPrompt.includes('List with one ExpandableCard')).assertTrue();
+      expect(genericPrompt.includes('List with one ExpandableCard')).assertFalse();
+      expect(genericPrompt.includes('use compact Text when one summary or description line is enough')).assertTrue();
+      expect(genericPrompt.includes('InfoRows for facts that should remain visible')).assertTrue();
+      expect(genericPrompt.includes('ExpandableCard only when multiple selected details genuinely benefit from collapsing')).assertTrue();
       expect(genericPrompt.includes('compact Text template bound only to that field')).assertFalse();
       expect(genericPrompt.includes('make charts the main body of the layout')).assertFalse();
       expect(prompt.includes('Use "component", never "type"')).assertTrue();

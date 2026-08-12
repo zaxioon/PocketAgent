@@ -241,6 +241,18 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('if(revision<=latestSurfaceRevision)return');
     });
 
+    it('fades only newly seen visible component instances within one surface generation', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+      expect(html).assertContain('.ui-component-enter { animation:ui-component-enter .24s ease-out both; }');
+      expect(html).assertContain('@media (prefers-reduced-motion:reduce)');
+      expect(html).assertContain('seenComponentInstanceKeys=Object.create(null)');
+      expect(html).assertContain("if(!seenComponentInstanceKeys[key]){seenComponentInstanceKeys[key]=true;element.classList.add('ui-component-enter');}");
+      expect(html).assertContain("component.component==='SurfaceRoot'||component.component==='Column'||component.component==='Row'");
+      expect(html).assertContain('generation>latestSurfaceGeneration');
+      expect(html).assertContain('latestSurfaceRevision=-1;seenComponentInstanceKeys=Object.create(null)');
+      expect(html).assertContain('if(latestSurfaceSource)renderSurfaceSource(latestSurfaceSource)');
+    });
+
     it('builds one interactive HTML shell with the allowlisted bridge', 0, () => {
       const html = createUiAgentLabHtmlShell();
       expect(html).assertContain('UiAgentLabBridge.postMessage');
@@ -735,6 +747,11 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('.lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--hairline); }');
       expect(html).assertContain('.lab-list-row:last-child { padding-bottom:0; border-bottom:0; }');
       expect(html).assertContain('hasItemScope:true,itemScope:item');
+      expect(html).assertContain("var source=record(item),keys=['id','name','title']");
+      expect(html).assertContain("encodeURIComponent(String(value))+'|index:'+String(index)");
+      expect(html).assertContain("return 'index:'+String(index)");
+      expect(html).assertContain("'|list:'+encodeURIComponent(text(component.id))+'|item:'+listItemInstancePart(item,index)");
+      expect(html).assertContain('listItemContext(component,context,item,visibleCount+index)');
       expect(html).assertContain("component.dataPath==='/'");
       expect(html).assertContain('return context.itemScope');
       expect(html).assertContain("node('p','lab-card-copy','暂无内容')");

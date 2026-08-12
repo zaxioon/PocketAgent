@@ -113,8 +113,10 @@ export function buildA2uiLayoutSystemPrompt(
       'object, or combine rows with dataPath.\n' :
     '- For repeated array items, use the official A2UI v0.9 List shape ' +
       '{"children":{"path":"/allowed/array/path","componentId":"item-template"}}. The referenced template is one ' +
-      'component rendered once per item. For repeated entity results, use List with one ExpandableCard template so ' +
-      'each result gets its own card. The template may omit dataPath (or use "/") to read the current item scope. Do not ' +
+      'component rendered once per item. Choose the simplest template that expresses each entity: use compact Text ' +
+      'when one summary or description line is enough, InfoRows for facts that should remain visible, and ' +
+      'ExpandableCard only when multiple selected details genuinely benefit from collapsing. The template may omit ' +
+      'dataPath (or use "/") to read the current item scope. Do not ' +
       'replace this dynamic children object with a static children array.\n';
   const outputContractRules = decisionNotesEnabled && isUiLabCatalog ?
     '- Begin with the exact standalone line <ui_decision_notes>. Write a bounded natural-language UI decision summary ' +
