@@ -7,6 +7,7 @@ export type A2uiCatalogValueType = 'array' | 'boolean' | 'number' | 'object' | '
 export interface A2uiCatalogFieldSchema {
   type: A2uiCatalogValueType;
   valuePolicy: A2uiCatalogValuePolicy;
+  acceptSingleItem?: boolean;
   required?: boolean;
   minLength?: number;
   minItems?: number;
@@ -140,10 +141,14 @@ function resolveLiteralValue(
     return typeof value === 'boolean' ? { ok: true, value } : failedResolution();
   }
   if (schema.type === 'array') {
-    if (!Array.isArray(value) || schema.items === undefined) {
+    if (schema.items === undefined) {
       return failedResolution();
     }
-    const values = value as CatalogJsonValue[];
+    const values: CatalogJsonValue[] = Array.isArray(value) ?
+      value as CatalogJsonValue[] : (schema.acceptSingleItem === true ? [value] : []);
+    if (!Array.isArray(value) && schema.acceptSingleItem !== true) {
+      return failedResolution();
+    }
     if ((schema.minItems !== undefined && values.length < schema.minItems) ||
       (schema.maxItems !== undefined && values.length > schema.maxItems)) {
       return failedResolution();
@@ -304,12 +309,16 @@ function validLiteral(
     return typeof value === 'boolean';
   }
   if (schema.type === 'array') {
-    if (!Array.isArray(value)) {
+    if (schema.items === undefined) {
       return false;
     }
-    const items = value as CatalogJsonValue[];
+    const items: CatalogJsonValue[] = Array.isArray(value) ?
+      value as CatalogJsonValue[] : (schema.acceptSingleItem === true ? [value] : []);
+    if (!Array.isArray(value) && schema.acceptSingleItem !== true) {
+      return false;
+    }
     if ((schema.minItems !== undefined && items.length < schema.minItems) ||
-      (schema.maxItems !== undefined && items.length > schema.maxItems) || schema.items === undefined) {
+      (schema.maxItems !== undefined && items.length > schema.maxItems)) {
       return false;
     }
     for (let index = 0; index < items.length; index++) {

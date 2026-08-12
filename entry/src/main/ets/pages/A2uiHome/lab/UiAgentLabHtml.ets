@@ -108,17 +108,103 @@ export function strictUiAgentLabFiniteNumber(value: UiAgentLabDataValue): number
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+interface UiAgentLabTagsResolution {
+  tags: string[];
+  reason: string;
+}
+
+const UI_AGENT_LAB_TAGS_MAX_ITEMS: number = 12;
+
+function normalizeUiAgentLabTags(value: UiAgentLabDataValue): UiAgentLabTagsResolution {
+  if (value === null || value === '') return { tags: [], reason: '' };
+  let values: UiAgentLabDataValue[];
+  if (typeof value === 'string') {
+    values = [value];
+  } else if (Array.isArray(value)) {
+    values = value as UiAgentLabDataValue[];
+  } else {
+    return { tags: [], reason: 'tags_value_type_invalid' };
+  }
+  const tags: string[] = [];
+  let filtered: boolean = false;
+  for (let index = 0; index < values.length; index++) {
+    const item = values[index];
+    if (typeof item !== 'string') {
+      filtered = true;
+      continue;
+    }
+    const tag = item.trim();
+    if (tag.length === 0) continue;
+    if (tags.length >= UI_AGENT_LAB_TAGS_MAX_ITEMS) {
+      filtered = true;
+      continue;
+    }
+    tags.push(tag);
+  }
+  if (!filtered) return { tags, reason: '' };
+  return {
+    tags,
+    reason: tags.length > 0 ? 'tags_items_filtered' : 'tags_value_type_invalid'
+  };
+}
+
+function resolveUiAgentLabTags(
+  bindingValue: UiAgentLabDataValue,
+  model: UiAgentLabDataValue
+): UiAgentLabTagsResolution {
+  const binding = uiAgentLabDataRecord(bindingValue);
+  const keys = binding === null ? [] : Object.keys(binding);
+  if (binding === null || keys.length !== 1 || keys[0] !== 'path' ||
+    typeof binding['path'] !== 'string' || (binding['path'] as string).charAt(0) !== '/') {
+    return { tags: [], reason: 'tags_binding_invalid' };
+  }
+  const value = resolveUiAgentLabDataPath(model, binding['path'] as string);
+  if (value === undefined) return { tags: [], reason: 'tags_binding_missing' };
+  return normalizeUiAgentLabTags(value);
+}
+
 export function resolveUiAgentLabCatalogFieldsJsonForModel(
   componentName: string,
   presentationFieldsJson: string,
   modelJson: string
 ): string | null {
-  return UI_AGENT_LAB_CATALOG_SCHEMA === null ? null :
-    UI_AGENT_LAB_CATALOG_SCHEMA.resolvePresentationFieldsJson(
+  if (UI_AGENT_LAB_CATALOG_SCHEMA === null) return null;
+  if (componentName !== 'ExpandableCard' && componentName !== 'InfoRows') {
+    return UI_AGENT_LAB_CATALOG_SCHEMA.resolvePresentationFieldsJson(
       componentName,
       presentationFieldsJson,
       modelJson
     );
+  }
+  try {
+    const fields = uiAgentLabDataRecord(JSON.parse(presentationFieldsJson) as Object);
+    if (fields === null || fields['tags'] === undefined) {
+      return UI_AGENT_LAB_CATALOG_SCHEMA.resolvePresentationFieldsJson(
+        componentName,
+        presentationFieldsJson,
+        modelJson
+      );
+    }
+    const model = JSON.parse(modelJson) as UiAgentLabDataValue;
+    const fieldsWithoutTags: UiAgentLabDataRecord = {};
+    Object.keys(fields).forEach((key: string) => {
+      if (key !== 'tags') fieldsWithoutTags[key] = fields[key];
+    });
+    const resolvedJson = UI_AGENT_LAB_CATALOG_SCHEMA.resolvePresentationFieldsJson(
+      componentName,
+      JSON.stringify(fieldsWithoutTags),
+      modelJson
+    );
+    if (resolvedJson === null) return null;
+    const output = uiAgentLabDataRecord(JSON.parse(resolvedJson) as Object);
+    if (output === null) return null;
+    const tags = resolveUiAgentLabTags(fields['tags'], model);
+    if (tags.tags.length > 0) output['tags'] = tags.tags;
+    if (tags.reason.length > 0) output['__uiAgentLabTagsWarning'] = tags.reason;
+    return JSON.stringify(output);
+  } catch (_error) {
+    return null;
+  }
 }
 
 function uiAgentLabListTemplateDescendants(components: UiAgentLabDataValue[]): Set<string> {
@@ -309,6 +395,9 @@ export function createUiAgentLabHtmlShell(): string {
     .info-label { color:var(--muted); font-size:12px; }
     .info-value { font-size:13px; text-align:right; overflow-wrap:anywhere; }
     .info-time { grid-column:2; margin-top:-7px; color:var(--muted); font-size:11px; text-align:right; overflow-wrap:anywhere; }
+    .tag-list { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+    .tag-chip { display:inline-flex; align-items:center; min-height:22px; max-width:100%; padding:3px 8px; overflow:hidden; border:1px solid var(--hairline); border-radius:999px; background:var(--card-fill-soft); color:var(--muted); font-size:10px; font-weight:650; line-height:1.2; white-space:nowrap; text-overflow:ellipsis; }
+    .info-card>.tag-list { margin:2px 0 12px; }
     .action-bar { display:flex; flex-wrap:wrap; gap:9px; }
     .action-button { min-height:42px; flex:1 1 120px; border:0; border-radius:16px; padding:0 14px; background:linear-gradient(145deg,var(--cobalt),var(--cobalt-deep)); color:var(--on-accent); box-shadow:var(--button-shadow); }
     .action-button.secondary { color:var(--ink); background:var(--card-fill-strong); box-shadow:inset 0 0 0 1px var(--hairline); }
@@ -352,10 +441,12 @@ export function createUiAgentLabHtmlShell(): string {
     .expandable-field-label { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
     .expandable-field-value { font-size:13px; text-align:right; white-space:pre-wrap; overflow-wrap:anywhere; }
     .expandable-limit { color:var(--muted); font-size:11px; line-height:1.45; }
+    .expandable-card>.tag-list { margin-top:10px; }
     .hero-banner { position:relative; overflow:hidden; min-height:132px; border-radius:25px; padding:22px; display:flex; flex-direction:column; justify-content:flex-end; background:linear-gradient(145deg,var(--hero-start),var(--hero-end)); color:var(--hero-title); box-shadow:var(--shadow-soft); }
     .hero-banner:after { content:""; position:absolute; width:150px; height:150px; right:-46px; top:-68px; border-radius:50%; border:25px solid var(--hero-orbit); }
     .hero-kicker { position:relative; z-index:1; margin:0 0 6px; color:var(--hero-kicker); font-size:11px; font-weight:700; letter-spacing:.08em; }
     .hero-title { position:relative; z-index:1; margin:0; max-width:88%; font-size:24px; line-height:1.15; letter-spacing:-.025em; overflow-wrap:anywhere; }
+    .hero-title.is-fallback { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; overflow-wrap:normal; }
     .hero-body { position:relative; z-index:1; margin:8px 0 0; max-width:92%; color:var(--hero-body); font-size:12px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
     .viz-card { min-width:0; }
     .viz-header { margin-bottom:13px; }
@@ -528,6 +619,7 @@ export function createUiAgentLabHtmlShell(): string {
         if(schema.type==='number')return typeof candidate==='number'&&Number.isFinite(candidate)?{ok:true,value:candidate}:{ok:false};
         if(schema.type==='boolean')return typeof candidate==='boolean'?{ok:true,value:candidate}:{ok:false};
         if(schema.type==='array'){
+          if(schema.acceptSingleItem===true&&!Array.isArray(candidate))candidate=[candidate];
           if(!Array.isArray(candidate)||!record(schema.items)||(schema.minItems!==undefined&&candidate.length<schema.minItems)||(schema.maxItems!==undefined&&candidate.length>schema.maxItems))return {ok:false};
           var output=[];for(var index=0;index<candidate.length;index++){var item=resolveCatalogValue(candidate[index],schema.items,model,depth+1);if(!item.ok)return {ok:false};output.push(item.value);}return {ok:true,value:output};
         }
@@ -538,12 +630,81 @@ export function createUiAgentLabHtmlShell(): string {
         }
         return {ok:false};
       }
+      function resolveExpandableRowText(value,schema,model){
+        if(value===undefined||value===null||value==='')return {ok:true,value:'—'};
+        var binding=exactBinding(value),candidate=value;
+        if(record(value)&&binding===null)return {ok:false};
+        if(schema.valuePolicy==='literal-or-path'&&typeof value==='string'&&value.charAt(0)==='/')return {ok:false};
+        if(schema.valuePolicy==='path-only'||binding!==null){
+          if(binding===null)return {ok:false};
+          candidate=pointer(model,binding);
+          if(candidate===undefined)return {ok:true,value:'—'};
+        }else if(schema.valuePolicy!=='literal-or-path'&&schema.valuePolicy!=='literal')return {ok:false};
+        if(candidate===null||candidate==='')return {ok:true,value:'—'};
+        return typeof candidate==='string'?{ok:true,value:candidate}:{ok:false};
+      }
+      function resolveExpandableRows(value,schema,model){
+        if(!Array.isArray(value)||!record(schema)||!record(schema.items)||value.length>8)return {ok:false};
+        var itemSchema=schema.items,fields=record(itemSchema.fields),rows=[];if(!fields)return {ok:false};
+        for(var index=0;index<value.length;index++){
+          var source=record(value[index]);if(!source)return {ok:false};
+          var keys=Object.keys(source);for(var keyIndex=0;keyIndex<keys.length;keyIndex++){if(keys[keyIndex]!=='label'&&keys[keyIndex]!=='value')return {ok:false};}
+          var label=resolveExpandableRowText(source.label,fields.label,model),rowValue=resolveExpandableRowText(source.value,fields.value,model);
+          if(!label.ok||!rowValue.ok)return {ok:false};
+          rows.push({label:label.value,value:rowValue.value});
+        }
+        return {ok:true,value:rows};
+      }
+      function resolveSegmentedRingEntries(value,schema,model){
+        if(!Array.isArray(value)||!record(schema)||!record(schema.items))return {ok:false};
+        var fields=record(schema.items.fields),segments=[];if(!fields)return {ok:false};
+        value.forEach(function(item){
+          var source=record(item);if(!source)return;
+          var keys=Object.keys(source),allowed=true;
+          keys.forEach(function(key){if(key!=='id'&&key!=='label'&&key!=='value')allowed=false;});
+          if(!allowed||!Object.prototype.hasOwnProperty.call(source,'label')||!Object.prototype.hasOwnProperty.call(source,'value'))return;
+          var output=Object.create(null);
+          if(Object.prototype.hasOwnProperty.call(source,'id')){var id=resolveCatalogValue(source.id,fields.id,model,0);if(!id.ok)return;output.id=id.value;}
+          var label=resolveCatalogValue(source.label,fields.label,model,0),segmentValue=resolveCatalogValue(source.value,fields.value,model,0);
+          if(!label.ok||!segmentValue.ok)return;
+          output.label=label.value;output.value=segmentValue.value;segments.push(output);
+        });
+        return {ok:true,value:segments};
+      }
+      var TAGS_MAX_ITEMS=12;
+      function normalizeTags(value){
+        if(value===null||value==='')return {tags:[],reason:''};
+        var values=typeof value==='string'?[value]:Array.isArray(value)?value:null;
+        if(values===null)return {tags:[],reason:'tags_value_type_invalid'};
+        var tags=[],filtered=false;
+        values.forEach(function(item){
+          if(typeof item!=='string'){filtered=true;return;}
+          var tag=item.trim();if(!tag)return;
+          if(tags.length>=TAGS_MAX_ITEMS){filtered=true;return;}
+          tags.push(tag);
+        });
+        return {tags:tags,reason:filtered?(tags.length?'tags_items_filtered':'tags_value_type_invalid'):''};
+      }
+      function resolveTags(value,model){
+        var binding=exactBinding(value);if(binding===null)return {tags:[],reason:'tags_binding_invalid'};
+        var candidate=pointer(model,binding);if(candidate===undefined)return {tags:[],reason:'tags_binding_missing'};
+        return normalizeTags(candidate);
+      }
       function resolveCatalogFields(component,context){
         var schema=UI_AGENT_LAB_SCHEMA_BY_NAME[component.component],fields=record(schema&&schema.fields),source=null;
         try{source=record(JSON.parse(component.catalogFieldsJson));}catch(_error){return null;}
         if(!fields||!source)return null;
         var model=context.hasItemScope===true?context.itemScope:context.model,output=Object.assign({},component),keys=Object.keys(source);
-        for(var index=0;index<keys.length;index++){var key=keys[index];if(UI_AGENT_LAB_RESERVED_FIELDS.indexOf(key)>=0||!record(fields[key]))return null;var resolved=resolveCatalogValue(source[key],fields[key],model,0);if(!resolved.ok)return null;output[key]=resolved.value;}
+        for(var index=0;index<keys.length;index++){
+          var key=keys[index];if(UI_AGENT_LAB_RESERVED_FIELDS.indexOf(key)>=0||!record(fields[key]))return null;
+          if(key==='tags'&&(component.component==='ExpandableCard'||component.component==='InfoRows')){
+            var tags=resolveTags(source[key],model);if(tags.tags.length)output.tags=tags.tags;else delete output.tags;
+            if(tags.reason)output.__uiAgentLabTagsWarning=tags.reason;continue;
+          }
+          var resolved=component.component==='ExpandableCard'&&key==='rows'?resolveExpandableRows(source[key],fields[key],model):component.component==='SegmentedRingChart'&&key==='segments'?resolveSegmentedRingEntries(source[key],fields[key],model):resolveCatalogValue(source[key],fields[key],model,0);
+          if(!resolved.ok){if(component.component==='HeroBanner'&&key==='title'){output.__uiAgentLabHeroTitleFallback=true;continue;}return null;}
+          output[key]=resolved.value;
+        }
         delete output.catalogFieldsJson;return output;
       }
       function componentValue(component,context){
@@ -564,7 +725,22 @@ export function createUiAgentLabHtmlShell(): string {
         return list(component.children).filter(function(value){return typeof value==='string'&&value.length>0;});
       }
       function appendChildren(parent,component,context,trail){
-        childIds(component).forEach(function(id){parent.appendChild(renderById(id,context,trail));});
+        childIds(component).forEach(function(id){var child=renderById(id,context,trail);if(child)parent.appendChild(child);});
+      }
+      function warnHiddenComponent(component,context,reason){
+        try{console.warn('[UiAgentLabBinding] hidden component='+text(component&&component.component,'unknown')+' id='+text(component&&component.id,'unknown')+' scope='+nonEmptyText(context&&context.instanceScopeKey,'root')+' reason='+text(reason,'invalid_binding'));}catch(_error){}
+      }
+      function warnTagSlot(component,context,reason,filtered){
+        try{console.warn('[UiAgentLabBinding] '+(filtered?'filtered':'hidden')+' slot=tags component='+text(component&&component.component,'unknown')+' id='+text(component&&component.id,'unknown')+' scope='+nonEmptyText(context&&context.instanceScopeKey,'root')+' reason='+text(reason,'invalid_binding'));}catch(_error){}
+      }
+      function appendTagSlot(parent,component,context){
+        if(component.tags===undefined&&!component.__uiAgentLabTagsWarning)return false;
+        var normalized=normalizeTags(component.tags),reason=nonEmptyText(component.__uiAgentLabTagsWarning,normalized.reason),tags=normalized.tags;
+        if(reason)warnTagSlot(component,context,reason,tags.length>0);
+        if(tags.length===0)return false;
+        var host=node('div','tag-list');host.setAttribute('role','list');host.setAttribute('aria-label','标签');
+        tags.forEach(function(tag){var chip=node('span','tag-chip',tag);chip.setAttribute('role','listitem');host.appendChild(chip);});
+        parent.appendChild(host);return true;
       }
       function listItemInstancePart(item,index){
         var source=record(item),keys=['id','name','title'];
@@ -661,38 +837,47 @@ export function createUiAgentLabHtmlShell(): string {
         var root=node('section','surface-root'); appendChildren(root,component,context,trail); return root;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.Column=function(component,context,trail){
-        var column=node('div','lab-column'); appendChildren(column,component,context,trail); return column;
+        var column=node('div','lab-column'); appendChildren(column,component,context,trail); return column.firstChild?column:null;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.Row=function(component,context,trail){
-        var row=node('div','lab-row'); appendChildren(row,component,context,trail); return row;
+        var row=node('div','lab-row'); appendChildren(row,component,context,trail); return row.firstChild?row:null;
       };
       var LIST_PAGE_SIZE=8;
       UI_AGENT_LAB_COMPONENT_REGISTRY.List=function(component,context,trail){
         var wrapper=node('section','lab-list'),items=componentValue(component,context),templateId=text(component.child);
         var title=nonEmptyText(component.title);if(title)wrapper.appendChild(node('h3','lab-list-title',title));
+        if(typeof component.dataPath==='string'&&component.dataPath.length>0&&!Array.isArray(items)){warnHiddenComponent(component,context,items===undefined||items===null?'list_source_binding_failed':'list_source_type_invalid');return null;}
         if(!Array.isArray(items)||items.length===0){wrapper.appendChild(node('p','lab-card-copy','暂无内容'));return wrapper;}
         if(!templateId){wrapper.appendChild(safeError('List 缺少模板','没有可用的 componentId。'));return wrapper;}
         var itemHost=node('div','lab-list-items'),pager=node('div','list-pager'),status=node('span','list-page-status');itemHost.setAttribute('role','list');
-        var more=node('button','list-more','加载更多'),visibleCount=0;more.type='button';
+        var more=node('button','list-more','加载更多'),visibleCount=0,renderedRows=[];more.type='button';
+        items.forEach(function(item,index){
+          var itemContext=listItemContext(component,context,item,index),content=renderById(templateId,itemContext,trail);
+          if(!content)return;
+          var row=node('div','lab-list-row');row.setAttribute('role','listitem');row.appendChild(content);renderedRows.push(row);
+        });
+        if(renderedRows.length===0){warnHiddenComponent(component,context,'list_has_no_renderable_items');return null;}
         function appendPage(){
-          var nextCount=Math.min(visibleCount+LIST_PAGE_SIZE,items.length);
-          items.slice(visibleCount,nextCount).forEach(function(item,index){
-            var itemContext=listItemContext(component,context,item,visibleCount+index);
-            var row=node('div','lab-list-row');row.setAttribute('role','listitem');row.appendChild(renderById(templateId,itemContext,trail));itemHost.appendChild(row);
-          });
-          visibleCount=nextCount;status.textContent='已显示 '+String(visibleCount)+' / '+String(items.length);
-          more.disabled=visibleCount>=items.length;more.textContent=more.disabled?'已显示全部':'加载更多';
+          var nextCount=Math.min(visibleCount+LIST_PAGE_SIZE,renderedRows.length);
+          renderedRows.slice(visibleCount,nextCount).forEach(function(row){itemHost.appendChild(row);});
+          visibleCount=nextCount;status.textContent='已显示 '+String(visibleCount)+' / '+String(renderedRows.length);
+          more.disabled=visibleCount>=renderedRows.length;more.textContent=more.disabled?'已显示全部':'加载更多';
         }
         more.addEventListener('click',appendPage);pager.appendChild(status);pager.appendChild(more);
-        wrapper.appendChild(itemHost);if(items.length>LIST_PAGE_SIZE)wrapper.appendChild(pager);appendPage();
+        wrapper.appendChild(itemHost);if(renderedRows.length>LIST_PAGE_SIZE)wrapper.appendChild(pager);appendPage();
         return wrapper;
       };
+      function originalUserInput(context){
+        var request=record(context.model&&context.model.request),surface=record(context.surface);
+        return nonEmptyText(request?request.originalUserInput:undefined,nonEmptyText(context.model?context.model.originalUserInput:undefined,surface?surface.originalUserInput:undefined));
+      }
       UI_AGENT_LAB_COMPONENT_REGISTRY.HeroBanner=function(component,context){
         var value=componentValue(component,context),fields=headerFields(value),wrapper=node('article','hero-banner');
-        var kicker=nonEmptyText(component.text,fields.kicker),title=nonEmptyText(component.title,fields.title),body=nonEmptyText(component.body,fields.description);
+        var kicker=nonEmptyText(component.text,fields.kicker),title=nonEmptyText(component.title,fields.title),body=nonEmptyText(component.body,fields.description),fallbackTitle=originalUserInput(context),usesFallback=component.__uiAgentLabHeroTitleFallback===true||!title;
+        if(!title)title=fallbackTitle;
         if(fields.ariaLabel)wrapper.setAttribute('aria-label',fields.ariaLabel);
         if(kicker)wrapper.appendChild(node('p','hero-kicker',kicker));
-        if(title)wrapper.appendChild(node('h2','hero-title',title));
+        if(title)wrapper.appendChild(node('h2','hero-title'+(usesFallback?' is-fallback':''),title));
         if(body)wrapper.appendChild(node('p','hero-body',body));
         return wrapper;
       };
@@ -714,14 +899,20 @@ export function createUiAgentLabHtmlShell(): string {
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.SegmentedRingChart=function(component,context){
         var value=componentValue(component,context),source=record(value),wrapper=node('section','lab-card viz-card');appendVisualHeader(wrapper,component,value);
-        var mapped=typeof component.labelPath==='string'&&typeof component.valuePath==='string',items=Array.isArray(component.segments)?component.segments:(Array.isArray(value)?value:itemArray(value,'segments')),segments=[],total=0;
-        if(mapped){items=items.map(function(item){return {label:pointer(item,component.labelPath),value:pointer(item,component.valuePath)};});}
+        var hasDataPath=typeof component.dataPath==='string'&&component.dataPath.length>0,hasLabelPath=component.labelPath!==undefined,hasValuePath=component.valuePath!==undefined;
+        if(hasDataPath&&(value===undefined||value===null)){warnHiddenComponent(component,context,'ring_source_binding_failed');return null;}
+        if(hasLabelPath!==hasValuePath||hasLabelPath&&(typeof component.labelPath!=='string'||component.labelPath.charAt(0)!=='/'||typeof component.valuePath!=='string'||component.valuePath.charAt(0)!=='/')){warnHiddenComponent(component,context,'ring_mapping_binding_invalid');return null;}
+        var directSegments=Array.isArray(component.segments),mapped=hasLabelPath&&hasValuePath,items=directSegments?component.segments:(Array.isArray(value)?value:itemArray(value,'segments')),segments=[],total=0;
+        if(component.segments!==undefined&&!Array.isArray(component.segments)){warnHiddenComponent(component,context,'ring_segments_invalid');return null;}
+        if(hasDataPath&&!Array.isArray(value)&&(!source||!Array.isArray(source.segments))){warnHiddenComponent(component,context,'ring_source_type_invalid');return null;}
+        if(mapped){items=items.map(function(item){var itemRecord=record(item);return itemRecord?{label:pointer(itemRecord,component.labelPath),value:pointer(itemRecord,component.valuePath)}:null;});}
         items.forEach(function(item){
-          var source=record(item),field=numericField(source);if(!source||field===null||field.value<0)return;
-          var label=nonEmptyText(source.label,source.name);if(!label)return;
+          var itemSource=record(item),field=numericField(itemSource);if(!itemSource||field===null||field.value<0)return;
+          var keys=Object.keys(itemSource),allowed=mapped||keys.every(function(key){return directSegments?key==='id'||key==='label'||key==='value':key==='id'||key==='label'||key==='name'||key==='value'||key==='bytes'||key==='percent'||key==='count';});if(!allowed)return;
+          var label=nonEmptyText(itemSource.label,itemSource.name);if(!label)return;
           segments.push({label:label,field:field});total+=field.value;
         });
-        if(segments.length===0||total<=0){wrapper.appendChild(node('p','lab-card-copy','暂无有效构成数据'));return wrapper;}
+        if(segments.length===0||total<=0){warnHiddenComponent(component,context,'ring_has_no_valid_segments');return null;}
         if(segments.length>8){var otherValue=segments.slice(8).reduce(function(sum,segment){return sum+segment.field.value;},0);segments=segments.slice(0,8);segments.push({label:'其他',field:{value:otherValue,kind:'number'},renderColor:cssColor('--chart-1'),neutral:true});}
         var ranked=segments.map(function(segment,index){return {index:index,value:segment.field.value,neutral:segment.neutral===true};}).filter(function(entry){return !entry.neutral;}).sort(function(left,right){return left.value-right.value||left.index-right.index;});
         ranked.forEach(function(entry,rank){segments[entry.index].renderColor=chartColorAtRank(rank,ranked.length);});
@@ -812,13 +1003,16 @@ export function createUiAgentLabHtmlShell(): string {
         var value=componentValue(component,context);
         var primitive=typeof value==='string'||typeof value==='number'||typeof value==='boolean';
         if(primitive)return node('p','lab-text',text(value));
+        if(typeof component.dataPath==='string'&&component.dataPath.length>0){if(value!==null)warnHiddenComponent(component,context,value===undefined?'text_binding_failed':'text_value_type_invalid');return null;}
         var direct=nonEmptyText(component.text),title=nonEmptyText(component.title),body=nonEmptyText(component.body),copy=nonEmptyText(direct,nonEmptyText(body,title));
+        if(!copy)return null;
         var output=node('div','lab-text');
         if(!direct&&title&&body){output.appendChild(node('span','lab-text-title',title));output.appendChild(node('span','lab-text-body',body));return output;}
         output.textContent=copy;return output;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.InfoRows=function(component,context){
         var wrapper=card(component.title,'','info-card'),rows=node('div','info-rows');
+        appendTagSlot(wrapper,component,context);
         var value=componentValue(component,context),items=Array.isArray(value)?value:[];
         var mapped=typeof component.labelPath==='string'&&typeof component.valuePath==='string';
         if(mapped)items=items.map(function(item){return {label:pointer(item,component.labelPath),value:pointer(item,component.valuePath),time:typeof component.timePath==='string'?pointer(item,component.timePath):''};});
@@ -908,8 +1102,8 @@ export function createUiAgentLabHtmlShell(): string {
       function appendExpandableField(parent,label,value,budget){
         if(!takeExpandableBudget(parent,budget))return false;
         var row=node('div','expandable-field');
-        row.appendChild(node('span','expandable-field-label',label));
-        row.appendChild(node('span','expandable-field-value',value===null?'—':text(value)));
+        row.appendChild(node('span','expandable-field-label',nonEmptyText(label,'—')));
+        row.appendChild(node('span','expandable-field-value',nonEmptyText(value,'—')));
         parent.appendChild(row);return true;
       }
       function appendExpandableValue(parent,value,label,depth,budget){
@@ -962,9 +1156,14 @@ export function createUiAgentLabHtmlShell(): string {
       UI_AGENT_LAB_COMPONENT_REGISTRY.ExpandableCard=function(component,context){
         var hasLegacyDataPath=typeof component.dataPath==='string'&&component.dataPath.length>0;
         var value=hasLegacyDataPath?componentValue(component,context):undefined,valueRecord=record(value),wrapper=node('article','lab-card expandable-card');
+        if(hasLegacyDataPath&&(value===undefined||value===null)){warnHiddenComponent(component,context,'expandable_source_binding_failed');return null;}
+        if(component.rows!==undefined&&!Array.isArray(component.rows)){warnHiddenComponent(component,context,'expandable_rows_invalid');return null;}
+        var directRowsValid=list(component.rows).every(function(item){var row=record(item);if(!row)return false;var keys=Object.keys(row),validKeys=keys.every(function(key){return key==='label'||key==='value';});var label=row.label,rowValue=row.value;return validKeys&&(label===undefined||label===null||typeof label==='string')&&(rowValue===undefined||rowValue===null||typeof rowValue==='string');});
+        if(!directRowsValid){warnHiddenComponent(component,context,'expandable_rows_binding_invalid');return null;}
         var title=nonEmptyText(component.title,nonEmptyText(valueRecord?valueRecord.title:undefined,nonEmptyText(valueRecord?valueRecord.name:undefined,nonEmptyText(valueRecord?valueRecord.label:undefined,'展开详情'))));
         var trigger=node('button','expandable-trigger'),label=node('span','',title),icon=node('span','','+');
         trigger.type='button';trigger.setAttribute('aria-expanded','false');trigger.appendChild(label);trigger.appendChild(icon);
+        wrapper.appendChild(trigger);appendTagSlot(wrapper,component,context);
         var panel=node('div','expandable-panel'),panelInner=node('div','expandable-panel-inner'),body=nonEmptyText(component.body),rendered=false;
         panel.setAttribute('aria-hidden','true');
         if(body){panelInner.appendChild(node('p','lab-card-copy',body));rendered=true;}
@@ -978,7 +1177,7 @@ export function createUiAgentLabHtmlShell(): string {
         if(!rendered)panelInner.appendChild(node('p','lab-card-copy','暂无详细信息'));
         panel.appendChild(panelInner);
         trigger.addEventListener('click',function(){var open=wrapper.classList.toggle('is-open');trigger.setAttribute('aria-expanded',open?'true':'false');panel.setAttribute('aria-hidden',open?'false':'true');});
-        wrapper.appendChild(trigger);wrapper.appendChild(panel);return wrapper;
+        wrapper.appendChild(panel);return wrapper;
       };
       UI_AGENT_LAB_COMPONENT_REGISTRY.MediaSlider=function(component,context){
         var slider=node('div','media-slider'),items=itemArray(componentValue(component,context),'items');
@@ -1013,6 +1212,7 @@ export function createUiAgentLabHtmlShell(): string {
         if(items.length===0)grid.appendChild(card(component.title||'信息卡片',component.body||'暂无卡片数据','masonry-card'));return grid;
       };
       function safeError(title,body){return card(title,body,'error-card');}
+      function hidesOnBindingError(componentName){return componentName==='Text'||componentName==='ExpandableCard'||componentName==='List'||componentName==='SegmentedRingChart';}
       function componentInstanceKey(id,context){
         return nonEmptyText(context.surfaceInstanceKey,'surface')+'|'+nonEmptyText(context.instanceScopeKey,'root')+'|component:'+encodeURIComponent(id);
       }
@@ -1030,12 +1230,12 @@ export function createUiAgentLabHtmlShell(): string {
         if(!UI_AGENT_LAB_SCHEMA_BY_NAME[component.component])return safeError('不支持的组件','UI Lab catalog 不包含 '+text(component.component)+'。');
         if(typeof component.catalogFieldsJson==='string'&&component.catalogFieldsJson.length>0){
           var resolvedComponent=resolveCatalogFields(component,context);
-          if(!resolvedComponent)return safeError('组件属性无效',text(component.component)+' 的 catalog 属性无法安全解析。');
+          if(!resolvedComponent){if(hidesOnBindingError(component.component)){warnHiddenComponent(component,context,'catalog_binding_failed');return null;}return safeError('组件属性无效',text(component.component)+' 的 catalog 属性无法安全解析。');}
           component=resolvedComponent;
         }
         var renderer=UI_AGENT_LAB_COMPONENT_REGISTRY[component.component];
         if(typeof renderer!=='function')return safeError('不支持的组件','UI Lab catalog 不包含 '+text(component.component)+'。');
-        try{return markComponentEntrance(renderer(component,context,trail.concat([id])),id,component,context);}catch(_error){return safeError('组件渲染失败',text(component.component)+' 未能安全渲染。');}
+        try{return markComponentEntrance(renderer(component,context,trail.concat([id])),id,component,context);}catch(_error){if(hidesOnBindingError(component.component)){warnHiddenComponent(component,context,'component_render_failed');return null;}return safeError('组件渲染失败',text(component.component)+' 未能安全渲染。');}
       }
       var latestSurfaceGeneration=-1,latestSurfaceRevision=-1,latestThemeGeneration=-1,latestSurfaceSource=null,seenComponentInstanceKeys=Object.create(null);
       function renderSurfaceSource(source){
@@ -1045,7 +1245,8 @@ export function createUiAgentLabHtmlShell(): string {
         clear(surfaceHost);
         if(typeof source.rootId!=='string'||!source.rootId){surfaceHost.appendChild(safeError('Surface 无根节点','UI Agent 没有提供 rootId。'));return;}
         var surfaceInstanceKey=nonEmptyText(source.surfaceId,nonEmptyText(source.id,source.rootId));
-        surfaceHost.appendChild(renderById(source.rootId,{surface:source,model:model,byId:byId,hasItemScope:false,itemScope:undefined,surfaceInstanceKey:surfaceInstanceKey,instanceScopeKey:'root'},[]));
+        var renderedRoot=renderById(source.rootId,{surface:source,model:model,byId:byId,hasItemScope:false,itemScope:undefined,surfaceInstanceKey:surfaceInstanceKey,instanceScopeKey:'root'},[]);
+        if(renderedRoot)surfaceHost.appendChild(renderedRoot);
       }
       window.__applyUiAgentLabSurface=function(next){
         var payload=record(next),source=payload?record(payload.surface):null;

@@ -166,7 +166,12 @@ export interface UiLabSummary {
   count: number;
 }
 
+export interface UiLabRequest {
+  originalUserInput: string;
+}
+
 export interface UiLabSnapshot {
+  request: UiLabRequest;
   summary: UiLabSummary;
   results: UiLabResultSnapshot[];
 }
@@ -356,7 +361,9 @@ export function buildUiAgentLabSnapshot(task: CreateUiTaskPayload, data: DataRes
       data: sampled(visibleData) as Object
     });
   }
+  const originalUserInput = originalUserInputOf(task).trim();
   let snapshot: UiLabSnapshot = {
+    request: { originalUserInput: originalUserInput.length > 0 ? originalUserInput : task.intent },
     summary: {
       text: '已获取 ' + data.length.toString() + ' 组真实数据。',
       toolName: data.length === 1 ? data[0].toolId : 'multi-agent',
@@ -367,6 +374,7 @@ export function buildUiAgentLabSnapshot(task: CreateUiTaskPayload, data: DataRes
   };
   if (JSON.stringify(snapshot).length > UI_LAB_SNAPSHOT_LIMIT) {
     snapshot = {
+      request: snapshot.request,
       summary: snapshot.summary,
       results: results.map((item: UiLabResultSnapshot, index: number): UiLabResultSnapshot => {
         const visibleData = index < data.length ? uiLabVisibleData(data[index].data) : item.data;
@@ -384,6 +392,7 @@ export function buildUiAgentLabSnapshot(task: CreateUiTaskPayload, data: DataRes
   }
   if (JSON.stringify(snapshot).length > UI_LAB_SNAPSHOT_LIMIT) {
     snapshot = {
+      request: snapshot.request,
       summary: snapshot.summary,
       results: results.map((item: UiLabResultSnapshot): UiLabResultSnapshot => {
         const omitted: UiLabOmittedData = { omittedDueToPromptBudget: true };
@@ -563,7 +572,7 @@ function fullUiAgentLabSource(snapshot: UiLabSnapshot, data: DataResult[]): UiLa
       data: index < data.length ? uiLabVisibleData(data[index].data) : sampledResult.data
     });
   }
-  return { summary: snapshot.summary, results };
+  return { request: snapshot.request, summary: snapshot.summary, results };
 }
 
 export function hydrateUiAgentLabSnapshotForMergedLayout(
@@ -986,7 +995,7 @@ export function uiAgentLabLayoutPrompt(
     'Never infer a total from a sampled array length. State a business count only when result.data explicitly labels a scalar as count or total, or when result.data.summary text explicitly supports it.\n' +
     'For chart components, bind the narrowest matching snapshot paths through fields allowed by the catalog. Never output SVG, path, points, rect, viewBox, coordinates, dimensions, geometry, stroke settings, or colors; the renderer owns them.\n' +
     'Use only the UI Lab component catalog.\n' +
-    'Derive every binding path only from the exact structure present in dataSnapshot. The host rejects paths that do not exist in this sampled snapshot.\n' +
+    'Derive every binding path only from the exact structure present in dataSnapshot. The host rejects paths that do not exist in this sampled snapshot. Path existence alone is not type compatibility: inspect the resolved JSON type, and never bind string[] to a string field or string to an array field unless that exact catalog field explicitly accepts a single item. Use a declared tags slot for one same-meaning string or string[] tag group; tags are not key/value rows and one component must not mix unrelated tag groups.\n' +
     'Author-composed text and labels may be literals where the catalog allows them. When binding snapshot data, use the exact one-key object {"path":"/exact/path/from/dataSnapshot"}. Never print a path string such as "/results/0/data/value" as literal UI text.\n' +
     'Actions may contain only an offered offerId; never output action arguments.\n' +
     'Honor the original user request when choosing the presentation; intent is a shorter Leader summary.\n' +
@@ -1001,7 +1010,11 @@ export function uiAgentLabLayoutPrompt(
       data: tightlySampled(item.data) as Object
     };
   });
-  const compactSnapshot: UiLabSnapshot = { summary: snapshot.summary, results: compactResults };
+  const compactSnapshot: UiLabSnapshot = {
+    request: snapshot.request,
+    summary: snapshot.summary,
+    results: compactResults
+  };
   const omittedResults = snapshot.results.map((item: UiLabResultSnapshot): UiLabResultSnapshot => {
     const omitted: UiLabOmittedData = { omittedDueToPromptBudget: true };
     return {
@@ -1009,7 +1022,11 @@ export function uiAgentLabLayoutPrompt(
       status: item.status, warnings: item.warnings, facts: item.facts, data: omitted
     };
   });
-  const omittedSnapshot: UiLabSnapshot = { summary: snapshot.summary, results: omittedResults };
+  const omittedSnapshot: UiLabSnapshot = {
+    request: snapshot.request,
+    summary: snapshot.summary,
+    results: omittedResults
+  };
   const snapshots: UiLabSnapshot[] = [snapshot, compactSnapshot, omittedSnapshot];
   const completeMarker = '\ndataSnapshotComplete=' + (phase === 'complete' ? 'true' : 'false');
   const prefix = instructions + verifiedOffers + 'dataSnapshot=';

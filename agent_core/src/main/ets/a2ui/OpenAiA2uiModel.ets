@@ -88,7 +88,9 @@ export function buildA2uiLayoutSystemPrompt(
   const dataPathRules = isUiLabCatalog ?
     '- Derive every binding path only from the exact structure present in dataSnapshot in the user task. The host ' +
       'checks that each path exists in that sampled snapshot. Prefer the narrowest path whose value shape matches ' +
-      'the component; never bind a whole result object when a relevant child value is available.\n' :
+      'the component; path existence alone does not make its resolved JSON type compatible. A string and string[] ' +
+      'are different types and must never be bound interchangeably unless that exact catalog field explicitly accepts ' +
+      'a single item for an array. Never bind a whole result object when a relevant child value is available.\n' :
     '- Bind content only through exact paths explicitly listed in the user task. A listed parent path does not allow ' +
       'an unlisted descendant path. Prefer the narrowest allowed path whose value shape matches the component. Never ' +
       'bind a whole result object when a relevant child array is available.\n';
@@ -142,11 +144,13 @@ export function buildA2uiLayoutSystemPrompt(
     repeatedCollectionRules +
     '- An action slot contains only {"offerId":"an offered id"}; never invent or alter an offer.\n' +
     '- The catalog schema is the only field and value-policy authority. Output only fields declared for that component. ' +
-    'For valuePolicy "literal-or-path", output either a literal of the declared type or exactly {"path":"/an/exact/path"}. ' +
+      'For valuePolicy "literal-or-path", output either a literal of the declared type or exactly {"path":"/an/exact/path"}. ' +
     'Visible field example: title:{"path":"/summary/title"} is correct; title:"/summary/title" is wrong. ' +
     'Path declaration fields stay strings: dataPath:"/items", labelPath:"/label", valuePath:"/value", timePath:"/time". ' +
-    'For "path-only", output only that exact one-key binding object: never output a numeric literal, numeric string, ' +
-    'expression, FunctionCall, or binding with extra keys. For literal arrays and objects, follow their nested fields recursively.\n' +
+      'For "path-only", output only that exact one-key binding object: never output a numeric literal, numeric string, ' +
+      'expression, FunctionCall, or binding with extra keys. A field declared as string must never bind string[]; use a ' +
+      'declared tags slot for one same-meaning string or string[] tag group. Tags are not key/value rows and must not mix ' +
+      'multiple unrelated tag groups in one component. For literal arrays and objects, follow their nested fields recursively.\n' +
     '- Component names and properties are direct members of each component object. Use "component", never "type", ' +
     'and never place properties inside a nested "props" or "properties" object.\n' +
     outputExampleSection +

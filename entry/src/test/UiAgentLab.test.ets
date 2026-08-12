@@ -561,6 +561,66 @@ export default function uiAgentLabTest() {
       expect(html).assertContain('var directRows=list(component.rows).slice(0,8)');
     });
 
+    it('normalizes composite tags without rejecting the parent component', 0, () => {
+      const singleJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'ExpandableCard',
+        '{"title":"Coffee","tags":{"path":"/sourceTags"}}',
+        '{"sourceTags":"高德地图"}'
+      );
+      const multipleJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'InfoRows',
+        '{"tags":{"path":"/sourceTags"}}',
+        '{"sourceTags":["高德地图","美团"]}'
+      );
+      const mixedJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'ExpandableCard',
+        '{"tags":{"path":"/sourceTags"}}',
+        '{"sourceTags":["高德地图",7,null," ","美团"]}'
+      );
+      const invalidJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'InfoRows',
+        '{"tags":{"path":"/sourceTags"}}',
+        '{"sourceTags":{"provider":"高德地图"}}'
+      );
+      const emptyJson = resolveUiAgentLabCatalogFieldsJsonForModel(
+        'ExpandableCard',
+        '{"tags":{"path":"/sourceTags"}}',
+        '{"sourceTags":[]}'
+      );
+      const single = JSON.parse(singleJson as string) as Record<string, Object | string>;
+      const multiple = JSON.parse(multipleJson as string) as Record<string, Object | string>;
+      const mixed = JSON.parse(mixedJson as string) as Record<string, Object | string>;
+      const invalid = JSON.parse(invalidJson as string) as Record<string, Object | string>;
+      const empty = JSON.parse(emptyJson as string) as Record<string, Object | string>;
+
+      expect((single['tags'] as string[]).length).assertEqual(1);
+      expect((single['tags'] as string[])[0]).assertEqual('高德地图');
+      expect((multiple['tags'] as string[]).length).assertEqual(2);
+      expect((mixed['tags'] as string[]).length).assertEqual(2);
+      expect(mixed['__uiAgentLabTagsWarning']).assertEqual('tags_items_filtered');
+      expect(invalid['tags'] === undefined).assertTrue();
+      expect(invalid['__uiAgentLabTagsWarning']).assertEqual('tags_value_type_invalid');
+      expect(empty['tags'] === undefined).assertTrue();
+      expect(empty['__uiAgentLabTagsWarning'] === undefined).assertTrue();
+    });
+
+    it('renders one low-contrast tags slot inside ExpandableCard and InfoRows', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+
+      expect(html).assertContain('if(schema.acceptSingleItem===true&&!Array.isArray(candidate))candidate=[candidate]');
+      expect(html).assertContain("key==='tags'&&(component.component==='ExpandableCard'||component.component==='InfoRows')");
+      expect(html).assertContain("console.warn('[UiAgentLabBinding] '+(filtered?'filtered':'hidden')+' slot=tags component='");
+      expect(html).assertContain("var host=node('div','tag-list')");
+      expect(html).assertContain("var chip=node('span','tag-chip',tag)");
+      expect(html).assertContain('if(component.tags===undefined&&!component.__uiAgentLabTagsWarning)return false');
+      expect(html).assertContain('appendTagSlot(wrapper,component,context)');
+      expect(html).assertContain('.tag-chip { display:inline-flex; align-items:center; min-height:22px;');
+      expect(html).assertContain('.info-card>.tag-list { margin:2px 0 12px; }');
+      expect(html).assertContain('.expandable-card>.tag-list { margin-top:10px; }');
+      expect(html.indexOf('UI_AGENT_LAB_COMPONENT_REGISTRY.Tag=')).assertEqual(-1);
+      expect(html.indexOf('.innerHTML')).assertEqual(-1);
+    });
+
     it('rejects numeric strings and non-exact path objects during executable catalog resolution', 0, () => {
       const invalidFields: string[] = [
         '{"items":[{"label":"Stars","value":{"path":"/dashboard/stars"}}]}',
@@ -614,18 +674,20 @@ export default function uiAgentLabTest() {
       expect(html.indexOf('var next=Number(value)')).assertEqual(-1);
       expect(html).assertContain('Array.isArray(component.items)?component.items:');
       expect(html).assertContain("itemArray(value,'items')");
-      expect(html).assertContain('Array.isArray(component.segments)?component.segments:');
+      expect(html).assertContain('var directSegments=Array.isArray(component.segments)');
+      expect(html).assertContain('items=directSegments?component.segments:');
       expect(html).assertContain("itemArray(value,'segments')");
-      expect(html).assertContain("typeof component.labelPath==='string'&&typeof component.valuePath==='string'");
+      expect(html).assertContain('hasLabelPath!==hasValuePath');
+      expect(html).assertContain("component.labelPath.charAt(0)!=='/'");
       expect(html).assertContain('if(mapped){items=items.map(function(item)');
-      expect(html).assertContain('label:pointer(item,component.labelPath),value:pointer(item,component.valuePath)');
+      expect(html).assertContain('label:pointer(itemRecord,component.labelPath),value:pointer(itemRecord,component.valuePath)');
       expect(html).assertContain('items.forEach(function(item)');
       expect(html.indexOf('items.slice(0,8)')).assertEqual(-1);
       expect(html.indexOf('items.length>8')).assertEqual(-1);
       expect(html).assertContain("typeof component.timePath==='string'?pointer(item,component.timePath):''");
       expect(html).assertContain("nonEmptyText(valueRecord.value,'—')");
       expect(html).assertContain("nonEmptyText(item,'—')");
-      expect(html).assertContain("if(segments.length===0||total<=0){wrapper.appendChild(node('p','lab-card-copy','暂无有效构成数据'))");
+      expect(html).assertContain("if(segments.length===0||total<=0){warnHiddenComponent(component,context,'ring_has_no_valid_segments');return null;}");
       expect(html.indexOf('segments.length===0||total<=0')).assertLess(
         html.indexOf("compactNumber(segment.field.value/total*100)+'%'")
       );
@@ -737,13 +799,14 @@ export default function uiAgentLabTest() {
       const html = createUiAgentLabHtmlShell();
       expect(html).assertContain('UI_AGENT_LAB_COMPONENT_REGISTRY.List=');
       expect(html).assertContain('var LIST_PAGE_SIZE=8');
-      expect(html).assertContain('items.slice(visibleCount,nextCount).forEach');
+      expect(html).assertContain('items.forEach(function(item,index)');
+      expect(html).assertContain('renderedRows.slice(visibleCount,nextCount).forEach');
       expect(html).assertContain("more.addEventListener('click',appendPage)");
-      expect(html).assertContain("status.textContent='已显示 '+String(visibleCount)+' / '+String(items.length)");
-      expect(html).assertContain('more.disabled=visibleCount>=items.length');
+      expect(html).assertContain("status.textContent='已显示 '+String(visibleCount)+' / '+String(renderedRows.length)");
+      expect(html).assertContain('more.disabled=visibleCount>=renderedRows.length');
       expect(html).assertContain("var row=node('div','lab-list-row')");
       expect(html).assertContain("row.setAttribute('role','listitem')");
-      expect(html).assertContain('if(items.length>LIST_PAGE_SIZE)wrapper.appendChild(pager)');
+      expect(html).assertContain('if(renderedRows.length>LIST_PAGE_SIZE)wrapper.appendChild(pager)');
       expect(html).assertContain('.lab-list+.lab-list { padding-top:11px; border-top:1px solid var(--hairline); }');
       expect(html).assertContain('.lab-list-row:last-child { padding-bottom:0; border-bottom:0; }');
       expect(html).assertContain('hasItemScope:true,itemScope:item');
@@ -751,11 +814,38 @@ export default function uiAgentLabTest() {
       expect(html).assertContain("encodeURIComponent(String(value))+'|index:'+String(index)");
       expect(html).assertContain("return 'index:'+String(index)");
       expect(html).assertContain("'|list:'+encodeURIComponent(text(component.id))+'|item:'+listItemInstancePart(item,index)");
-      expect(html).assertContain('listItemContext(component,context,item,visibleCount+index)');
+      expect(html).assertContain('listItemContext(component,context,item,index)');
       expect(html).assertContain("component.dataPath==='/'");
       expect(html).assertContain('return context.itemScope');
       expect(html).assertContain("node('p','lab-card-copy','暂无内容')");
       expect(html.indexOf('.innerHTML')).assertEqual(-1);
+    });
+
+    it('hides invalid bound components while preserving safe empty-value fallbacks', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+
+      expect(html).assertContain("console.warn('[UiAgentLabBinding] hidden component='");
+      expect(html).assertContain("componentName==='Text'||componentName==='ExpandableCard'||componentName==='List'||componentName==='SegmentedRingChart'");
+      expect(html).assertContain("if(typeof component.dataPath==='string'&&component.dataPath.length>0){if(value!==null)warnHiddenComponent");
+      expect(html).assertContain("if(!copy)return null");
+      expect(html).assertContain("if(candidate===undefined)return {ok:true,value:'—'}");
+      expect(html).assertContain("if(candidate===null||candidate==='')return {ok:true,value:'—'}");
+      expect(html).assertContain("node('span','expandable-field-value',nonEmptyText(value,'—'))");
+      expect(html).assertContain("if(renderedRows.length===0){warnHiddenComponent(component,context,'list_has_no_renderable_items');return null;}");
+      expect(html).assertContain("return column.firstChild?column:null");
+      expect(html).assertContain("return row.firstChild?row:null");
+      expect(html).assertContain("if(renderedRoot)surfaceHost.appendChild(renderedRoot)");
+      expect(html.indexOf("safeError('组件属性无效',text(component.component)+' 的 catalog 属性无法安全解析。')") > 0).assertTrue();
+    });
+
+    it('falls back an empty Hero title to the original user input with one-line ellipsis', 0, () => {
+      const html = createUiAgentLabHtmlShell();
+
+      expect(html).assertContain('function originalUserInput(context)');
+      expect(html).assertContain('request?request.originalUserInput:undefined');
+      expect(html).assertContain("if(!title)title=fallbackTitle");
+      expect(html).assertContain("'hero-title'+(usesFallback?' is-fallback':'')");
+      expect(html).assertContain('.hero-title.is-fallback { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;');
     });
 
     it('renders visible text and lists from component props or data paths', 0, () => {
@@ -1108,6 +1198,11 @@ export default function uiAgentLabTest() {
       expect(prompt).assertContain('not the number of business entities');
       expect(prompt).assertContain('result.data explicitly labels a scalar as count or total');
       expect(prompt).assertContain('result.data.summary text explicitly supports it');
+      expect(prompt).assertContain('Path existence alone is not type compatibility');
+      expect(prompt).assertContain('never bind string[] to a string field or string to an array field');
+      expect(prompt).assertContain('unless that exact catalog field explicitly accepts a single item');
+      expect(prompt).assertContain('Use a declared tags slot for one same-meaning string or string[] tag group');
+      expect(prompt).assertContain('tags are not key/value rows');
       expect(prompt.indexOf('mock.travel')).assertEqual(-1);
       expect(prompt).assertContain('"count":3');
       expect(prompt.indexOf('allowedDataPaths')).assertEqual(-1);

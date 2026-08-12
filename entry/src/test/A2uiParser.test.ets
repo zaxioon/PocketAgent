@@ -56,7 +56,10 @@ export default function a2uiParserTest() {
         '{"label":"ArkTS","value":{"path":"/dashboard/arkts"}},' +
         '{"label":"TypeScript","value":{"path":"/dashboard/typescript"}}]},' +
         '{"id":"activity","component":"InfoRows","dataPath":"/dashboard/activity",' +
-        '"labelPath":"/time","valuePath":"/summary","timePath":"/time"}]}}',
+        '"tags":{"path":"/dashboard/activityTags"},' +
+        '"labelPath":"/time","valuePath":"/summary","timePath":"/time"},' +
+        '{"id":"card","component":"ExpandableCard","title":"Details",' +
+        '"tags":{"path":"/dashboard/cardTags"}}]}}',
         'ui-lab'
       );
 
@@ -65,9 +68,11 @@ export default function a2uiParserTest() {
         const metrics = parsed.updateComponents.components[0];
         const ring = parsed.updateComponents.components[1];
         const activity = parsed.updateComponents.components[2];
+        const card = parsed.updateComponents.components[3];
         const metricFields = JSON.parse(metrics.catalogFieldsJson as string) as Record<string, Object | string>;
         const ringFields = JSON.parse(ring.catalogFieldsJson as string) as Record<string, Object>;
-        const activityFields = JSON.parse(activity.catalogFieldsJson as string) as Record<string, string>;
+        const activityFields = JSON.parse(activity.catalogFieldsJson as string) as Record<string, Object | string>;
+        const cardFields = JSON.parse(card.catalogFieldsJson as string) as Record<string, Object>;
         const metricItems = metricFields['items'] as Object[];
         const firstMetric = metricItems[0] as Record<string, Object | string>;
         const ringItems = ringFields['segments'] as Object[];
@@ -76,9 +81,11 @@ export default function a2uiParserTest() {
         expect((ringItems[0] as Record<string, Object>)['value'] !== undefined).assertTrue();
         expect(ringItems.length).assertEqual(2);
         expect(activity.dataPath).assertEqual('/dashboard/activity');
-        expect(activityFields['labelPath']).assertEqual('/time');
-        expect(activityFields['valuePath']).assertEqual('/summary');
-        expect(activityFields['timePath']).assertEqual('/time');
+        expect(activityFields['labelPath'] as string).assertEqual('/time');
+        expect(activityFields['valuePath'] as string).assertEqual('/summary');
+        expect(activityFields['timePath'] as string).assertEqual('/time');
+        expect((activityFields['tags'] as Record<string, string>)['path']).assertEqual('/dashboard/activityTags');
+        expect((cardFields['tags'] as Record<string, string>)['path']).assertEqual('/dashboard/cardTags');
         expect(metrics.catalogFieldsJson?.indexOf('properties')).assertEqual(-1);
         expect(metrics.catalogFieldsJson?.indexOf('props')).assertEqual(-1);
       }
@@ -128,7 +135,9 @@ export default function a2uiParserTest() {
         '{"id":"card","component":"ExpandableCard","title":"Card","actions":[' + validAction + ',' +
           '{"id":"card.close","label":"Close","variant":"secondary","kind":"prompt"}]}',
         '{"id":"card","component":"ExpandableCard","dataPath":"/card","rows":[' +
-          '{"label":"Detail","value":{"path":"/detail"}}]}'
+          '{"label":"Detail","value":{"path":"/detail"}}]}',
+        '{"id":"card","component":"ExpandableCard","tags":["coffee"]}',
+        '{"id":"facts","component":"InfoRows","tags":"/sourceTags"}'
       ];
       let rejected: number = 0;
       for (let index = 0; index < invalidComponents.length; index++) {
@@ -179,9 +188,15 @@ export default function a2uiParserTest() {
       expect(parsed.updateComponents?.components[0].actions?.[0].sourceSectionId).assertEqual('tool.github');
     });
 
-    it('rejects invalid HeroBanner and chart component shapes', 0, () => {
+    it('allows a missing HeroBanner title for runtime fallback and rejects other invalid shapes', 0, () => {
+      const fallbackHero = parseA2uiEnvelope(
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"lab","components":[' +
+        '{"id":"hero","component":"HeroBanner","body":"Missing title"}]}}',
+        'ui-lab'
+      );
+      expect(fallbackHero.updateComponents?.components[0].component).assertEqual('HeroBanner');
+
       const invalidComponents: string[] = [
-        '{"id":"hero","component":"HeroBanner","body":"Missing title"}',
         '{"id":"hero","component":"HeroBanner","title":"Summary","dataPath":"/summary"}',
         '{"id":"metrics","component":"MetricGrid","title":"Metrics"}',
         '{"id":"ring","component":"SegmentedRingChart","dataPath":"/data","actions":[]}',

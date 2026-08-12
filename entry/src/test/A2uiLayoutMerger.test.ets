@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@ohos/hypium';
 import {
   ActionOffer,
+  A2uiComponentCatalogSchema,
   AIPHONE_COMPONENT_CATALOG_JSON,
   buildA2uiLayoutSystemPrompt,
   mergeA2uiLayout,
@@ -47,6 +48,7 @@ interface ComponentCatalogEntry {
 interface ComponentFieldSchema {
   type: string;
   valuePolicy: string;
+  acceptSingleItem?: boolean;
   required?: boolean;
   minLength?: number;
   minItems?: number;
@@ -176,6 +178,10 @@ export default function a2uiLayoutMergerTest() {
       expect(prompt.includes('nested "props" or "properties" object')).assertTrue();
       expect(prompt.includes('Derive every binding path only from the exact structure present in dataSnapshot')).assertTrue();
       expect(prompt.includes('checks that each path exists in that sampled snapshot')).assertTrue();
+      expect(prompt.includes('path existence alone does not make its resolved JSON type compatible')).assertTrue();
+      expect(prompt.includes('A field declared as string must never bind string[]')).assertTrue();
+      expect(prompt.includes('use a declared tags slot for one same-meaning string or string[] tag group')).assertTrue();
+      expect(prompt.includes('Tags are not key/value rows')).assertTrue();
       expect(prompt.includes('title:{"path":"/summary/title"} is correct')).assertTrue();
       expect(prompt.includes('title:"/summary/title" is wrong')).assertTrue();
       expect(prompt.includes('Path declaration fields stay strings')).assertTrue();
@@ -318,8 +324,14 @@ export default function a2uiLayoutMergerTest() {
       expect(infoRowsUsage.includes('非空数组至少一个 item 必须有 primitive value')).assertTrue();
       expect(infoRowsUsage.includes('单个事实表或已经整理好的 label/value 信息行')).assertTrue();
       expect(infoRowsUsage.includes('重复的具名实体应使用 List')).assertTrue();
+      expect(infoRowsUsage.includes('无需 key 即可理解且语义一致的标签')).assertTrue();
+      expect(infoRowsUsage.includes('使用 path-only 绑定 string 或 string[]')).assertTrue();
+      expect(infoRowsUsage.includes('不得把键值对放入 tags')).assertTrue();
+      expect(infoRowsUsage.includes('不要在同一组件混塞多组不同语义的标签')).assertTrue();
       expect(infoRowsUsage.includes('优先于 List 或 ExpandableCard')).assertFalse();
       expect(expandableUsage.includes('direct rows')).assertTrue();
+      expect(expandableUsage.includes('业务 value 必须使用 path-only 且只能绑定 string')).assertTrue();
+      expect(expandableUsage.includes('rows、title、body、tags 中的 path')).assertTrue();
       expect(expandableUsage.includes('省略 dataPath 不会隐式展示整个 item')).assertTrue();
       expect(expandableUsage.includes('新生成不得使用 dataPath=/')).assertTrue();
       expect(listUsage.includes('{path:ARRAY_PATH,componentId:TEMPLATE_ID}')).assertTrue();
@@ -361,6 +373,12 @@ export default function a2uiLayoutMergerTest() {
       expect(infoRows.fields['labelPath'].minLength).assertEqual(1);
       expect(infoRows.fields['valuePath'].valuePolicy).assertEqual('literal');
       expect(infoRows.fields['timePath'].valuePolicy).assertEqual('literal');
+      const infoTags = infoRows.fields['tags'];
+      expect(infoTags.type).assertEqual('array');
+      expect(infoTags.valuePolicy).assertEqual('path-only');
+      expect(infoTags.acceptSingleItem).assertTrue();
+      expect(infoTags.maxItems).assertEqual(12);
+      expect(infoTags.items?.type).assertEqual('string');
       const expandableRows = expandable.fields['rows'];
       const expandableRowFields = expandableRows.items?.fields;
       expect(expandableRows.type).assertEqual('array');
@@ -369,6 +387,8 @@ export default function a2uiLayoutMergerTest() {
       expect(expandableRowFields?.['label'].valuePolicy).assertEqual('literal-or-path');
       expect(expandableRowFields?.['value'].type).assertEqual('string');
       expect(expandableRowFields?.['value'].valuePolicy).assertEqual('path-only');
+      expect(expandable.fields['tags'].acceptSingleItem).assertTrue();
+      expect(expandable.fields['tags'].valuePolicy).assertEqual('path-only');
       expect(expandable.atMostOne?.[0].join(',')).assertEqual('dataPath,rows');
       expect(list.fields['title'].valuePolicy).assertEqual('literal-or-path');
       expect(ringItemFields?.['label'].valuePolicy).assertEqual('literal-or-path');
@@ -417,6 +437,33 @@ export default function a2uiLayoutMergerTest() {
       )).assertEqual(BASELINE);
     });
 
+    it('normalizes one string into the bounded tags array without weakening scalar fields', 0, () => {
+      const catalog = A2uiComponentCatalogSchema.parse(UI_AGENT_LAB_COMPONENT_CATALOG_JSON);
+      expect(catalog !== null).assertTrue();
+      if (catalog === null) return;
+      const model = '{"source":"高德","sourceTags":["咖啡","安静"],"wrong":42}';
+      expect(catalog.resolvePresentationFieldsJson(
+        'ExpandableCard',
+        '{"tags":{"path":"/source"}}',
+        model
+      )).assertEqual('{"tags":["高德"]}');
+      expect(catalog.resolvePresentationFieldsJson(
+        'InfoRows',
+        '{"tags":{"path":"/sourceTags"}}',
+        model
+      )).assertEqual('{"tags":["咖啡","安静"]}');
+      expect(catalog.resolvePresentationFieldsJson(
+        'ExpandableCard',
+        '{"tags":{"path":"/wrong"}}',
+        model
+      ) === null).assertTrue();
+      expect(catalog.resolvePresentationFieldsJson(
+        'ExpandableCard',
+        '{"rows":[{"label":"来源","value":{"path":"/sourceTags"}}]}',
+        model
+      ) === null).assertTrue();
+    });
+
     it('accepts constrained UI Lab presentation components and rejects unsafe shapes', 0, () => {
       const valid =
         '{"version":"v0.9.1","updateComponents":{"surfaceId":"surface-layout-test","components":[' +
@@ -436,7 +483,6 @@ export default function a2uiLayoutMergerTest() {
         '{"id":"hero-2","component":"HeroBanner","title":"Second"},{"id":"metrics"'
       );
       const invalid: string[] = [
-        valid.replace(',"title":"Summary"', ''),
         valid.replace('"title":"Summary"', '"title":"Summary","dataPath":"/summary"'),
         duplicateHero,
         valid.replace('"title":"Metrics","dataPath":"/genericToolResults"', '"title":"Metrics"'),
@@ -448,6 +494,13 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(
         BASELINE,
         valid,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === BASELINE).assertFalse();
+      expect(mergeA2uiLayout(
+        BASELINE,
+        valid.replace(',"title":"Summary"', ''),
         SURFACE_ID,
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
@@ -516,6 +569,46 @@ export default function a2uiLayoutMergerTest() {
       expect(singleSegmentMerged.jsonl.includes('"component":"SegmentedRingChart"')).assertTrue();
       expect(singleSegmentMerged.jsonl.includes('"label":"TypeScript"')).assertTrue();
 
+      const missingSegmentValue = valid.replace('/languages/arkts', '/languages/missing');
+      const missingSegmentValueMerged = mergeA2uiLayoutWithStatus(
+        bindingBaseline,
+        missingSegmentValue,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(missingSegmentValueMerged.accepted).assertTrue();
+      expect(missingSegmentValueMerged.jsonl).assertContain('/languages/missing');
+
+      const malformedSegments = valid.replace(
+        '"segments":[{"id":"typescript","label":"TypeScript","value":{"path":"/languages/typescript"}},' +
+          '{"id":"arkts","label":"ArkTS","value":{"path":"/languages/arkts"}}]',
+        '"segments":[{"id":"typescript","label":"TypeScript","value":{"path":"/languages/typescript"},' +
+          '"unexpected":true},{"id":"arkts","label":"ArkTS","value":"20"}]'
+      );
+      const malformedSegmentsMerged = mergeA2uiLayoutWithStatus(
+        bindingBaseline,
+        malformedSegments,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      );
+      expect(malformedSegmentsMerged.accepted).assertTrue();
+      expect(malformedSegmentsMerged.jsonl).assertContain('"unexpected":true');
+
+      const emptySegments = valid.replace(
+        '"segments":[{"id":"typescript","label":"TypeScript","value":{"path":"/languages/typescript"}},' +
+          '{"id":"arkts","label":"ArkTS","value":{"path":"/languages/arkts"}}]',
+        '"segments":[]'
+      );
+      expect(mergeA2uiLayout(
+        bindingBaseline,
+        emptySegments,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === bindingBaseline).assertFalse();
+
       const manySegmentBaseline = bindingBaseline +
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/languages/java","value":7}}\n' +
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test","path":"/languages/go","value":6}}\n' +
@@ -557,15 +650,9 @@ export default function a2uiLayoutMergerTest() {
           '"component":"MetricGrid","dataPath":"/genericToolResults","title"'),
         valid.replace('"component":"SegmentedRingChart","segments"',
           '"component":"SegmentedRingChart","dataPath":"/genericToolResults","segments"'),
-        valid.replace(
-          '"segments":[{"id":"typescript","label":"TypeScript","value":{"path":"/languages/typescript"}},' +
-            '{"id":"arkts","label":"ArkTS","value":{"path":"/languages/arkts"}}]',
-          '"segments":[]'
-        ),
         valid.replace('{"path":"/summary/text"}', '"/summary/text"'),
         valid.replace('"title":{"path":"/summary/text"}',
           '"title":"Summary","body":"/summary/text"'),
-        valid.replace('{"path":"/summary/text"}', '{"path":"/summary/private"}'),
         valid.replace('"component":"MetricGrid","title"', '"component":"MetricGrid","properties":{},"title"')
       ];
       for (let index = 0; index < invalid.length; index++) {
@@ -577,6 +664,17 @@ export default function a2uiLayoutMergerTest() {
           UI_AGENT_LAB_COMPONENT_CATALOG_JSON
         )).assertEqual(bindingBaseline);
       }
+      const missingHeroTitle = valid.replace(
+        '{"path":"/summary/text"}',
+        '{"path":"/summary/private"}'
+      );
+      expect(mergeA2uiLayout(
+        bindingBaseline,
+        missingHeroTitle,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === bindingBaseline).assertFalse();
       const dataModelCandidate =
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test",' +
         '"path":"/metrics/followers","value":42}}';
@@ -665,9 +763,8 @@ export default function a2uiLayoutMergerTest() {
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       );
-      expect(noLanguagesMerged.accepted).assertFalse();
-      expect(noLanguagesMerged.diagnostic?.componentId).assertEqual('ring');
-      expect(noLanguagesMerged.diagnostic?.rule).assertEqual('mapping_source_size_invalid');
+      expect(noLanguagesMerged.accepted).assertTrue();
+      expect(noLanguagesMerged.jsonl).assertContain('"dataPath":"/noLanguages"');
 
       const ordinaryObject = valid.replace(
         '{"id":"activity","component":"InfoRows","dataPath":"/activity",' +
@@ -709,7 +806,7 @@ export default function a2uiLayoutMergerTest() {
         valid.replace('"dataPath":"/activity"', '"dataPath":"/activityWithoutValues"'),
         valid.replace('"valuePath":"/share"', '"valuePath":"/textShare"')
       ];
-      for (let index = 0; index < invalid.length; index++) {
+      for (let index = 0; index < invalid.length - 1; index++) {
         expect(mergeA2uiLayout(
           mappingBaseline,
           invalid[index],
@@ -718,6 +815,13 @@ export default function a2uiLayoutMergerTest() {
           UI_AGENT_LAB_COMPONENT_CATALOG_JSON
         )).assertEqual(mappingBaseline);
       }
+      expect(mergeA2uiLayout(
+        mappingBaseline,
+        invalid[invalid.length - 1],
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === mappingBaseline).assertFalse();
     });
 
     it('derives exact binding paths recursively from parent data values', 0, () => {
@@ -756,14 +860,14 @@ export default function a2uiLayoutMergerTest() {
         SURFACE_ID,
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
-      )).assertEqual(parentValueBaseline);
+      ) === parentValueBaseline).assertFalse();
       expect(mergeA2uiLayout(
         componentOnlyBaseline,
         componentOnlyPath,
         SURFACE_ID,
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
-      )).assertEqual(componentOnlyBaseline);
+      ) === componentOnlyBaseline).assertFalse();
     });
 
     it('accepts an official List template and rejects unbound or invalid scoped layouts', 0, () => {
@@ -777,6 +881,10 @@ export default function a2uiLayoutMergerTest() {
         '"children":["item-card"]'
       );
       const invalidPath = valid.replace('/genericToolResults', '/secret');
+      const invalidSourceBaseline = BASELINE +
+        '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test",' +
+        '"path":"/notAList","value":{"name":"wrong source type"}}}\n';
+      const invalidSource = valid.replace('/genericToolResults', '/notAList');
       const listAction = valid.replace(
         '"component":"List","children"',
         '"component":"List","actions":[],"children"'
@@ -816,7 +924,16 @@ export default function a2uiLayoutMergerTest() {
       expect(merged.includes('"component":"List"')).assertTrue();
       expect(merged.includes('"componentId":"item-card"')).assertTrue();
       expect(mergeA2uiLayout(BASELINE, unbound, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
-      expect(mergeA2uiLayout(BASELINE, invalidPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
+      expect(mergeA2uiLayout(
+        BASELINE, invalidPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === BASELINE).assertFalse();
+      expect(mergeA2uiLayout(
+        invalidSourceBaseline,
+        invalidSource,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === invalidSourceBaseline).assertFalse();
       expect(mergeA2uiLayout(BASELINE, listAction, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
       expect(mergeA2uiLayout(BASELINE, templateAction, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
       expect(mergeA2uiLayout(BASELINE, heroTemplate, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON)).assertEqual(BASELINE);
@@ -889,10 +1006,10 @@ export default function a2uiLayoutMergerTest() {
       ) === itemBaseline).assertFalse();
       expect(mergeA2uiLayout(
         itemBaseline, missing, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
-      )).assertEqual(itemBaseline);
+      ) === itemBaseline).assertFalse();
       expect(mergeA2uiLayout(
         itemBaseline, absoluteInItem, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
-      )).assertEqual(itemBaseline);
+      ) === itemBaseline).assertFalse();
       expect(mergeA2uiLayout(
         itemBaseline, literalTitlePath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       )).assertEqual(itemBaseline);
@@ -907,10 +1024,10 @@ export default function a2uiLayoutMergerTest() {
       ) === itemBaseline).assertFalse();
       expect(mergeA2uiLayout(
         itemBaseline, missingRowPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
-      )).assertEqual(itemBaseline);
+      ) === itemBaseline).assertFalse();
       expect(mergeA2uiLayout(
         itemBaseline, absoluteRowPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
-      )).assertEqual(itemBaseline);
+      ) === itemBaseline).assertFalse();
       expect(mergeA2uiLayout(
         itemBaseline, literalRowValue, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       )).assertEqual(itemBaseline);
@@ -920,6 +1037,14 @@ export default function a2uiLayoutMergerTest() {
       expect(mergeA2uiLayout(
         itemBaseline, rowsWithDataPath, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       )).assertEqual(itemBaseline);
+
+      const sparseItemBaseline = itemBaseline.replace(
+        '{"kind":"IssueEvent","summary":"Opened issue"}',
+        '{"kind":"IssueEvent"}'
+      );
+      expect(mergeA2uiLayout(
+        sparseItemBaseline, valid, SURFACE_ID, [], UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === sparseItemBaseline).assertFalse();
     });
 
     it('validates mapped arrays within every List item scope', 0, () => {
@@ -978,16 +1103,15 @@ export default function a2uiLayoutMergerTest() {
       expect(infoRejected.diagnostic?.componentId).assertEqual('details');
       expect(infoRejected.diagnostic?.rule).assertEqual('mapping_source_not_array');
 
-      const ringRejected = mergeA2uiLayoutWithStatus(
+      const ringTolerated = mergeA2uiLayoutWithStatus(
         BASELINE + rootCollisions + invalidRingGroups,
         candidate,
         SURFACE_ID,
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       );
-      expect(ringRejected.accepted).assertFalse();
-      expect(ringRejected.diagnostic?.componentId).assertEqual('ring');
-      expect(ringRejected.diagnostic?.rule).assertEqual('mapping_source_not_array');
+      expect(ringTolerated.accepted).assertTrue();
+      expect(ringTolerated.jsonl).assertContain('"component":"SegmentedRingChart"');
     });
 
     it('rejects business components when the UI Lab catalog is selected', 0, () => {

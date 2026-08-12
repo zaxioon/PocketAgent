@@ -26,13 +26,13 @@ const UI_AGENT_LAB_COMPONENT_CATALOG_BASE_JSON: string =
     '{"name":"Column","role":"布局组件","usage":"纵向容器，只通过 children 排列真实存在的子组件 id；children 不得包含文本、数据值或 action，renderer 不得生成任何内置可见文案"},' +
     '{"name":"Row","role":"布局组件","usage":"横向容器，只通过 children 排列真实存在的子组件 id；children 不得包含文本、数据值或 action，renderer 不得生成任何内置可见文案"},' +
     '{"name":"Text","role":"内容组件","usage":"展示简短标题或说明；全部可见文案必须由 direct text、body、title fields 或 legacy dataPath 动态提供，renderer 不得内置设计稿文案；不使用 children 或 actions"},' +
-    '{"name":"InfoRows","role":"内容组件","usage":"展示单个事实表或已经整理好的 label/value 信息行；支持两种数据形态：dataPath 指向普通对象时必须省略 labelPath、valuePath、timePath，renderer 会把对象自身的真实字段名和值逐项转成 rows，禁止虚构 /key、/value；dataPath 指向对象数组时才可同时提供以 / 开头、相对于每个数组 item 的 labelPath 与 valuePath，renderer 会逐项展开为 label/value 行，可选 timePath 同样相对于 item，所有 mapping path 必须是 item 中真实存在的字段；也兼容 legacy dataPath 直接绑定 Array<{label,value,time?}>；任一 mapping path 出现时 labelPath/valuePath 必须成对；labelPath 必须为每个 item 解析出 string；valuePath/timePath 允许个别 item 缺失或为 null，缺失或空 value 由 renderer 显示 —；存在的 value 必须是 primitive，存在的 time 必须是 string，非空数组至少一个 item 必须有 primitive value；重复的具名实体应使用 List；title 只能由 direct title field 提供；不使用 children"},' +
+    '{"name":"InfoRows","role":"内容组件","usage":"展示单个事实表或已经整理好的 label/value 信息行；支持两种数据形态：dataPath 指向普通对象时必须省略 labelPath、valuePath、timePath，renderer 会把对象自身的真实字段名和值逐项转成 rows，禁止虚构 /key、/value；dataPath 指向对象数组时才可同时提供以 / 开头、相对于每个数组 item 的 labelPath 与 valuePath，renderer 会逐项展开为 label/value 行，可选 timePath 同样相对于 item，所有 mapping path 必须是 item 中真实存在的字段；也兼容 legacy dataPath 直接绑定 Array<{label,value,time?}>；任一 mapping path 出现时 labelPath/valuePath 必须成对；labelPath 必须为每个 item 解析出 string；valuePath/timePath 允许个别 item 缺失或为 null，缺失或空 value 由 renderer 显示 —；存在的 value 必须是 primitive，存在的 time 必须是 string，非空数组至少一个 item 必须有 primitive value；可选 tags 仅用于一组无需 key 即可理解且语义一致的标签，使用 path-only 绑定 string 或 string[]，string 会规范化为单元素数组；不得把键值对放入 tags，也不要在同一组件混塞多组不同语义的标签；重复的具名实体应使用 List；title 只能由 direct title field 提供；不使用 children"},' +
     '{"name":"ActionBar","role":"交互组件","usage":"展示一组操作，按钮及其可见 label 只能来自 actions 中已提供的 offerId，renderer 不得内置操作文案；不使用 child、children 或 dataPath"},' +
     '{"name":"ErrorNotice","role":"状态组件","usage":"展示需要阅读、重试或修改输入的错误；全部可见标题和正文必须由 direct title、body fields 或 legacy dataPath 动态提供，可选 actions 必须引用已提供的 offerId"},' +
     '{"name":"ThinkingCard","role":"状态组件","usage":"展示结构生成中的摘要、进度与事件；当 UI Agent 任务明确给出 pageState=partial 时，主内容容器的第一个可见组件必须是 ThinkingCard，direct title 必须精确为 正在获取真实数据，status 必须使用 calling_tool 或 loading 语义，且整个布局不得包含 HeroBanner；pageState=complete 时不得保留上述 partial loading ThinkingCard；其他场景的全部可见内容必须由 direct title、body、status fields 或 legacy dataPath 绑定 {label,progress,events} 动态提供；不承载业务 actions"},' +
     '{"name":"ScheduleStack","role":"复合内容组件","usage":"展示多日或多段日程卡，全部可见日期、标题、条目和指标必须用 dataPath 绑定 Array<{id,label,title,entries,metric?,tone?}> 动态提供；renderer 不得内置行程文案，不使用 children"},' +
     '{"name":"SkeletonCard","role":"局部加载组件","usage":"仅在某个局部内容的结构仍未知且骨架占位确有帮助时使用；不得作为 pageState 生命周期的默认组件，也不能替代 partial 阶段首位的 ThinkingCard；如有可见标题只能由 direct title field 提供；不使用 children、dataPath 或 actions"},' +
-    '{"name":"ExpandableCard","role":"复合交互组件","usage":"仅在一条数据除一行摘要外还有多条精选详情且折叠能明显减少页面长度，或需要承载已提供的 action 时使用；优先用 direct rows 显式选择展开区键值行，每行 label 可使用字面量或 path，业务 value 必须使用 path-only；作为 List item 模板时 rows、title、body 中的 path 都相对于当前 item scope；省略 dataPath 不会隐式展示整个 item；body 与 legacy dataPath 继续兼容，但新生成不得使用 dataPath=/ 或绑定整个 item/provider object，也不得同时用 rows 和 dataPath；一行 summary 或 description 已足够时改用 compact Text；最多一个已提供的 action，renderer 不得内置业务文案，不使用 children"},' +
+    '{"name":"ExpandableCard","role":"复合交互组件","usage":"仅在一条数据除一行摘要外还有多条精选详情且折叠能明显减少页面长度，或需要承载已提供的 action 时使用；优先用 direct rows 显式选择展开区键值行，每行 label 可使用字面量或 path，业务 value 必须使用 path-only 且只能绑定 string，绝不能绑定 string[]；可选 tags 仅用于一组无需 key 即可理解且语义一致的标签，使用 path-only 绑定 string 或 string[]，string 会规范化为单元素数组；不得把键值对放入 tags，也不要在同一组件混塞多组不同语义的标签；作为 List item 模板时 rows、title、body、tags 中的 path 都相对于当前 item scope；省略 dataPath 不会隐式展示整个 item；body 与 legacy dataPath 继续兼容，但新生成不得使用 dataPath=/ 或绑定整个 item/provider object，也不得同时用 rows 和 dataPath；一行 summary 或 description 已足够时改用 compact Text；最多一个已提供的 action，renderer 不得内置业务文案，不使用 children"},' +
     '{"name":"MediaSlider","role":"复合媒体组件","usage":"展示可横向滑动的图片或视频卡组，全部可见标题和媒体描述必须用 dataPath 绑定 Array<{id,kind,title,assetKey,posterAssetKey?,alt}> 动态提供；媒体只能引用预登记 assetKey，actions 必须引用已提供的 offerId，renderer 不得内置文案，不使用 children"},' +
     '{"name":"SceneTabs","role":"复合导航组件","usage":"展示同一主题下的场景分页，全部可见 tab 标签、标题、正文和指标必须用 dataPath 绑定 Array<{id,icon,label,title,body,metrics}> 动态提供；tab 切换由客户端处理，renderer 不得内置场景文案，不使用 children 或 actions"},' +
     '{"name":"MasonryGrid","role":"复合布局组件","usage":"展示固定双列不等高信息卡，全部可见标题和正文必须用 dataPath 绑定 Array<{id,title,body,tone,height}> 动态提供；tone 仅允许 blue、peach、mint，height 仅允许 regular、tall，renderer 不得内置文案，不使用 children 或 actions"},' +
@@ -96,6 +96,9 @@ const LAB_EXPANDABLE_ROWS_FIELD: string =
   '"items":{"type":"object","valuePolicy":"literal","fields":{' +
   '"label":{"type":"string","valuePolicy":"literal-or-path","required":true,"minLength":1},' +
   '"value":{"type":"string","valuePolicy":"path-only","required":true}}}}';
+const LAB_TAGS_FIELD: string =
+  '"tags":{"type":"array","valuePolicy":"path-only","acceptSingleItem":true,"maxItems":12,' +
+  '"items":{"type":"string","valuePolicy":"literal"}}';
 
 const UI_AGENT_LAB_COMPONENT_SCHEMAS_JSON: string =
   '{' +
@@ -104,7 +107,8 @@ const UI_AGENT_LAB_COMPONENT_SCHEMAS_JSON: string =
     '"Row":' + labSchema(LAB_CHILDREN) + ',' +
     '"Text":' + labSchema(LAB_TEXT_FIELDS + ',' + LAB_DATA_PATH_FIELD + ',"variant":' +
       LAB_LITERAL_STRING + ',"tone":' + LAB_LITERAL_STRING) + ',' +
-    '"InfoRows":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',' + LAB_DATA_PATH_FIELD +
+    '"InfoRows":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',' + LAB_DATA_PATH_FIELD + ',' +
+      LAB_TAGS_FIELD +
       ',"labelPath":' + LAB_ITEM_PATH + ',"valuePath":' + LAB_ITEM_PATH + ',"timePath":' + LAB_ITEM_PATH) + ',' +
     '"ActionBar":' + labSchema(LAB_ACTIONS_FIELD) + ',' +
     '"ErrorNotice":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',"body":' +
@@ -116,7 +120,7 @@ const UI_AGENT_LAB_COMPONENT_SCHEMAS_JSON: string =
     '"SkeletonCard":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',"status":' +
       LAB_LITERAL_STRING) + ',' +
     '"ExpandableCard":' + labSchema(LAB_TEXT_FIELDS + ',' + LAB_DATA_PATH_FIELD + ',' +
-      LAB_EXPANDABLE_ROWS_FIELD + ',' + LAB_ACTIONS_FIELD +
+      LAB_EXPANDABLE_ROWS_FIELD + ',' + LAB_TAGS_FIELD + ',' + LAB_ACTIONS_FIELD +
       ',"status":' + LAB_LITERAL_STRING + ',"tone":' + LAB_LITERAL_STRING,
       '', '', '[["dataPath","rows"]]') + ',' +
     '"MediaSlider":' + labSchema('"title":' + LAB_LITERAL_OR_PATH_STRING + ',' + LAB_DATA_PATH_FIELD + ',' +
@@ -129,7 +133,7 @@ const UI_AGENT_LAB_COMPONENT_SCHEMAS_JSON: string =
       '"fields":{"path":{"type":"string","valuePolicy":"legacy-data-path","required":true},' +
       '"componentId":{"type":"string","valuePolicy":"literal","required":true,"minLength":1}}}') + ',' +
     '"HeroBanner":' + labSchema('"text":' + LAB_LITERAL_OR_PATH_STRING +
-      ',"title":{"type":"string","valuePolicy":"literal-or-path","required":true,"minLength":1},' +
+      ',"title":{"type":"string","valuePolicy":"literal-or-path"},' +
       '"body":' + LAB_LITERAL_OR_PATH_STRING) + ',' +
     '"MetricGrid":' + labSchema(LAB_TEXT_FIELDS + ',' + LAB_DATA_PATH_FIELD + ',' +
       LAB_METRIC_ITEMS_FIELD, '[["dataPath","items"]]', '[["dataPath","items"]]') + ',' +

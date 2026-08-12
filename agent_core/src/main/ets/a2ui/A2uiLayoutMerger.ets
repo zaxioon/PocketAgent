@@ -1,10 +1,12 @@
 import { ActionOffer } from '../agent/action/ActionOfferTypes';
 import { AIPHONE_COMPONENT_CATALOG_JSON } from '../aiphone/runtime/A2uiComponentCatalogConst';
 import {
+  A2UI_COMPONENT_EXPANDABLE_CARD,
   A2UI_COMPONENT_HERO_BANNER,
   A2UI_COMPONENT_INFO_ROWS,
   A2UI_COMPONENT_LIST,
   A2UI_COMPONENT_SEGMENTED_RING_CHART,
+  A2UI_COMPONENT_TEXT,
   A2uiAction,
   A2uiComponent,
   A2uiEnvelope
@@ -184,11 +186,13 @@ function arrayFieldMappingSourceFailure(
   timePath: JsonValue,
   source: JsonValue
 ): string {
+  // Ring mappings are rendered defensively: malformed source values hide the
+  // ring and malformed entries are ignored one by one. Keep mapping path
+  // syntax validation in arrayFieldMappingFailure, but do not reject the
+  // entire surface based on the current data snapshot.
+  if (component === A2UI_COMPONENT_SEGMENTED_RING_CHART) return '';
   if (!Array.isArray(source)) return 'mapping_source_not_array';
   const items = source as JsonValue[];
-  if (component === A2UI_COMPONENT_SEGMENTED_RING_CHART && items.length === 0) {
-    return 'mapping_source_size_invalid';
-  }
   let hasInfoValue: boolean = false;
   for (let index = 0; index < items.length; index++) {
     const label = itemValueAtPath(items[index], labelPath);
@@ -318,15 +322,22 @@ function listItemScopePaths(value: JsonValue): string[] | null {
   const items = value as JsonValue[];
   if (items.length === 0) return ['/'];
   const paths: string[] = [];
-  collectExistingPaths(items[0], '/', paths);
-  for (let index = 1; index < items.length; index++) {
+  for (let index = 0; index < items.length; index++) {
     const itemPaths: string[] = [];
     collectExistingPaths(items[index], '/', itemPaths);
-    for (let pathIndex = paths.length - 1; pathIndex >= 0; pathIndex--) {
-      if (itemPaths.indexOf(paths[pathIndex]) < 0) paths.splice(pathIndex, 1);
+    for (let pathIndex = 0; pathIndex < itemPaths.length; pathIndex++) {
+      if (paths.indexOf(itemPaths[pathIndex]) < 0) paths.push(itemPaths[pathIndex]);
     }
   }
   return paths;
+}
+
+function toleratesRuntimeBindingFailure(componentName: string): boolean {
+  return componentName === A2UI_COMPONENT_EXPANDABLE_CARD ||
+    componentName === A2UI_COMPONENT_HERO_BANNER ||
+    componentName === A2UI_COMPONENT_LIST ||
+    componentName === A2UI_COMPONENT_SEGMENTED_RING_CHART ||
+    componentName === A2UI_COMPONENT_TEXT;
 }
 
 function childIds(record: JsonRecord): string[] | null {
@@ -375,6 +386,30 @@ function validComponentFields(record: JsonRecord): boolean {
     }
   }
   return true;
+}
+
+function syntaxValidationRecord(componentName: string, record: JsonRecord): JsonRecord {
+  if (componentName !== A2UI_COMPONENT_SEGMENTED_RING_CHART || record['segments'] === undefined) {
+    return record;
+  }
+  const clone: JsonRecord = {};
+  const keys = Object.keys(record);
+  for (let index = 0; index < keys.length; index++) {
+    clone[keys[index]] = record[keys[index]];
+  }
+  // The renderer validates direct segments independently and drops malformed
+  // entries. Use one schema-safe placeholder only for validating the ring's
+  // outer shape, reserved fields, and dataPath/segments exclusivity here.
+  const binding: JsonRecord = {};
+  binding['path'] = '/';
+  const segment: JsonRecord = {};
+  segment['id'] = '__runtime_segment__';
+  segment['label'] = '__runtime_segment__';
+  segment['value'] = binding;
+  const segments: JsonValue[] = [];
+  segments.push(segment);
+  clone['segments'] = segments;
+  return clone;
 }
 
 function offerMap(offers: ActionOffer[]): Map<string, ActionOffer> | null {
@@ -474,7 +509,8 @@ function candidateComponents(
       return null;
     }
     const componentName = record['component'] as string;
-    if ((catalog.usesWireSchema() && !catalog.validatesSyntax(componentName, record)) ||
+    if ((catalog.usesWireSchema() &&
+      !catalog.validatesSyntax(componentName, syntaxValidationRecord(componentName, record))) ||
       (!catalog.usesWireSchema() &&
         (!allowedKeys(record, COMPONENT_KEYS) || !validComponentFields(record)))) {
       rememberDiagnostic(diagnostics, id, 'component_schema_invalid');
@@ -493,8 +529,7 @@ function candidateComponents(
         return null;
       }
       const dynamicChildren = listChildren(record);
-      if (dynamicChildren === null ||
-        !validDataPath(dynamicChildren['path'] as string, baselinePaths)) {
+      if (dynamicChildren === null) {
         return null;
       }
       listTemplateIds.add(dynamicChildren['componentId'] as string);
@@ -547,9 +582,10 @@ function candidateComponents(
     const dynamicChildren = listRecord === undefined ? null : listChildren(listRecord);
     const scopeValue = dynamicChildren === null ? undefined :
       baselineValues.get(dynamicChildren['path'] as string);
-    const scopePaths = dynamicChildren === null ? null : listItemScopePaths(scopeValue);
-    if (scopePaths === null) return null;
-    const scopeValues = scopeValue as JsonValue[];
+    if (dynamicChildren === null) return null;
+    const resolvedScopePaths = listItemScopePaths(scopeValue);
+    const scopePaths: string[] = resolvedScopePaths === null ? ['/'] : resolvedScopePaths;
+    const scopeValues: JsonValue[] = Array.isArray(scopeValue) ? scopeValue as JsonValue[] : [];
     const descendants: string[] = (childrenById.get(listIds[index]) ?? []).slice();
     const checked: Set<string> = new Set<string>();
     while (descendants.length > 0) {
@@ -587,12 +623,16 @@ function candidateComponents(
       rememberDiagnostic(diagnostics, component.id, mappingFailure);
       return null;
     }
-    if (catalog.usesWireSchema() && !catalog.validates(component.component, record, allowedPaths)) {
+    const runtimeBindingFailureAllowed = catalog.usesWireSchema() &&
+      toleratesRuntimeBindingFailure(component.component);
+    if (catalog.usesWireSchema() && !runtimeBindingFailureAllowed &&
+      !catalog.validates(component.component, record, allowedPaths)) {
       return null;
     }
     if (component.dataPath !== undefined &&
       (typeof component.dataPath !== 'string' ||
-        (component.dataPath !== '/' && !validDataPath(component.dataPath, allowedPaths)))) {
+        (component.dataPath !== '/' && !runtimeBindingFailureAllowed &&
+          !validDataPath(component.dataPath, allowedPaths)))) {
       return null;
     }
     if (component.dataPath === '/' && !itemScopePathsById.has(component.id)) {
