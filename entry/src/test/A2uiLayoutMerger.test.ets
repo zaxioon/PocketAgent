@@ -675,6 +675,36 @@ export default function a2uiLayoutMergerTest() {
         [],
         UI_AGENT_LAB_COMPONENT_CATALOG_JSON
       ) === bindingBaseline).assertFalse();
+      const mismatchedHeroTitle = valid.replace('/summary/text', '/summary');
+      expect(mergeA2uiLayout(
+        bindingBaseline,
+        mismatchedHeroTitle,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      ) === bindingBaseline).assertFalse();
+      const invalidHeroText = valid.replace(
+        '"title":{"path":"/summary/text"}',
+        '"text":{"path":"/summary/privateText"},"title":{"path":"/summary/text"}'
+      );
+      expect(mergeA2uiLayout(
+        bindingBaseline,
+        invalidHeroText,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(bindingBaseline);
+      const invalidHeroBody = valid.replace(
+        '"title":{"path":"/summary/text"}',
+        '"title":{"path":"/summary/text"},"body":{"path":"/summary/privateBody"}'
+      );
+      expect(mergeA2uiLayout(
+        bindingBaseline,
+        invalidHeroBody,
+        SURFACE_ID,
+        [],
+        UI_AGENT_LAB_COMPONENT_CATALOG_JSON
+      )).assertEqual(bindingBaseline);
       const dataModelCandidate =
         '{"version":"v0.9.1","updateDataModel":{"surfaceId":"surface-layout-test",' +
         '"path":"/metrics/followers","value":42}}';

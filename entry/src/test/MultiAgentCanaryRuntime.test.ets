@@ -2533,7 +2533,7 @@ export default function multiAgentCanaryRuntimeTest() {
       runtime.dispose();
     });
 
-    it('forwards structured partial callbacks for non-media tools only when explicitly enabled', 0, async () => {
+    it('publishes opted-in structured partials but coalesces a synchronous final before UI rendering', 0, async () => {
       const bus = new TrackingBus();
       const options = canaryOptions(
         new QueueModel([
@@ -2575,7 +2575,7 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(outcome.kind).assertEqual('settled');
       expect(bus.count(AgentMessageType.TASK_RESULT_DATA_PARTIAL)).assertEqual(1);
       expect(bus.count(AgentMessageType.TASK_RESULT_DATA)).assertEqual(1);
-      expect(partialPolicyCalls).assertEqual(1);
+      expect(partialPolicyCalls).assertEqual(0);
       runtime.dispose();
     });
 

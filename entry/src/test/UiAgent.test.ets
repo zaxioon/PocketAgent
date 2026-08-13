@@ -346,6 +346,47 @@ class SlowProgressRenderer extends RecordingRenderer {
   }
 }
 
+class ThreeWriteSurfaceWriter extends RecordingSurfaceWriter {
+  readonly thirdWrite: TestGate = new TestGate();
+
+  async write(
+    turnId: string,
+    surfaceId: string,
+    jsonl: string,
+    lease: UiSurfaceWriteLease
+  ): Promise<void> {
+    await super.write(turnId, surfaceId, jsonl, lease);
+    if (this.writes.length >= 3) {
+      this.thirdWrite.open();
+    }
+  }
+}
+
+class DeferredFirstResultRenderer extends RecordingRenderer {
+  readonly firstResultStarted: TestGate = new TestGate();
+  private releaseFirstResult: TestGate = new TestGate();
+  private resultCount: number = 0;
+
+  async result(
+    task: CreateUiTaskPayload,
+    data: DataResult[],
+    offers: ActionOffer[],
+    surfaceId: string,
+    phase: UiRenderPhase
+  ): Promise<UiRenderResult> {
+    this.resultCount++;
+    if (this.resultCount === 1) {
+      this.firstResultStarted.open();
+      await this.releaseFirstResult.promise;
+    }
+    return super.result(task, data, offers, surfaceId, phase);
+  }
+
+  finishFirstResult(): void {
+    this.releaseFirstResult.open();
+  }
+}
+
 function uiTaskMessage(
   conversationId: string = 'conversation-a',
   turnId: string = 'turn-1',
@@ -687,6 +728,67 @@ export default function uiAgentTest() {
         (call: string): boolean => call.startsWith('result:')
       ).length).assertEqual(3);
       expect(writer.writes.length).assertEqual(4);
+      agent.stop();
+      observer.close();
+    });
+
+    it('keeps only the latest queued partial for one data task', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const renderer = new DeferredFirstResultRenderer();
+      const writer = new ThreeWriteSurfaceWriter();
+      const agent = new UiAgent(
+        bus,
+        renderer,
+        writer,
+        (_task: CreateUiTaskPayload, _dataTaskId: string, result: DataResult): boolean =>
+          result.status === 'partial'
+      );
+      const observer = bus.openReader();
+      agent.start();
+
+      bus.publish(uiTaskMessage());
+      await receiveUiState(observer, 'skeleton');
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 101));
+      await renderer.firstResultStarted.promise;
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 202));
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 303));
+      renderer.finishFirstResult();
+      await writer.thirdWrite.promise;
+
+      expect(renderer.resultHotelIds.join(',')).assertEqual('101,303');
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,partial');
+      expect(writer.writes.length).assertEqual(3);
+      agent.stop();
+      observer.close();
+    });
+
+    it('evicts queued partials when the final data result arrives', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const renderer = new DeferredFirstResultRenderer();
+      const writer = new RecordingSurfaceWriter();
+      const agent = new UiAgent(
+        bus,
+        renderer,
+        writer,
+        (_task: CreateUiTaskPayload, _dataTaskId: string, result: DataResult): boolean =>
+          result.status === 'partial'
+      );
+      const observer = bus.openReader();
+      agent.start();
+
+      bus.publish(uiTaskMessage());
+      await receiveUiState(observer, 'skeleton');
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 101));
+      await renderer.firstResultStarted.promise;
+      bus.publish(partialDataResultMessage('conversation-a', 'turn-1', 'data-1', 202));
+      publishData(bus, 'conversation-a', 'turn-1', 'data-1', 303);
+      renderer.finishFirstResult();
+      await receiveUiState(observer, 'result');
+      await settle();
+
+      expect(renderer.resultHotelIds.join(',')).assertEqual('101,303');
+      expect(renderer.resultPhases.join(',')).assertEqual('partial,complete');
+      expect(writer.writes.length).assertEqual(3);
       agent.stop();
       observer.close();
     });

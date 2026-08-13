@@ -215,6 +215,10 @@ export class UiAgent extends MessageDrivenAgent {
   }
 
   private enqueue(message: AgentMessage, key: string, context: UiTurnContext): void {
+    if (message.type === AgentMessageType.TASK_RESULT_DATA_PARTIAL ||
+      message.type === AgentMessageType.TASK_RESULT_DATA) {
+      this.evictQueuedDataPartials(context, message.taskId);
+    }
     const operationId: number = context.nextOperationId;
     context.nextOperationId++;
     context.queuedMessages.set(operationId, message);
@@ -228,6 +232,15 @@ export class UiAgent extends MessageDrivenAgent {
         await this.runOperation(queued, key, context);
       } catch (error) {
         this.failRender(queued, key, context, error as Object);
+      }
+    });
+  }
+
+  private evictQueuedDataPartials(context: UiTurnContext, taskId: string): void {
+    context.queuedMessages.forEach((queued: AgentMessage, operationId: number): void => {
+      if (queued.type === AgentMessageType.TASK_RESULT_DATA_PARTIAL &&
+        queued.taskId === taskId) {
+        context.queuedMessages.delete(operationId);
       }
     });
   }

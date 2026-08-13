@@ -334,10 +334,24 @@ function listItemScopePaths(value: JsonValue): string[] | null {
 
 function toleratesRuntimeBindingFailure(componentName: string): boolean {
   return componentName === A2UI_COMPONENT_EXPANDABLE_CARD ||
-    componentName === A2UI_COMPONENT_HERO_BANNER ||
     componentName === A2UI_COMPONENT_LIST ||
     componentName === A2UI_COMPONENT_SEGMENTED_RING_CHART ||
     componentName === A2UI_COMPONENT_TEXT;
+}
+
+function runtimeValidationRecord(componentName: string, record: JsonRecord): JsonRecord {
+  if (componentName !== A2UI_COMPONENT_HERO_BANNER || objectRecord(record['title']) === null) {
+    return record;
+  }
+  const clone: JsonRecord = {};
+  const keys = Object.keys(record);
+  for (let index = 0; index < keys.length; index++) {
+    clone[keys[index]] = record[keys[index]];
+  }
+  // Only HeroBanner.title may fall back to the original user input when its
+  // runtime binding is unavailable. Other HeroBanner bindings stay strict.
+  clone['title'] = '__runtime_title_fallback__';
+  return clone;
 }
 
 function childIds(record: JsonRecord): string[] | null {
@@ -626,7 +640,11 @@ function candidateComponents(
     const runtimeBindingFailureAllowed = catalog.usesWireSchema() &&
       toleratesRuntimeBindingFailure(component.component);
     if (catalog.usesWireSchema() && !runtimeBindingFailureAllowed &&
-      !catalog.validates(component.component, record, allowedPaths)) {
+      !catalog.validates(
+        component.component,
+        runtimeValidationRecord(component.component, record),
+        allowedPaths
+      )) {
       return null;
     }
     if (component.dataPath !== undefined &&
