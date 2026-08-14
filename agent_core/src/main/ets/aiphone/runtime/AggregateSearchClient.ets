@@ -8,10 +8,12 @@ import {
 import { DynamicGenericToolResult } from './DynamicToolTypes';
 import { callMediaVideoSearch } from './MediaVideoClient';
 import {
+  AggregateSearchPolicy,
   AggregateSearchPost,
   AggregateSearchResult,
   AggregateSearchRowData,
   AggregateSearchSource,
+  AggregateSearchSourceMetadata,
   AggregateSearchStatus,
   AggregateSearchSourceStatus,
   AggregateSearchVideo,
@@ -44,6 +46,7 @@ interface AggregateMediaSearchArgs {
   limit: number;
   page?: number;
   pageToken?: string;
+  language?: string;
 }
 
 interface AggregateXSearchArgs {
@@ -200,8 +203,24 @@ interface AggregateHttpResult {
   text: string;
 }
 
-const DEFAULT_SOURCES: AggregateSearchSource[] = ['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu'];
+const ALL_SOURCES: AggregateSearchSource[] = ['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu'];
+const DEFAULT_AGGREGATE_SEARCH_POLICY: AggregateSearchPolicy = {
+  domesticOnly: true,
+  multilingual: false
+};
+const AGGREGATE_SEARCH_SOURCE_METADATA: AggregateSearchSourceMetadata[] = [
+  { source: 'youtube', isExternal: true, languages: ['zh-Hans', 'zh-Hant', 'en'], languageFilterMode: 'native' },
+  { source: 'bilibili', isExternal: false, languages: ['zh-Hans', 'zh-Hant'], languageFilterMode: 'intrinsic' },
+  { source: 'x', isExternal: true, languages: ['zh-Hans', 'zh-Hant', 'en'], languageFilterMode: 'native' },
+  { source: 'hackernews', isExternal: true, languages: ['en'], languageFilterMode: 'intrinsic' },
+  { source: 'reddit', isExternal: true, languages: ['zh-Hans', 'zh-Hant', 'en'], languageFilterMode: 'none' },
+  { source: 'zhihu', isExternal: false, languages: ['zh-Hans', 'zh-Hant'], languageFilterMode: 'intrinsic' }
+];
 let runtimePreferenceProfile: WaterfallPreferenceSnapshot | undefined = undefined;
+let runtimeSearchPolicy: AggregateSearchPolicy = {
+  domesticOnly: DEFAULT_AGGREGATE_SEARCH_POLICY.domesticOnly,
+  multilingual: DEFAULT_AGGREGATE_SEARCH_POLICY.multilingual
+};
 const X_PUBLIC_SEARCH_MARKER: string = 'X 公开 post 搜索关键词:';
 const ZHIHU_SEARCH_URL: string = 'https://developer.zhihu.com/api/v1/content/zhihu_search';
 
@@ -271,35 +290,111 @@ export function aggregateSearchQueryFromArgs(prompt: string, args: Object | null
   return cleanAggregateSearchQuery(prompt);
 }
 
-export function aggregateSearchSourcesFromArgs(args: Object | null): AggregateSearchSource[] {
+function booleanArg(value: AggregateArgValue, fallback: boolean): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  const normalized = textOf(value).trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+  return fallback;
+}
+
+export function defaultAggregateSearchPolicy(): AggregateSearchPolicy {
+  return {
+    domesticOnly: DEFAULT_AGGREGATE_SEARCH_POLICY.domesticOnly,
+    multilingual: DEFAULT_AGGREGATE_SEARCH_POLICY.multilingual
+  };
+}
+
+export function aggregateSearchPolicyFromArgs(args: Object | null): AggregateSearchPolicy {
   if (args === null) {
-    return DEFAULT_SOURCES.slice();
+    return defaultAggregateSearchPolicy();
   }
-  const raw = (args as AggregateArgRecord).sources;
-  if (!Array.isArray(raw)) {
-    return DEFAULT_SOURCES.slice();
+  const record = args as AggregateArgRecord;
+  return {
+    domesticOnly: booleanArg(record.onlyDomesticSources,
+      booleanArg(record.domesticOnly, DEFAULT_AGGREGATE_SEARCH_POLICY.domesticOnly)),
+    multilingual: booleanArg(record.includeMultilingualResults,
+      booleanArg(record.multilingual, DEFAULT_AGGREGATE_SEARCH_POLICY.multilingual))
+  };
+}
+
+export function aggregateSearchSourceMetadata(): AggregateSearchSourceMetadata[] {
+  return AGGREGATE_SEARCH_SOURCE_METADATA.map((metadata: AggregateSearchSourceMetadata): AggregateSearchSourceMetadata => ({
+    source: metadata.source,
+    isExternal: metadata.isExternal,
+    languages: metadata.languages.slice(),
+    languageFilterMode: metadata.languageFilterMode
+  }));
+}
+
+function metadataForSource(source: AggregateSearchSource): AggregateSearchSourceMetadata {
+  for (let index = 0; index < AGGREGATE_SEARCH_SOURCE_METADATA.length; index++) {
+    if (AGGREGATE_SEARCH_SOURCE_METADATA[index].source === source) {
+      return AGGREGATE_SEARCH_SOURCE_METADATA[index];
+    }
   }
+  return AGGREGATE_SEARCH_SOURCE_METADATA[0];
+}
+
+function sourceAllowedByPolicy(source: AggregateSearchSource, policy: AggregateSearchPolicy): boolean {
+  const metadata = metadataForSource(source);
+  if (policy.domesticOnly && metadata.isExternal) {
+    return false;
+  }
+  if (policy.multilingual || !metadata.isExternal) {
+    return true;
+  }
+  return metadata.languageFilterMode === 'native' &&
+    (metadata.languages.indexOf('zh-Hans') >= 0 || metadata.languages.indexOf('zh-Hant') >= 0);
+}
+
+function normalizedAggregateSource(value: string): AggregateSearchSource | null {
+  let normalized = value.trim().toLowerCase();
+  if (normalized === 'hn' || normalized === 'hacknews' || normalized === 'hacker news') {
+    normalized = 'hackernews';
+  }
+  if (normalized === 'b站' || normalized === 'b 站') {
+    normalized = 'bilibili';
+  }
+  if (normalized === '知乎') {
+    normalized = 'zhihu';
+  }
+  if (normalized === '红迪') {
+    normalized = 'reddit';
+  }
+  return ALL_SOURCES.indexOf(normalized as AggregateSearchSource) >= 0 ? normalized as AggregateSearchSource : null;
+}
+
+export function aggregateSearchSourcesFromArgs(args: Object | null): AggregateSearchSource[] {
+  const policy = aggregateSearchPolicyFromArgs(args);
+  const raw = args === null ? undefined : (args as AggregateArgRecord).sources;
+  const candidates: AggregateArgValue[] = Array.isArray(raw) ? raw as AggregateArgValue[] : ALL_SOURCES;
   const sources: AggregateSearchSource[] = [];
-  raw.forEach((item: AggregateArgValue) => {
-    let value = textOf(item).trim().toLowerCase();
-    if (value === 'hn' || value === 'hacknews' || value === 'hacker news') {
-      value = 'hackernews';
-    }
-    if (value === 'b站' || value === 'b 站') {
-      value = 'bilibili';
-    }
-    if (value === '知乎') {
-      value = 'zhihu';
-    }
-    if (value === '红迪') {
-      value = 'reddit';
-    }
-    if (DEFAULT_SOURCES.indexOf(value as AggregateSearchSource) >= 0 &&
-      sources.indexOf(value as AggregateSearchSource) < 0) {
-      sources.push(value as AggregateSearchSource);
+  candidates.forEach((item: AggregateArgValue) => {
+    const source = normalizedAggregateSource(textOf(item));
+    if (source !== null && sourceAllowedByPolicy(source, policy) && sources.indexOf(source) < 0) {
+      sources.push(source);
     }
   });
-  return sources.length > 0 ? sources : DEFAULT_SOURCES.slice();
+  return sources;
+}
+
+export function aggregateYouTubeRelevanceLanguage(policy: AggregateSearchPolicy): string {
+  // Multilingual mode intentionally leaves YouTube unconstrained; relevanceLanguage is a preference, not a hard filter.
+  return policy.multilingual ? '' : 'zh-Hans';
+}
+
+export function aggregateXSearchQuery(query: string, policy: AggregateSearchPolicy): string {
+  const languageQuery = policy.multilingual ?
+    '(lang:zh-CN OR lang:zh-TW OR lang:en)' :
+    '(lang:zh-CN OR lang:zh-TW)';
+  return query.trim() + ' ' + languageQuery;
 }
 
 export function configureWaterfallEnabledSourcesForRuntime(_sources: AggregateSearchSource[]): void {
@@ -1416,9 +1511,15 @@ async function aggregateMediaSourceBatch(
   query: string,
   youtubeApiKey: string,
   continuation: WaterfallContinuation | null = null,
-  limit: number = 10
+  limit: number = 10,
+  policy: AggregateSearchPolicy = runtimeSearchPolicy
 ): Promise<AggregateSearchSourceBatch> {
-  const mediaArgs: AggregateMediaSearchArgs = { query: query, sources: [source], limit: limit };
+  const mediaArgs: AggregateMediaSearchArgs = {
+    query: query,
+    sources: [source],
+    limit: limit,
+    language: source === 'youtube' ? aggregateYouTubeRelevanceLanguage(policy) : ''
+  };
   if (source === 'youtube' && continuation !== null && continuation.kind === 'cursor') {
     mediaArgs.pageToken = continuation.value;
   }
@@ -1626,14 +1727,15 @@ function aggregateSourceBatch(
   youtubeApiKey: string,
   zhihuConfig: AggregateZhihuConfig,
   continuation: WaterfallContinuation | null,
-  limit: number
+  limit: number,
+  policy: AggregateSearchPolicy = runtimeSearchPolicy
 ): Promise<AggregateSearchSourceBatch> {
   if (source === 'youtube' || source === 'bilibili') {
-    return aggregateMediaSourceBatch(source, query, youtubeApiKey, continuation, limit);
+    return aggregateMediaSourceBatch(source, query, youtubeApiKey, continuation, limit, policy);
   }
   if (source === 'x') {
     const args: AggregateXSearchArgs = {
-      query: query,
+      query: aggregateXSearchQuery(query, policy),
       pageSize: limit,
       expansions: 'attachments.media_keys,author_id',
       mediaFields: 'media_key,type,url,preview_image_url,variants,width,height',
@@ -1739,10 +1841,15 @@ export async function callAggregateSearch(
 ): Promise<AggregateSearchResult> {
   const query = aggregateSearchQueryFromArgs(prompt, args);
   const sources = aggregateSearchSourcesFromArgs(args);
+  const policy = aggregateSearchPolicyFromArgs(args);
+  runtimeSearchPolicy = {
+    domesticOnly: policy.domesticOnly,
+    multilingual: policy.multilingual
+  };
   const preferenceDescription = args === null ? '' : textOf((args as AggregateArgRecord).preferenceDescription).trim();
   const tasks: Promise<AggregateSearchSourceBatch>[] = [];
   sources.forEach((source: AggregateSearchSource): void => {
-    tasks.push(aggregateSourceBatch(source, query, youtubeApiKey, zhihuConfig, null, 10));
+    tasks.push(aggregateSourceBatch(source, query, youtubeApiKey, zhihuConfig, null, 10, policy));
   });
   const observer: AggregateSearchPartialObserver = onPartial === null ? (() => {}) : onPartial;
   return streamAggregateSearchSourceBatches(query, sources, tasks, observer, nowMs, preferenceDescription);

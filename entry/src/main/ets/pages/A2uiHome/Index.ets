@@ -4,6 +4,7 @@ import {
   ActionExecutionResult,
   ConversationTurnMessage,
   CurrentSurfaceSummary,
+  DataResult,
   LlmProvider,
   LocalModel,
   LocalModelSettings,
@@ -369,6 +370,10 @@ import {
   normalizeFoodProviderDelayMs
 } from './state/A2uiHomeDebugSettings';
 import {
+  aggregateSearchArgsWithPolicy,
+  DEFAULT_AGGREGATE_SEARCH_POLICY
+} from './state/AggregateSearchPolicy';
+import {
   ConnectionPanelState,
   createInitialConnectionPanelState,
   deepSearchRouteDecisionFromModelText,
@@ -451,6 +456,9 @@ const COMPOSIO_AUTH_STORE_NAME: string = 'aiphone_composio_auth_store';
 const COMPOSIO_USER_ID_KEY: string = 'composio_user_id';
 const MODEL_PRESET_STORE_NAME: string = 'aiphone_model_preset_store';
 const MODEL_PRESET_KEY: string = 'model_preset';
+const AGGREGATE_SEARCH_POLICY_STORE_NAME: string = 'aiphone_aggregate_search_policy_store';
+const AGGREGATE_DOMESTIC_ONLY_KEY: string = 'only_domestic_sources';
+const AGGREGATE_MULTILINGUAL_KEY: string = 'include_multilingual_results';
 const ANYTHING_DEMO_ROUTE_URL: string = 'pages/A2uiHome/AnythingDemo';
 const MOVIE_DEMO_ROUTE_URL: string = 'pages/A2uiHome/MovieDemo';
 const UI_AGENT_LAB_ROUTE_URL: string = 'pages/A2uiHome/UiAgentLab';
@@ -874,6 +882,8 @@ struct Index {
   @State apiKey: string = defaultLocalModelSettings().apiKey;
   @State selectedModel: string = defaultLocalModelSettings().model;
   @State customParametersJson: string = defaultLocalModelSettings().customParametersJson;
+  @State aggregateDomesticOnly: boolean = DEFAULT_AGGREGATE_SEARCH_POLICY.onlyDomesticSources;
+  @State aggregateMultilingual: boolean = DEFAULT_AGGREGATE_SEARCH_POLICY.includeMultilingualResults;
   @State foodProviderDelayEnabled: boolean = false;
   @State foodProviderDelayMs: string = '0';
   @State foodPartialThrottleMs: string = A2UI_FOOD_PARTIAL_THROTTLE_DEFAULT_MS.toString();
@@ -2166,6 +2176,7 @@ struct Index {
 
   aboutToAppear(): void {
     this.loadModelPreset();
+    this.loadAggregateSearchPolicy();
     this.loadBimMotionPreference();
     this.readDebugBuildState();
     this.configureComposioRuntimeForCurrentUser();
@@ -3048,6 +3059,54 @@ struct Index {
     }
   }
 
+  private aggregateSearchPolicyPreferences(): preferences.Preferences | null {
+    const context = this.getUIContext().getHostContext() as common.Context;
+    try {
+      return preferences.getPreferencesSync(context, { name: AGGREGATE_SEARCH_POLICY_STORE_NAME });
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  private preferenceBoolean(value: preferences.ValueType | boolean, fallback: boolean): boolean {
+    return typeof value === 'boolean' ? value : fallback;
+  }
+
+  private loadAggregateSearchPolicy(): void {
+    const store = this.aggregateSearchPolicyPreferences();
+    if (store === null) {
+      this.aggregateDomesticOnly = DEFAULT_AGGREGATE_SEARCH_POLICY.onlyDomesticSources;
+      this.aggregateMultilingual = DEFAULT_AGGREGATE_SEARCH_POLICY.includeMultilingualResults;
+      return;
+    }
+    try {
+      this.aggregateDomesticOnly = this.preferenceBoolean(store.getSync(
+        AGGREGATE_DOMESTIC_ONLY_KEY,
+        DEFAULT_AGGREGATE_SEARCH_POLICY.onlyDomesticSources
+      ), DEFAULT_AGGREGATE_SEARCH_POLICY.onlyDomesticSources);
+      this.aggregateMultilingual = this.preferenceBoolean(store.getSync(
+        AGGREGATE_MULTILINGUAL_KEY,
+        DEFAULT_AGGREGATE_SEARCH_POLICY.includeMultilingualResults
+      ), DEFAULT_AGGREGATE_SEARCH_POLICY.includeMultilingualResults);
+    } catch (_error) {
+      this.aggregateDomesticOnly = DEFAULT_AGGREGATE_SEARCH_POLICY.onlyDomesticSources;
+      this.aggregateMultilingual = DEFAULT_AGGREGATE_SEARCH_POLICY.includeMultilingualResults;
+    }
+  }
+
+  private saveAggregateSearchPolicy(): void {
+    const store = this.aggregateSearchPolicyPreferences();
+    if (store === null) {
+      return;
+    }
+    try {
+      store.putSync(AGGREGATE_DOMESTIC_ONLY_KEY, this.aggregateDomesticOnly);
+      store.putSync(AGGREGATE_MULTILINGUAL_KEY, this.aggregateMultilingual);
+      store.flushSync();
+    } catch (_error) {
+    }
+  }
+
   private currentLocalDate(): string {
     const now = new Date();
     const month = (now.getMonth() + 1).toString().padStart(2, '0');
@@ -3376,6 +3435,20 @@ struct Index {
     const options: MultiAgentCanaryOptions = {
       model: model,
       opener: opener,
+      structuredToolCall: (
+        toolId: string,
+        prompt: string,
+        args: Object,
+        onPartial?: (result: DataResult) => void
+      ): Promise<DataResult> => callStructuredTool(
+        toolId,
+        prompt,
+        aggregateSearchArgsWithPolicy(toolId, args, {
+          onlyDomesticSources: this.aggregateDomesticOnly,
+          includeMultilingualResults: this.aggregateMultilingual
+        }),
+        onPartial
+      ),
       onSurface: (surface: A2uiSurfaceState, generation: number): boolean => {
         const accepted = this.applyRuntimeSurface(surface, 'multi_agent', generation);
         if (accepted) {
@@ -6123,28 +6196,32 @@ struct Index {
   }
 
   private async argsWithCurrentLocationForTool(toolId: string, args: Object | null): Promise<Object | null> {
+    const requestArgs = aggregateSearchArgsWithPolicy(toolId, args, {
+      onlyDomesticSources: this.aggregateDomesticOnly,
+      includeMultilingualResults: this.aggregateMultilingual
+    });
     if (toolId !== 'luckin.order.preview') {
-      return args;
+      return requestArgs;
     }
-    if (args !== null) {
-      const raw = args as Record<string, Object | string | number | boolean | null | undefined>;
+    if (requestArgs !== null) {
+      const raw = requestArgs as Record<string, Object | string | number | boolean | null | undefined>;
       const selectedDeptId = raw.deptId;
       if (this.actionText(selectedDeptId).length > 0) {
-        return args;
+        return requestArgs;
       }
       const forceRefresh = this.actionText(raw.locationSource) === 'refresh';
       const existingLocation = this.actionText(raw.location);
       if (existingLocation.length > 0 && !forceRefresh) {
-        return args;
+        return requestArgs;
       }
     }
     try {
       const location = await this.currentDeviceLocation();
       aiLogInfo('[AIPhone][LuckinCurrentLocation] source=device chars=' + location.length.toString());
-      return this.mergeLuckinLocationArgs(args, location);
+      return this.mergeLuckinLocationArgs(requestArgs, location);
     } catch (error) {
       aiLogError('[AIPhone][LuckinCurrentLocation] ok=false reason=' + (error instanceof Error ? error.message : JSON.stringify(error)));
-      return args;
+      return requestArgs;
     }
   }
 
@@ -8644,6 +8721,8 @@ struct Index {
         apiKey: $apiKey,
         selectedModel: $selectedModel,
         customParametersJson: $customParametersJson,
+        aggregateDomesticOnly: $aggregateDomesticOnly,
+        aggregateMultilingual: $aggregateMultilingual,
         foodProviderDelayEnabled: $foodProviderDelayEnabled,
         foodProviderDelayMs: $foodProviderDelayMs,
         foodPartialThrottleMs: $foodPartialThrottleMs,
@@ -8694,6 +8773,14 @@ struct Index {
         },
         onToggleDidiMcpSandbox: (isOn: boolean) => {
           this.configureDidiMcpSandboxRuntime(isOn);
+        },
+        onToggleAggregateDomesticOnly: (isOn: boolean) => {
+          this.aggregateDomesticOnly = isOn;
+          this.saveAggregateSearchPolicy();
+        },
+        onToggleAggregateMultilingual: (isOn: boolean) => {
+          this.aggregateMultilingual = isOn;
+          this.saveAggregateSearchPolicy();
         }
       })
     } else {

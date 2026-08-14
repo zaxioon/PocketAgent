@@ -2,6 +2,20 @@ import { WaterfallContinuation, WaterfallFeedState } from './WaterfallAnythingCo
 
 export type AggregateSearchSource = 'youtube' | 'bilibili' | 'x' | 'hackernews' | 'reddit' | 'zhihu';
 export type AggregateSearchStatus = 'success' | 'empty' | 'needs_auth' | 'unsupported' | 'error';
+export type AggregateSearchLanguageTag = 'zh-Hans' | 'zh-Hant' | 'en';
+export type AggregateSearchLanguageFilterMode = 'intrinsic' | 'native' | 'none';
+
+export interface AggregateSearchPolicy {
+  domesticOnly: boolean;
+  multilingual: boolean;
+}
+
+export interface AggregateSearchSourceMetadata {
+  source: AggregateSearchSource;
+  isExternal: boolean;
+  languages: AggregateSearchLanguageTag[];
+  languageFilterMode: AggregateSearchLanguageFilterMode;
+}
 
 export interface AggregateSearchRowData {
   label: string;

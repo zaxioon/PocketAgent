@@ -572,6 +572,9 @@ export default function toolDefinitionRegistryTest() {
       expect(aggregate.outputSchema).assertEqual('aggregateSearch');
       expect(aggregate.a2uiComponent).assertEqual('AggregateSearch');
       expect(aggregate.actions[0]).assertEqual('media.open.web');
+      const aggregatePlanning = toolPlanningDescriptionForToolId('media.aggregate.search', false);
+      expect(aggregatePlanning.indexOf('onlyDomesticSources')).assertLarger(-1);
+      expect(aggregatePlanning.indexOf('includeMultilingualResults')).assertLarger(-1);
       expect(isKnownDomainToolId('media.aggregate.search')).assertTrue();
       expect(isMediaToolId('media.aggregate.search')).assertTrue();
     });

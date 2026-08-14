@@ -59,6 +59,7 @@ import waterfallRankingReplayTest from './WaterfallRankingReplay.test';
 import waterfallPreferencesStoreTest from './WaterfallPreferencesStore.test';
 import waterfallConversationTest from './WaterfallConversation.test';
 import waterfallInterestRefillTest from './WaterfallInterestRefill.test';
+import aggregateSearchPolicyTest from './AggregateSearchPolicy.test';
 import paymentCoreTest from './PaymentCore.test';
 import paymentA2uiTest from './PaymentA2ui.test';
 import payPalPaymentClientTest from './PayPalPaymentClient.test';
@@ -187,6 +188,7 @@ export default function testsuite() {
   waterfallPreferencesStoreTest();
   waterfallConversationTest();
   waterfallInterestRefillTest();
+  aggregateSearchPolicyTest();
   paymentCoreTest();
   paymentA2uiTest();
   payPalPaymentClientTest();

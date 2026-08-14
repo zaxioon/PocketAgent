@@ -811,7 +811,7 @@ export function toolPlanningDescriptionForToolId(
   } else if (definition.toolId === 'media.video.search') {
     description += '. Use for Bilibili/B站/哔哩哔哩 video search or multi-source video search. If the same request mentions YouTube and Bilibili, choose media.video.search with sources ["youtube","bilibili"].';
   } else if (definition.toolId === 'media.aggregate.search') {
-    description += '. Use only for mixed-content topic research where the user asks for videos plus news, discussions, posts, or public reactions around one topic; use media.video.search for video-only requests. It aggregates YouTube, Bilibili, X public posts, Hacker News and Reddit via Composio, and Zhihu via its official REST API. Never fabricate media or posts.';
+    description += '. Use only for mixed-content topic research where the user asks for videos plus news, discussions, posts, or public reactions around one topic; use media.video.search for video-only requests. Host settings inject onlyDomesticSources and includeMultilingualResults; the model must not override them. Runtime policy deterministically constrains providers and languages even when sources are present. It aggregates YouTube, Bilibili, X public posts, Hacker News and Reddit via Composio, and Zhihu via its official REST API. Never fabricate media or posts.';
   } else if (definition.toolId === 'worldcup.open') {
     description += '. Use when the user wants to open the World Cup experience, view World Cup schedules, next match time, previews, highlights, teams, players, or matchup cards. Use media tools instead for explicit YouTube-only, Bilibili-only, or mixed-content search requests.';
   } else if (definition.toolId === 'movie.open') {
