@@ -190,7 +190,8 @@ import {
   aggregateMediaCandidates,
   aggregateVideoSourceBatchFromDynamicResults,
   callAggregateSearch,
-  callAggregateSearchContinuation
+  callAggregateSearchContinuation,
+  configureAggregateExternalProvidersForRuntime
 } from './AggregateSearchClient';
 import {
   AggregateSearchResult,
@@ -542,6 +543,10 @@ interface LocalProviderConfig {
   gmailMcpUserProject: string;
   youtubeApiKey: string;
   zhihuApiKey: string;
+  doubanPlaywrightMcpUrl: string;
+  doubanPlaywrightMcpToken: string;
+  twitchClientId: string;
+  twitchAppAccessToken: string;
   qqMailAddress: string;
   qqMailAuthCode: string;
   qqMailImapHost: string;
@@ -618,6 +623,10 @@ interface LocalProviderRawConfig {
   GOOGLE_CLOUD_PROJECT?: string;
   YOUTUBE_API_KEY?: string;
   ZHIHU_API_KEY?: string;
+  DOUBAN_PLAYWRIGHT_MCP_URL?: string;
+  DOUBAN_PLAYWRIGHT_MCP_TOKEN?: string;
+  TWITCH_CLIENT_ID?: string;
+  TWITCH_APP_ACCESS_TOKEN?: string;
   QQ_MAIL_ADDRESS?: string;
   QQ_MAIL_AUTH_CODE?: string;
   QQ_MAIL_IMAP_HOST?: string;
@@ -686,6 +695,10 @@ interface LocalProviderRawConfig {
   gmailMcpUserProject?: string;
   youtubeApiKey?: string;
   zhihuApiKey?: string;
+  doubanPlaywrightMcpUrl?: string;
+  doubanPlaywrightMcpToken?: string;
+  twitchClientId?: string;
+  twitchAppAccessToken?: string;
   qqMailAddress?: string;
   qqMailAuthCode?: string;
   qqMailImapHost?: string;
@@ -1542,6 +1555,10 @@ let localProviderConfig: LocalProviderConfig = {
   gmailMcpUserProject: '',
   youtubeApiKey: '',
   zhihuApiKey: '',
+  doubanPlaywrightMcpUrl: '',
+  doubanPlaywrightMcpToken: '',
+  twitchClientId: '',
+  twitchAppAccessToken: '',
   qqMailAddress: '',
   qqMailAuthCode: '',
   qqMailImapHost: 'imap.qq.com',
@@ -1949,6 +1966,10 @@ export function configureLocalProviderConfig(config: LocalProviderConfig): void 
     gmailMcpUserProject: config.gmailMcpUserProject.trim(),
     youtubeApiKey: config.youtubeApiKey.trim(),
     zhihuApiKey: config.zhihuApiKey.trim(),
+    doubanPlaywrightMcpUrl: config.doubanPlaywrightMcpUrl.trim(),
+    doubanPlaywrightMcpToken: config.doubanPlaywrightMcpToken.trim(),
+    twitchClientId: config.twitchClientId.trim(),
+    twitchAppAccessToken: config.twitchAppAccessToken.trim(),
     qqMailAddress: config.qqMailAddress.trim(),
     qqMailAuthCode: config.qqMailAuthCode.trim(),
     qqMailImapHost: config.qqMailImapHost.trim().length > 0 ? config.qqMailImapHost.trim() : 'imap.qq.com',
@@ -1974,6 +1995,16 @@ export function configureLocalProviderConfig(config: LocalProviderConfig): void 
     paymentLiveAllowedStripeAccountIds: config.paymentLiveAllowedStripeAccountIds.trim(),
     paymentLiveMaxAmountMinor: config.paymentLiveMaxAmountMinor.trim().length > 0 ? config.paymentLiveMaxAmountMinor.trim() : '100'
   };
+  configureAggregateExternalProvidersForRuntime({
+    doubanPlaywright: {
+      mcpUrl: localProviderConfig.doubanPlaywrightMcpUrl,
+      bearerToken: localProviderConfig.doubanPlaywrightMcpToken
+    },
+    twitch: {
+      clientId: localProviderConfig.twitchClientId,
+      appAccessToken: localProviderConfig.twitchAppAccessToken
+    }
+  });
   aiLogInfo('[AIPhone][LocalProviderConfig] rawfile=' + LOCAL_PROVIDER_CONFIG_RAWFILE +
     ' toolGatewayApiKeyChars=' + localProviderConfig.toolGatewayApiKey.length.toString() +
     ' flightKeyChars=' + localProviderConfig.flightMcpKey.length.toString() +
@@ -2000,6 +2031,10 @@ export function configureLocalProviderConfig(config: LocalProviderConfig): void 
     ' gmailOauthClientSecretChars=' + localProviderConfig.gmailOauthClientSecret.length.toString() +
     ' youtubeApiKeyChars=' + localProviderConfig.youtubeApiKey.length.toString() +
     ' zhihuApiKeyChars=' + localProviderConfig.zhihuApiKey.length.toString() +
+    ' doubanMcpUrlPresent=' + (localProviderConfig.doubanPlaywrightMcpUrl.length > 0 ? 'true' : 'false') +
+    ' doubanMcpTokenChars=' + localProviderConfig.doubanPlaywrightMcpToken.length.toString() +
+    ' twitchClientIdChars=' + localProviderConfig.twitchClientId.length.toString() +
+    ' twitchAppTokenChars=' + localProviderConfig.twitchAppAccessToken.length.toString() +
     ' gmailMcpUserProjectPresent=' + (localProviderConfig.gmailMcpUserProject.length > 0 ? 'true' : 'false') +
     ' qqMailAddressPresent=' + (localProviderConfig.qqMailAddress.length > 0 ? 'true' : 'false') +
     ' qqMailAuthCodeChars=' + localProviderConfig.qqMailAuthCode.length.toString() +
@@ -2080,6 +2115,10 @@ export function configureLocalProviderConfigFromRawJson(rawJson: string): void {
     gmailMcpUserProject: firstText([parsed.GMAIL_MCP_USER_PROJECT, parsed.GOOGLE_CLOUD_PROJECT, parsed.gmailMcpUserProject]),
     youtubeApiKey: firstText([parsed.YOUTUBE_API_KEY, parsed.youtubeApiKey]),
     zhihuApiKey: firstText([parsed.ZHIHU_API_KEY, parsed.zhihuApiKey]),
+    doubanPlaywrightMcpUrl: firstText([parsed.DOUBAN_PLAYWRIGHT_MCP_URL, parsed.doubanPlaywrightMcpUrl]),
+    doubanPlaywrightMcpToken: firstText([parsed.DOUBAN_PLAYWRIGHT_MCP_TOKEN, parsed.doubanPlaywrightMcpToken]),
+    twitchClientId: firstText([parsed.TWITCH_CLIENT_ID, parsed.twitchClientId]),
+    twitchAppAccessToken: firstText([parsed.TWITCH_APP_ACCESS_TOKEN, parsed.twitchAppAccessToken]),
     qqMailAddress: firstText([parsed.QQ_MAIL_ADDRESS, parsed.qqMailAddress]),
     qqMailAuthCode: firstText([parsed.QQ_MAIL_AUTH_CODE, parsed.qqMailAuthCode]),
     qqMailImapHost: firstText([parsed.QQ_MAIL_IMAP_HOST, parsed.qqMailImapHost]),
@@ -2136,6 +2175,10 @@ export function localProviderConfigDebugSummary(): string {
     ', gmailOauthClientSecret=' + (localProviderConfig.gmailOauthClientSecret.length > 0 ? 'present(' + localProviderConfig.gmailOauthClientSecret.length.toString() + ')' : 'missing') +
     ', youtubeApiKey=' + (localProviderConfig.youtubeApiKey.length > 0 ? 'present(' + localProviderConfig.youtubeApiKey.length.toString() + ')' : 'missing') +
     ', zhihuApiKey=' + (localProviderConfig.zhihuApiKey.length > 0 ? 'present(' + localProviderConfig.zhihuApiKey.length.toString() + ')' : 'missing') +
+    ', doubanMcpUrl=' + (localProviderConfig.doubanPlaywrightMcpUrl.length > 0 ? 'present' : 'missing') +
+    ', doubanMcpToken=' + (localProviderConfig.doubanPlaywrightMcpToken.length > 0 ? 'present(' + localProviderConfig.doubanPlaywrightMcpToken.length.toString() + ')' : 'missing') +
+    ', twitchClientId=' + (localProviderConfig.twitchClientId.length > 0 ? 'present(' + localProviderConfig.twitchClientId.length.toString() + ')' : 'missing') +
+    ', twitchAppAccessToken=' + (localProviderConfig.twitchAppAccessToken.length > 0 ? 'present(' + localProviderConfig.twitchAppAccessToken.length.toString() + ')' : 'missing') +
     ', gmailMcpUserProject=' + (localProviderConfig.gmailMcpUserProject.length > 0 ? 'present' : 'missing') +
     ', qqMailAddress=' + (localProviderConfig.qqMailAddress.length > 0 ? 'present' : 'missing') +
     ', qqMailAuthCode=' + (localProviderConfig.qqMailAuthCode.length > 0 ? 'present(' + localProviderConfig.qqMailAuthCode.length.toString() + ')' : 'missing') +

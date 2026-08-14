@@ -30,6 +30,7 @@ import {
   aggregateSearchQueryFromArgs,
   aggregateSearchPolicyFromArgs,
   aggregateSearchSourceMetadata,
+  aggregateSearchRegistrySourceIds,
   aggregateYouTubeRelevanceLanguage,
   aggregateMediaCandidates,
   aggregateXSearchQuery,
@@ -226,14 +227,14 @@ function aggregateBatch(source: AggregateSearchSource, id: string, status: Aggre
 export default function aggregateSearchClientTest() {
   describe('aggregateSearchClient', () => {
     it('extracts query and source defaults', 0, () => {
-      configureWaterfallEnabledSourcesForRuntime(['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu']);
+      configureWaterfallEnabledSourcesForRuntime(aggregateSearchRegistrySourceIds());
       const args: QueryArgsFixture = { query: 'openai codex', sources: ['youtube', 'x'], limit: 3 };
 
       expect(aggregateSearchQueryFromArgs('我想看看相关新闻', args)).assertEqual('openai codex');
       expect(aggregateSearchQueryFromArgs('我想看看有关 openai codex 的相关新闻和讨论', null)).assertEqual('openai codex');
       expect(aggregateSearchQueryFromArgs('openai codex 新闻讨论', null)).assertEqual('openai codex');
       expect(aggregateSearchSourcesFromArgs(args).join(',')).assertEqual('');
-      expect(aggregateSearchSourcesFromArgs(null).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs(null).join(',')).assertEqual('bilibili,zhihu,douban');
     });
 
     it('applies all four deterministic aggregate source policy combinations', 0, () => {
@@ -249,11 +250,12 @@ export default function aggregateSearchClientTest() {
       const globalMultilingual: QueryArgsFixture = {
         query: 'codex', onlyDomesticSources: false, includeMultilingualResults: true
       };
-      expect(aggregateSearchSourcesFromArgs(domesticChinese).join(',')).assertEqual('bilibili,zhihu');
-      expect(aggregateSearchSourcesFromArgs(domesticMultilingual).join(',')).assertEqual('bilibili,zhihu');
-      expect(aggregateSearchSourcesFromArgs(globalChinese).join(',')).assertEqual('youtube,bilibili,x,zhihu');
+      expect(aggregateSearchSourcesFromArgs(domesticChinese).join(',')).assertEqual('bilibili,zhihu,douban');
+      expect(aggregateSearchSourcesFromArgs(domesticMultilingual).join(',')).assertEqual('bilibili,zhihu,douban');
+      expect(aggregateSearchSourcesFromArgs(globalChinese).join(','))
+        .assertEqual('youtube,bilibili,x,zhihu,douban,applepodcasts,twitch');
       expect(aggregateSearchSourcesFromArgs(globalMultilingual).join(','))
-        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
       expect(aggregateYouTubeRelevanceLanguage(aggregateSearchPolicyFromArgs(globalChinese))).assertEqual('zh-Hans');
       expect(aggregateYouTubeRelevanceLanguage(aggregateSearchPolicyFromArgs(globalMultilingual))).assertEqual('');
     });
@@ -280,17 +282,21 @@ export default function aggregateSearchClientTest() {
         onlyDomesticSources: true, includeMultilingualResults: false
       };
       expect(aggregateSearchSourcesFromArgs(blocked).join(',')).assertEqual('youtube,bilibili');
-      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.isExternal).length).assertEqual(4);
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.isExternal).length).assertEqual(6);
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'hackernews')[0].languages.join(','))
         .assertEqual('en');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'reddit')[0].languageFilterMode)
         .assertEqual('none');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'x')[0].languageFilterMode)
         .assertEqual('native');
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'applepodcasts')[0].languageFilterMode)
+        .assertEqual('regional');
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'twitch')[0].languageFilterMode)
+        .assertEqual('post_filter');
       expect(aggregateSearchSourcesFromArgs(emptyExplicitSources).join(','))
-        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
       expect(aggregateSearchSourcesFromArgs(invalidExplicitSources).join(','))
-        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
       expect(aggregateSearchSourcesFromArgs(partiallyValidSources).join(',')).assertEqual('youtube');
       expect(aggregateSearchSourcesFromArgs(policyBlockedSources).length).assertEqual(0);
     });
@@ -302,9 +308,9 @@ export default function aggregateSearchClientTest() {
         onlyDomesticSources: false, includeMultilingualResults: true
       };
 
-      expect(aggregateSearchSourcesFromArgs(firstQuery).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs(firstQuery).join(',')).assertEqual('bilibili,zhihu,douban');
       expect(aggregateSearchSourcesFromArgs(secondQuery).join(','))
-        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
     });
 
     it('builds X language expressions from the selected aggregate policy', 0, () => {

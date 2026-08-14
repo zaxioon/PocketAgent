@@ -23,11 +23,14 @@ import { isRollingGoHotelBookingUrl, validHotelBookingOpenArgs } from '@loop/age
 import {
   advanceWaterfallFeed,
   applyWaterfallProfile,
+  aggregateSearchRegistrySourceIds,
   applyWaterfallExpandedQuery,
   applyWaterfallSourceSelection,
   callConfiguredAggregateSearchContinuation,
   callConfiguredWaterfallInterestRecall,
+  AggregateSearchSource,
   AggregateSearchSourceBatch,
+  configureWaterfallEnabledSourcesForRuntime,
   configureWaterfallPreferenceProfileForRuntime,
   failWaterfallExpansion,
   mergeAggregateSearchContinuationBatch,
@@ -1769,7 +1772,7 @@ struct Index {
         stable: [],
         tail: [],
         reserve: [],
-        sources: ['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu'].map(
+        sources: aggregateSearchRegistrySourceIds().map(
           (source: string): WaterfallSourceState => ({
           source,
           phase: enabledSources.indexOf(source) >= 0 ? 'loading' : 'exhausted',
@@ -1955,6 +1958,7 @@ struct Index {
       const addedSources = enabledSources.filter((source: string): boolean =>
         state.enabledSources.indexOf(source) < 0);
       this.waterfallPreferenceProfile = this.waterfallPreferencesStore().saveDiscoveryEnabledSources(enabledSources);
+      configureWaterfallEnabledSourcesForRuntime(enabledSources as AggregateSearchSource[]);
       const update = applyWaterfallSourceSelection(state, enabledSources, Date.now());
       const plannedSources = update.loadRequests.map((request: WaterfallLoadRequest): string => request.source);
       const recallSources = addedSources.filter((source: string): boolean => plannedSources.indexOf(source) < 0);
@@ -3135,6 +3139,7 @@ struct Index {
   private currentWaterfallPreferenceProfile(includeConversation: boolean = true): WaterfallPreferenceProfile {
     return {
       version: 2,
+      sourceRegistryVersion: this.waterfallPreferenceProfile.sourceRegistryVersion,
       topicWeights: this.waterfallPreferenceProfile.topicWeights.slice(),
       sourceWeights: this.waterfallPreferenceProfile.sourceWeights.slice(),
       formatWeights: this.waterfallPreferenceProfile.formatWeights.slice(),
@@ -3162,6 +3167,8 @@ struct Index {
     } catch (_error) {
       aiLogError('[AIPhone][WaterfallPreferenceProjection] ok=false source=startup');
     }
+    configureWaterfallEnabledSourcesForRuntime(
+      this.waterfallPreferenceProfile.discoveryEnabledSources as AggregateSearchSource[]);
     configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile(false));
   }
 

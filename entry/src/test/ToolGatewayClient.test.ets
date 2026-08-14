@@ -3320,6 +3320,27 @@ export default function toolGatewayClientTest() {
       }
     });
 
+    it('loads aggregate browser and Twitch deployment config without exposing tokens', 0, () => {
+      try {
+        configureLocalProviderConfigFromRawJson(JSON.stringify({
+          DOUBAN_PLAYWRIGHT_MCP_URL: 'https://playwright.example.test/mcp',
+          DOUBAN_PLAYWRIGHT_MCP_TOKEN: 'douban-ingress-token',
+          TWITCH_CLIENT_ID: 'twitch-client',
+          TWITCH_APP_ACCESS_TOKEN: 'twitch-app-token'
+        }));
+
+        const summary = localProviderConfigDebugSummary();
+        expect(summary.indexOf('doubanMcpUrl=present')).assertLarger(-1);
+        expect(summary.indexOf('doubanMcpToken=present(20)')).assertLarger(-1);
+        expect(summary.indexOf('twitchClientId=present(13)')).assertLarger(-1);
+        expect(summary.indexOf('twitchAppAccessToken=present(16)')).assertLarger(-1);
+        expect(summary.indexOf('douban-ingress-token')).assertEqual(-1);
+        expect(summary.indexOf('twitch-app-token')).assertEqual(-1);
+      } finally {
+        configureLocalProviderConfigFromRawJson('{}');
+      }
+    });
+
     it('renders Maps missing-key errors without falling back to food search', 0, async () => {
       try {
         configureLocalProviderConfigFromRawJson('{}');

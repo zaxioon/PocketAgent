@@ -4,6 +4,7 @@ import {
   A2uiAction,
   A2uiComponent,
   A2uiSurfaceState,
+  aggregateSearchRegistrySourceIds,
   AggregateSearchPost,
   AggregateSearchResult,
   AggregateSearchSource,
@@ -107,7 +108,7 @@ const HIGHLIGHT_SLOTS: DailyBriefHighlightSlot[] = [
   'status_alert'
 ];
 
-const WATERFALL_SOURCES: string[] = ['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu'];
+const WATERFALL_SOURCES: string[] = aggregateSearchRegistrySourceIds();
 const DAILY_BRIEF_MAIL_LIMIT = 6;
 const DAILY_BRIEF_MAIL_DIGEST_LIMIT = 90;
 

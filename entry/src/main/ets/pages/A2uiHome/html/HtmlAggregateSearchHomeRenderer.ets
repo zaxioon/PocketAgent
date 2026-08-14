@@ -1,5 +1,8 @@
 import {
   A2uiAction,
+  AggregateSearchSource,
+  aggregateSearchRegistrySourceIds,
+  aggregateSourceLabel as registryAggregateSourceLabel,
   WaterfallFeedState,
   WaterfallRankedCandidate,
   WaterfallSourceState
@@ -20,6 +23,19 @@ import {
   APP_LOGO_YOUTUBE,
   APP_LOGO_ZHIHU
 } from './AppLogoDataUri';
+
+interface WaterfallSourceDisplayMetadata {
+  source: AggregateSearchSource;
+  label: string;
+}
+
+const WATERFALL_SOURCE_IDS_JSON: string = JSON.stringify(aggregateSearchRegistrySourceIds());
+const WATERFALL_SOURCE_LABELS_JSON: string = JSON.stringify(
+  aggregateSearchRegistrySourceIds().map((source: AggregateSearchSource): WaterfallSourceDisplayMetadata => ({
+    source: source,
+    label: registryAggregateSourceLabel(source)
+  }))
+);
 
 const AGGREGATE_CSS: string = `
 :root {
@@ -1467,8 +1483,11 @@ const WATERFALL_JS: string = `
   }
   function publishedLabel(value) { return text(value).trim().replace(/^(\\d{4}-\\d{2}-\\d{2})T.*$/, '$1'); }
   function sourceLabel(source) {
-    var labels = { youtube: 'YouTube', bilibili: 'B 站', x: 'X', hackernews: 'HN', reddit: 'Reddit', zhihu: '知乎' };
-    return labels[source] || source;
+    var labels = ${WATERFALL_SOURCE_LABELS_JSON};
+    for (var index = 0; index < labels.length; index++) {
+      if (labels[index].source === source) return labels[index].label;
+    }
+    return source;
   }
   function sourceTone(source) {
     var key = text(source).trim().toLowerCase();
@@ -2101,7 +2120,7 @@ const WATERFALL_JS: string = `
   }
   function renderPreferences() {
     if (!preferences || !state) return;
-    var sourceNames = ['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu'];
+    var sourceNames = ${WATERFALL_SOURCE_IDS_JSON};
     if (preferenceApplyTimer !== null) clearTimeout(preferenceApplyTimer);
     preferenceApplyTimer = null;
     preferenceBaseline = enabledSources.join('|');

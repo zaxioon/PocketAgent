@@ -1,9 +1,10 @@
 import { WaterfallContinuation, WaterfallFeedState } from './WaterfallAnythingCore';
 
-export type AggregateSearchSource = 'youtube' | 'bilibili' | 'x' | 'hackernews' | 'reddit' | 'zhihu';
+export type AggregateSearchSource = 'youtube' | 'bilibili' | 'x' | 'hackernews' | 'reddit' | 'zhihu' |
+  'douban' | 'applepodcasts' | 'twitch';
 export type AggregateSearchStatus = 'success' | 'empty' | 'needs_auth' | 'unsupported' | 'error';
 export type AggregateSearchLanguageTag = 'zh-Hans' | 'zh-Hant' | 'en';
-export type AggregateSearchLanguageFilterMode = 'intrinsic' | 'native' | 'none';
+export type AggregateSearchLanguageFilterMode = 'intrinsic' | 'native' | 'regional' | 'post_filter' | 'none';
 
 export interface AggregateSearchPolicy {
   domesticOnly: boolean;
@@ -15,6 +16,8 @@ export interface AggregateSearchSourceMetadata {
   isExternal: boolean;
   languages: AggregateSearchLanguageTag[];
   languageFilterMode: AggregateSearchLanguageFilterMode;
+  introducedInRegistryVersion: number;
+  defaultEnabled: boolean;
 }
 
 export interface AggregateSearchRowData {
@@ -103,5 +106,14 @@ export function aggregateSourceLabel(source: AggregateSearchSource): string {
   if (source === 'reddit') {
     return 'Reddit';
   }
-  return '知乎';
+  if (source === 'zhihu') {
+    return '知乎';
+  }
+  if (source === 'douban') {
+    return '豆瓣';
+  }
+  if (source === 'applepodcasts') {
+    return 'Apple Podcasts';
+  }
+  return 'Twitch';
 }

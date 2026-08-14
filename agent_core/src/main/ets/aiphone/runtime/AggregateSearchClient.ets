@@ -7,6 +7,18 @@ import {
 } from './ComposioDynamicBackend';
 import { DynamicGenericToolResult } from './DynamicToolTypes';
 import { callMediaVideoSearch } from './MediaVideoClient';
+import { searchApplePodcasts } from './ApplePodcastClient';
+import {
+  DoubanPlaywrightMcpClient,
+  DoubanPlaywrightMcpConfig,
+  DoubanPublicSearchItem
+} from './DoubanPlaywrightMcpClient';
+import {
+  searchTwitchChannels,
+  TwitchChannelSearchBatch,
+  TwitchChannelSearchItem,
+  TwitchSearchConfig
+} from './TwitchSearchClient';
 import {
   AggregateSearchPolicy,
   AggregateSearchPost,
@@ -203,6 +215,11 @@ export interface AggregateZhihuConfig {
   apiKey: string;
 }
 
+export interface AggregateExternalProviderConfig {
+  doubanPlaywright: DoubanPlaywrightMcpConfig;
+  twitch: TwitchSearchConfig;
+}
+
 interface AggregateHttpResult {
   code: number;
   text: string;
@@ -211,6 +228,11 @@ interface AggregateHttpResult {
 const DEFAULT_AGGREGATE_SEARCH_POLICY: AggregateSearchPolicy = {
   domesticOnly: true,
   multilingual: false
+};
+let runtimeEnabledSources: AggregateSearchSource[] = aggregateSearchRegistrySourceIds();
+let runtimeExternalProviderConfig: AggregateExternalProviderConfig = {
+  doubanPlaywright: { mcpUrl: '', bearerToken: '' },
+  twitch: { clientId: '', appAccessToken: '' }
 };
 let runtimePreferenceProfile: WaterfallPreferenceSnapshot | undefined = undefined;
 let runtimeSearchPolicy: AggregateSearchPolicy = {
@@ -336,8 +358,22 @@ function sourceAllowedByPolicy(source: AggregateSearchSource, policy: AggregateS
   if (policy.multilingual || !metadata.isExternal) {
     return true;
   }
-  return metadata.languageFilterMode === 'native' &&
+  return (metadata.languageFilterMode === 'native' || metadata.languageFilterMode === 'regional' ||
+    metadata.languageFilterMode === 'post_filter') &&
     (metadata.languages.indexOf('zh-Hans') >= 0 || metadata.languages.indexOf('zh-Hant') >= 0);
+}
+
+export function configureAggregateExternalProvidersForRuntime(config: AggregateExternalProviderConfig): void {
+  runtimeExternalProviderConfig = {
+    doubanPlaywright: {
+      mcpUrl: config.doubanPlaywright.mcpUrl.trim(),
+      bearerToken: config.doubanPlaywright.bearerToken.trim()
+    },
+    twitch: {
+      clientId: config.twitch.clientId.trim(),
+      appAccessToken: config.twitch.appAccessToken.trim()
+    }
+  };
 }
 
 function normalizedAggregateSource(value: string): AggregateSearchSource | null {
@@ -393,7 +429,13 @@ export function aggregateXSearchQuery(query: string, policy: AggregateSearchPoli
   return query.trim() + ' ' + languageQuery;
 }
 
-export function configureWaterfallEnabledSourcesForRuntime(_sources: AggregateSearchSource[]): void {
+export function configureWaterfallEnabledSourcesForRuntime(sources: AggregateSearchSource[]): void {
+  runtimeEnabledSources = [];
+  sources.forEach((source: AggregateSearchSource): void => {
+    if (aggregateSearchRegistrySourceIds().indexOf(source) >= 0 && runtimeEnabledSources.indexOf(source) < 0) {
+      runtimeEnabledSources.push(source);
+    }
+  });
 }
 
 export function configureWaterfallPreferenceProfileForRuntime(
@@ -1717,6 +1759,132 @@ async function aggregateZhihuSourceBatch(config: AggregateZhihuConfig, query: st
   };
 }
 
+function doubanPost(item: DoubanPublicSearchItem): AggregateSearchPost {
+  const rows: AggregateSearchRowData[] = [];
+  if (item.imageUrl.length > 0) {
+    rows.push({ label: 'Cover', value: item.imageUrl });
+  }
+  rows.push({ label: 'Content type', value: item.kind });
+  if (item.rating.length > 0) {
+    rows.push({ label: 'Rating', value: item.rating });
+  }
+  if (item.ratingCount.length > 0) {
+    rows.push({ label: 'Rating count', value: item.ratingCount });
+  }
+  if (item.metadata.length > 0 && item.metadata !== item.summary) {
+    rows.push({ label: 'Metadata', value: item.metadata });
+  }
+  return {
+    id: item.id,
+    source: 'douban',
+    provider: '豆瓣公开书影音（Experimental）',
+    title: item.title,
+    author: '',
+    handle: '',
+    text: item.summary,
+    url: item.url,
+    publishedAt: '',
+    score: item.rating,
+    commentCount: '',
+    status: 'success',
+    rows: rows
+  };
+}
+
+async function aggregateDoubanSourceBatch(query: string, limit: number): Promise<AggregateSearchSourceBatch> {
+  const result = await new DoubanPlaywrightMcpClient().search(runtimeExternalProviderConfig.doubanPlaywright, {
+    query: query,
+    kinds: ['book', 'movie', 'music'],
+    limit: limit,
+    start: 0
+  });
+  const posts = result.items.map((item: DoubanPublicSearchItem): AggregateSearchPost => doubanPost(item));
+  const status: AggregateSearchStatus = result.status === 'disabled' ? 'unsupported' : result.status;
+  return {
+    source: 'douban',
+    videos: [],
+    posts: posts,
+    status: statusFor('douban', status, result.message, posts.length),
+    continuation: null
+  };
+}
+
+function twitchItemAllowedByPolicy(item: TwitchChannelSearchItem, policy: AggregateSearchPolicy): boolean {
+  if (policy.multilingual) {
+    return true;
+  }
+  const language = item.language.trim().toLowerCase();
+  return language.length === 0 || language === 'zh' || language.indexOf('zh-') === 0;
+}
+
+function twitchPost(item: TwitchChannelSearchItem): AggregateSearchPost {
+  const rows: AggregateSearchRowData[] = [];
+  if (item.thumbnailUrl.length > 0) {
+    rows.push({ label: 'Thumbnail', value: item.thumbnailUrl });
+  }
+  rows.push({ label: 'Live', value: item.isLive ? 'true' : 'false' });
+  if (item.gameName.length > 0) {
+    rows.push({ label: 'Game', value: item.gameName });
+  }
+  if (item.language.length > 0) {
+    rows.push({ label: 'Language', value: item.language });
+  }
+  if (item.startedAt.length > 0) {
+    rows.push({ label: 'Started', value: item.startedAt });
+  }
+  if (item.tags.length > 0) {
+    rows.push({ label: 'Tags', value: item.tags.join(' / ') });
+  }
+  const details: string[] = [item.isLive ? '正在直播' : '近期频道'];
+  if (item.gameName.length > 0) {
+    details.push(item.gameName);
+  }
+  return {
+    id: 'twitch-' + item.id,
+    source: 'twitch',
+    provider: 'Twitch',
+    title: item.title.length > 0 ? item.title : item.broadcasterName,
+    author: item.broadcasterName,
+    handle: item.broadcasterLogin,
+    text: details.join(' · '),
+    url: item.url,
+    publishedAt: item.startedAt,
+    score: '',
+    commentCount: '',
+    status: 'success',
+    rows: rows
+  };
+}
+
+async function aggregateTwitchSourceBatch(
+  query: string,
+  continuation: WaterfallContinuation | null,
+  limit: number,
+  policy: AggregateSearchPolicy
+): Promise<AggregateSearchSourceBatch> {
+  const cursor = continuation !== null && continuation.kind === 'cursor' ? continuation.value : '';
+  const result: TwitchChannelSearchBatch = await searchTwitchChannels(
+    runtimeExternalProviderConfig.twitch,
+    query,
+    { limit: limit, cursor: cursor, liveOnly: false }
+  );
+  const posts = result.items.filter((item: TwitchChannelSearchItem): boolean =>
+    twitchItemAllowedByPolicy(item, policy)).map((item: TwitchChannelSearchItem): AggregateSearchPost =>
+    twitchPost(item));
+  let message = result.message;
+  if (!policy.multilingual && result.items.length > posts.length) {
+    message += ' 中文频道过滤后保留 ' + posts.length.toString() + ' 条。';
+  }
+  const status: AggregateSearchStatus = result.status === 'success' && posts.length === 0 ? 'empty' : result.status;
+  return {
+    source: 'twitch',
+    videos: [],
+    posts: posts,
+    status: statusFor('twitch', status, message, posts.length),
+    continuation: result.continuation === null ? null : { kind: 'cursor', value: result.continuation }
+  };
+}
+
 function aggregateSourceBatch(
   source: AggregateSearchSource,
   query: string,
@@ -1728,6 +1896,15 @@ function aggregateSourceBatch(
 ): Promise<AggregateSearchSourceBatch> {
   if (source === 'youtube' || source === 'bilibili') {
     return aggregateMediaSourceBatch(source, query, youtubeApiKey, continuation, limit, policy);
+  }
+  if (source === 'applepodcasts') {
+    return searchApplePodcasts(query, policy, limit);
+  }
+  if (source === 'douban') {
+    return aggregateDoubanSourceBatch(query, limit);
+  }
+  if (source === 'twitch') {
+    return aggregateTwitchSourceBatch(query, continuation, limit, policy);
   }
   if (source === 'x') {
     const args: AggregateXSearchArgs = {

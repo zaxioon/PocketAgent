@@ -2,7 +2,12 @@ import { preferences } from '@kit.ArkData';
 import { describe, expect, it } from '@ohos/hypium';
 import {
   aggregateSearchSourcesFromArgs,
-  configureWaterfallEnabledSourcesForRuntime
+  configureWaterfallEnabledSourcesForRuntime,
+  AggregateSearchSourceMetadata,
+  aggregateSearchDefaultEnabledSourceIds,
+  aggregateSearchRegistryMetadata,
+  aggregateSearchRegistrySourceIds,
+  aggregateSearchRegistryVersion
 } from '@loop/agent-core';
 import {
   emptyWaterfallPreferenceProfile,
@@ -35,6 +40,8 @@ class MemoryPreferences {
 
 interface SearchSourceArgs {
   sources: string[];
+  onlyDomesticSources?: boolean;
+  includeMultilingualResults?: boolean;
 }
 
 function event(
@@ -60,6 +67,19 @@ function weight(profile: WaterfallPreferenceProfile, key: string): number {
   return 0;
 }
 
+function legacyProfile(enabledSources: string[]): Object {
+  return {
+    version: 1,
+    topicWeights: [],
+    sourceWeights: [],
+    formatWeights: [],
+    explicitRules: [],
+    recentEvidence: [],
+    enabledSources: enabledSources,
+    updatedAt: 1000
+  };
+}
+
 export default function waterfallPreferencesStoreTest() {
   describe('waterfallPreferencesStore', () => {
     it('migrates v1 enabled sources and round-trips v2 discovery sources', 0, () => {
@@ -79,7 +99,8 @@ export default function waterfallPreferencesStoreTest() {
       }));
       const migrated = new WaterfallPreferencesStore(native as Object as preferences.Preferences).load();
       expect(migrated.version).assertEqual(2);
-      expect(migrated.discoveryEnabledSources.join(',')).assertEqual('youtube,x');
+      expect(migrated.discoveryEnabledSources.join(','))
+        .assertEqual('youtube,x,douban,applepodcasts,twitch');
 
       native.putSync(WATERFALL_PREFERENCES_KEY, JSON.stringify({ version: 2 }));
       expect(new WaterfallPreferencesStore(native as Object as preferences.Preferences).load().recentEvidence.length)
@@ -93,12 +114,59 @@ export default function waterfallPreferencesStoreTest() {
 
     it('never filters search sources through discovery runtime settings', 0, () => {
       configureWaterfallEnabledSourcesForRuntime(['youtube']);
-      const args: SearchSourceArgs = { sources: ['reddit', 'x'] };
+      const args: SearchSourceArgs = {
+        sources: ['reddit', 'x'],
+        onlyDomesticSources: false,
+        includeMultilingualResults: true
+      };
       expect(aggregateSearchSourcesFromArgs(args).join(','))
         .assertEqual('reddit,x');
       configureWaterfallEnabledSourcesForRuntime([]);
-      expect(aggregateSearchSourcesFromArgs(null).join(','))
-        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+      const allSources: SearchSourceArgs = {
+        sources: [],
+        onlyDomesticSources: false,
+        includeMultilingualResults: true
+      };
+      expect(aggregateSearchSourcesFromArgs(allSources).join(','))
+        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
+    });
+
+    it('adds newly registered default sources without re-enabling an older disabled source', 0, () => {
+      const native = new MemoryPreferences();
+      const oldEnabled = aggregateSearchRegistryMetadata().filter(
+        (metadata: AggregateSearchSourceMetadata): boolean =>
+          metadata.introducedInRegistryVersion === 1 && metadata.source !== 'x'
+      ).map((metadata: AggregateSearchSourceMetadata): string => metadata.source);
+      native.putSync(WATERFALL_PREFERENCES_KEY, JSON.stringify(legacyProfile(oldEnabled)));
+
+      const migrated = new WaterfallPreferencesStore(native as Object as preferences.Preferences).load();
+      expect(migrated.enabledSources.indexOf('x')).assertEqual(-1);
+      expect(migrated.enabledSources.indexOf('douban') >= 0).assertTrue();
+      expect(migrated.enabledSources.indexOf('applepodcasts') >= 0).assertTrue();
+      expect(migrated.enabledSources.indexOf('twitch') >= 0).assertTrue();
+      expect(migrated.sourceRegistryVersion).assertEqual(aggregateSearchRegistryVersion());
+
+      const store = new WaterfallPreferencesStore(native as Object as preferences.Preferences);
+      const withoutTwitch = migrated.enabledSources.filter((source: string): boolean => source !== 'twitch');
+      store.saveEnabledSources(withoutTwitch);
+      const reopened = new WaterfallPreferencesStore(native as Object as preferences.Preferences).load();
+      expect(reopened.enabledSources.indexOf('twitch')).assertEqual(-1);
+      expect(reopened.enabledSources.indexOf('x')).assertEqual(-1);
+    });
+
+    it('keeps registry migration metadata internally consistent', 0, () => {
+      const metadata = aggregateSearchRegistryMetadata();
+      const seen: string[] = [];
+      let maxVersion = 1;
+      metadata.forEach((item: AggregateSearchSourceMetadata): void => {
+        expect(item.introducedInRegistryVersion >= 1).assertTrue();
+        expect(seen.indexOf(item.source)).assertEqual(-1);
+        seen.push(item.source);
+        maxVersion = Math.max(maxVersion, item.introducedInRegistryVersion);
+      });
+      expect(aggregateSearchRegistryVersion()).assertEqual(maxVersion);
+      expect(emptyWaterfallPreferenceProfile().enabledSources.join(','))
+        .assertEqual(aggregateSearchDefaultEnabledSourceIds().join(','));
     });
 
     it('applies behavior weights, half-life, repeated quick-skip and clamps dimensions', 0, () => {
@@ -150,7 +218,10 @@ export default function waterfallPreferencesStoreTest() {
       expect(profile.explicitRules.length).assertEqual(1);
       expect(profile.explicitRules[0].effect).assertEqual('boost');
       expect(weight(profile, 'AI')).assertEqual(1);
-      expect(emptyWaterfallPreferenceProfile().discoveryEnabledSources.length).assertEqual(6);
+      expect(emptyWaterfallPreferenceProfile().discoveryEnabledSources.join(','))
+        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
+      expect(emptyWaterfallPreferenceProfile().enabledSources.join(','))
+        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
     });
   });
 }
