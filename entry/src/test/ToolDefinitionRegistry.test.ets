@@ -1,6 +1,8 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
+  AggregateSearchSourceMetadata,
   GMAIL_TOOL_IDS,
+  aggregateSearchSourceMetadata,
   aiphoneToolDefinitionCount,
   allAiphoneToolDefinitions,
   aiphoneToolDescriptionForModel,
@@ -575,6 +577,13 @@ export default function toolDefinitionRegistryTest() {
       const aggregatePlanning = toolPlanningDescriptionForToolId('media.aggregate.search', false);
       expect(aggregatePlanning.indexOf('onlyDomesticSources')).assertLarger(-1);
       expect(aggregatePlanning.indexOf('includeMultilingualResults')).assertLarger(-1);
+      const sourceIds = aggregateSearchSourceMetadata()
+        .map((item: AggregateSearchSourceMetadata): string => item.source);
+      expect(aggregatePlanning.indexOf(JSON.stringify(sourceIds))).assertLarger(-1);
+      expect(aggregatePlanning.indexOf('news, discussion, video, article, and posts are never source IDs'))
+        .assertLarger(-1);
+      expect(aggregatePlanning.indexOf('does not explicitly name a provider, omit sources entirely'))
+        .assertLarger(-1);
       expect(isKnownDomainToolId('media.aggregate.search')).assertTrue();
       expect(isMediaToolId('media.aggregate.search')).assertTrue();
     });

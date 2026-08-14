@@ -21,6 +21,11 @@ import {
   AggregateSearchSourceBatch
 } from './AggregateSearchTypes';
 import {
+  aggregateSearchRegistryMetadata,
+  aggregateSearchRegistryMetadataFor,
+  aggregateSearchRegistrySourceIds
+} from './AggregateSearchSourceRegistry';
+import {
   WaterfallCandidate,
   WaterfallContinuation,
   WaterfallFeedState,
@@ -203,19 +208,10 @@ interface AggregateHttpResult {
   text: string;
 }
 
-const ALL_SOURCES: AggregateSearchSource[] = ['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu'];
 const DEFAULT_AGGREGATE_SEARCH_POLICY: AggregateSearchPolicy = {
   domesticOnly: true,
   multilingual: false
 };
-const AGGREGATE_SEARCH_SOURCE_METADATA: AggregateSearchSourceMetadata[] = [
-  { source: 'youtube', isExternal: true, languages: ['zh-Hans', 'zh-Hant', 'en'], languageFilterMode: 'native' },
-  { source: 'bilibili', isExternal: false, languages: ['zh-Hans', 'zh-Hant'], languageFilterMode: 'intrinsic' },
-  { source: 'x', isExternal: true, languages: ['zh-Hans', 'zh-Hant', 'en'], languageFilterMode: 'native' },
-  { source: 'hackernews', isExternal: true, languages: ['en'], languageFilterMode: 'intrinsic' },
-  { source: 'reddit', isExternal: true, languages: ['zh-Hans', 'zh-Hant', 'en'], languageFilterMode: 'none' },
-  { source: 'zhihu', isExternal: false, languages: ['zh-Hans', 'zh-Hant'], languageFilterMode: 'intrinsic' }
-];
 let runtimePreferenceProfile: WaterfallPreferenceSnapshot | undefined = undefined;
 let runtimeSearchPolicy: AggregateSearchPolicy = {
   domesticOnly: DEFAULT_AGGREGATE_SEARCH_POLICY.domesticOnly,
@@ -325,21 +321,11 @@ export function aggregateSearchPolicyFromArgs(args: Object | null): AggregateSea
 }
 
 export function aggregateSearchSourceMetadata(): AggregateSearchSourceMetadata[] {
-  return AGGREGATE_SEARCH_SOURCE_METADATA.map((metadata: AggregateSearchSourceMetadata): AggregateSearchSourceMetadata => ({
-    source: metadata.source,
-    isExternal: metadata.isExternal,
-    languages: metadata.languages.slice(),
-    languageFilterMode: metadata.languageFilterMode
-  }));
+  return aggregateSearchRegistryMetadata();
 }
 
 function metadataForSource(source: AggregateSearchSource): AggregateSearchSourceMetadata {
-  for (let index = 0; index < AGGREGATE_SEARCH_SOURCE_METADATA.length; index++) {
-    if (AGGREGATE_SEARCH_SOURCE_METADATA[index].source === source) {
-      return AGGREGATE_SEARCH_SOURCE_METADATA[index];
-    }
-  }
-  return AGGREGATE_SEARCH_SOURCE_METADATA[0];
+  return aggregateSearchRegistryMetadataFor(source);
 }
 
 function sourceAllowedByPolicy(source: AggregateSearchSource, policy: AggregateSearchPolicy): boolean {
@@ -368,17 +354,27 @@ function normalizedAggregateSource(value: string): AggregateSearchSource | null 
   if (normalized === '红迪') {
     normalized = 'reddit';
   }
-  return ALL_SOURCES.indexOf(normalized as AggregateSearchSource) >= 0 ? normalized as AggregateSearchSource : null;
+  return aggregateSearchRegistrySourceIds().indexOf(normalized as AggregateSearchSource) >= 0 ?
+    normalized as AggregateSearchSource : null;
 }
 
 export function aggregateSearchSourcesFromArgs(args: Object | null): AggregateSearchSource[] {
   const policy = aggregateSearchPolicyFromArgs(args);
   const raw = args === null ? undefined : (args as AggregateArgRecord).sources;
-  const candidates: AggregateArgValue[] = Array.isArray(raw) ? raw as AggregateArgValue[] : ALL_SOURCES;
+  const explicitSources: AggregateSearchSource[] = [];
+  if (Array.isArray(raw)) {
+    (raw as AggregateArgValue[]).forEach((item: AggregateArgValue) => {
+      const source = normalizedAggregateSource(textOf(item));
+      if (source !== null && explicitSources.indexOf(source) < 0) {
+        explicitSources.push(source);
+      }
+    });
+  }
+  const candidates: AggregateSearchSource[] = !Array.isArray(raw) || explicitSources.length === 0 ?
+    aggregateSearchRegistrySourceIds() : explicitSources;
   const sources: AggregateSearchSource[] = [];
-  candidates.forEach((item: AggregateArgValue) => {
-    const source = normalizedAggregateSource(textOf(item));
-    if (source !== null && sourceAllowedByPolicy(source, policy) && sources.indexOf(source) < 0) {
+  candidates.forEach((source: AggregateSearchSource) => {
+    if (sourceAllowedByPolicy(source, policy)) {
       sources.push(source);
     }
   });

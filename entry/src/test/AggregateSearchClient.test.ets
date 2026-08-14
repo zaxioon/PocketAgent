@@ -267,6 +267,18 @@ export default function aggregateSearchClientTest() {
       const emptyExplicitSources: QueryArgsFixture = {
         query: 'codex', sources: [], onlyDomesticSources: false, includeMultilingualResults: true
       };
+      const invalidExplicitSources: QueryArgsFixture = {
+        query: 'codex', sources: ['news', 'discussion'],
+        onlyDomesticSources: false, includeMultilingualResults: true
+      };
+      const partiallyValidSources: QueryArgsFixture = {
+        query: 'codex', sources: ['news', 'youtube', 'discussion'],
+        onlyDomesticSources: false, includeMultilingualResults: true
+      };
+      const policyBlockedSources: QueryArgsFixture = {
+        query: 'codex', sources: ['youtube'],
+        onlyDomesticSources: true, includeMultilingualResults: false
+      };
       expect(aggregateSearchSourcesFromArgs(blocked).join(',')).assertEqual('youtube,bilibili');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.isExternal).length).assertEqual(4);
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'hackernews')[0].languages.join(','))
@@ -275,7 +287,24 @@ export default function aggregateSearchClientTest() {
         .assertEqual('none');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'x')[0].languageFilterMode)
         .assertEqual('native');
-      expect(aggregateSearchSourcesFromArgs(emptyExplicitSources).length).assertEqual(0);
+      expect(aggregateSearchSourcesFromArgs(emptyExplicitSources).join(','))
+        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+      expect(aggregateSearchSourcesFromArgs(invalidExplicitSources).join(','))
+        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+      expect(aggregateSearchSourcesFromArgs(partiallyValidSources).join(',')).assertEqual('youtube');
+      expect(aggregateSearchSourcesFromArgs(policyBlockedSources).length).assertEqual(0);
+    });
+
+    it('falls back after an earlier query when category labels appear as sources', 0, () => {
+      const firstQuery: QueryArgsFixture = { query: 'codex' };
+      const secondQuery: QueryArgsFixture = {
+        query: 'codex', sources: ['news', 'discussion'],
+        onlyDomesticSources: false, includeMultilingualResults: true
+      };
+
+      expect(aggregateSearchSourcesFromArgs(firstQuery).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs(secondQuery).join(','))
+        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
     });
 
     it('builds X language expressions from the selected aggregate policy', 0, () => {
