@@ -48,7 +48,9 @@ import {
   WaterfallRecallRoute,
   WaterfallSourceState,
   WaterfallSourcePhase,
+  finalizeDeferredWaterfallRanking,
   mergeWaterfallBatch,
+  mergeWaterfallBatchDeferredRanking,
   waterfallTextTokens
 } from './WaterfallAnythingCore';
 
@@ -229,6 +231,7 @@ const DEFAULT_AGGREGATE_SEARCH_POLICY: AggregateSearchPolicy = {
   domesticOnly: true,
   multilingual: false
 };
+export const AGGREGATE_SEARCH_PARTIAL_THROTTLE_MS: number = 5000;
 let runtimeEnabledSources: AggregateSearchSource[] = aggregateSearchRegistrySourceIds();
 let runtimeExternalProviderConfig: AggregateExternalProviderConfig = {
   doubanPlaywright: { mcpUrl: '', bearerToken: '' },
@@ -1380,6 +1383,57 @@ function emptyZhihuConfig(): AggregateZhihuConfig {
 
 export type AggregateSearchPartialObserver = (result: AggregateSearchResult) => void;
 
+class AggregateSearchPartialThrottle {
+  private readonly intervalMs: number;
+  private readonly observer: AggregateSearchPartialObserver;
+  private leadingPublished: boolean = false;
+  private timerId: number = -1;
+  private pending: AggregateSearchResult | null = null;
+
+  constructor(intervalMs: number, observer: AggregateSearchPartialObserver) {
+    this.intervalMs = intervalMs > 0 ? intervalMs : 0;
+    this.observer = observer;
+  }
+
+  publish(snapshot: AggregateSearchResult): void {
+    if (this.intervalMs === 0) {
+      this.observer(snapshot);
+      return;
+    }
+    if (!this.leadingPublished) {
+      this.leadingPublished = true;
+      this.observer(snapshot);
+      return;
+    }
+    this.pending = snapshot;
+    this.restartTimer();
+  }
+
+  finish(): void {
+    this.leadingPublished = false;
+    if (this.timerId >= 0) {
+      clearTimeout(this.timerId);
+      this.timerId = -1;
+    }
+    this.pending = null;
+  }
+
+  private restartTimer(): void {
+    if (this.timerId >= 0) {
+      clearTimeout(this.timerId);
+    }
+    this.timerId = setTimeout((): void => {
+      this.timerId = -1;
+      const pending = this.pending;
+      this.pending = null;
+      if (pending === null) {
+        return;
+      }
+      this.observer(pending);
+    }, this.intervalMs);
+  }
+}
+
 function waterfallPhaseFor(status: AggregateSearchStatus): WaterfallSourcePhase {
   if (status === 'success') {
     return 'success';
@@ -1489,7 +1543,8 @@ export async function streamAggregateSearchSourceBatches(
   tasks: Promise<AggregateSearchSourceBatch>[],
   onPartial: AggregateSearchPartialObserver,
   nowMs: number,
-  preferenceDescription: string = ''
+  preferenceDescription: string = '',
+  partialThrottleMs: number = AGGREGATE_SEARCH_PARTIAL_THROTTLE_MS
 ): Promise<AggregateSearchResult> {
   const videos: AggregateSearchVideo[] = [];
   const posts: AggregateSearchPost[] = [];
@@ -1497,6 +1552,7 @@ export async function streamAggregateSearchSourceBatches(
   let waterfall = loadingWaterfallState(query, requestedSources, preferenceDescription);
   let batchIndex = 0;
   let partialChain: Promise<void> = Promise.resolve();
+  const partialThrottle = new AggregateSearchPartialThrottle(partialThrottleMs, onPartial);
   const wrappedTasks: Promise<void>[] = [];
   for (let index = 0; index < tasks.length; index++) {
     const source = requestedSources[index];
@@ -1509,36 +1565,39 @@ export async function streamAggregateSearchSourceBatches(
           posts.push(post);
         });
         replaceAggregateStatus(statuses, batch.status);
-        waterfall = mergeWaterfallBatch(
+        waterfall = mergeWaterfallBatchDeferredRanking(
           waterfall,
           aggregateMediaCandidates(
             batch.videos.slice(0, 10), batch.posts.slice(0, 10), batchIndex, query, 'original'
           ),
-          sourceStateFor(batch),
-          nowMs,
-          false
+          sourceStateFor(batch)
         ).state;
         batchIndex += 1;
         const snapshot = aggregateSearchResultFromParts(query, videos, posts, orderedAggregateStatuses(requestedSources, statuses));
         snapshot.waterfall = waterfall;
-        onPartial(snapshot);
+        partialThrottle.publish(snapshot);
       });
       return partialChain;
     }).catch((error: Error | Object | string | number | boolean | null | undefined): Promise<void> => {
       const failed = failedAggregateBatch(source, error);
       partialChain = partialChain.then((): void => {
         replaceAggregateStatus(statuses, failed.status);
-        waterfall = mergeWaterfallBatch(waterfall, [], sourceStateFor(failed), nowMs, false).state;
+        waterfall = mergeWaterfallBatchDeferredRanking(waterfall, [], sourceStateFor(failed)).state;
         batchIndex += 1;
         const snapshot = aggregateSearchResultFromParts(query, videos, posts, orderedAggregateStatuses(requestedSources, statuses));
         snapshot.waterfall = waterfall;
-        onPartial(snapshot);
+        partialThrottle.publish(snapshot);
       });
       return partialChain;
     }));
   }
-  await Promise.all(wrappedTasks);
-  await partialChain;
+  try {
+    await Promise.all(wrappedTasks);
+    await partialChain;
+  } finally {
+    partialThrottle.finish();
+  }
+  waterfall = finalizeDeferredWaterfallRanking(waterfall, nowMs);
   const result = aggregateSearchResultFromParts(query, videos, posts, orderedAggregateStatuses(requestedSources, statuses));
   result.waterfall = waterfall;
   return result;

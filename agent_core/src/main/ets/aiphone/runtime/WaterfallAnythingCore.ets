@@ -1259,6 +1259,149 @@ export function applyWaterfallProfile(
   return finalizeUpdate(next);
 }
 
+function deferredRankedCandidate(candidate: WaterfallCandidate): WaterfallRankedCandidate {
+  return {
+    id: candidate.id,
+    source: candidate.source,
+    mediaType: candidate.mediaType,
+    title: candidate.title,
+    summary: candidate.summary,
+    url: candidate.url,
+    coverUrl: candidate.coverUrl,
+    mediaUrl: candidate.mediaUrl,
+    publishedAt: candidate.publishedAt,
+    duration: candidate.duration,
+    originalIndex: candidate.originalIndex,
+    searchQuery: candidate.searchQuery,
+    queryStage: candidate.queryStage,
+    sourceRank: candidate.sourceRank,
+    providerScore: candidate.providerScore,
+    topics: candidate.topics,
+    format: candidate.format,
+    recallRoute: candidate.recallRoute,
+    recallWeight: candidate.recallWeight,
+    normalizedUrl: normalizedHttpUrl(candidate.url),
+    signals: {
+      relevanceTier: 0,
+      titleHits: 0,
+      summaryHits: 0,
+      freshnessTier: 0
+    },
+    reason: '等待最终排序'
+  };
+}
+
+function deferredInventory(state: WaterfallFeedState): WaterfallRankedCandidate[] {
+  const items: WaterfallRankedCandidate[] = state.shown.slice();
+  if (state.current !== null) {
+    items.push(state.current);
+  }
+  return items.concat(state.stable).concat(state.tail).concat(state.reserve ?? []);
+}
+
+export function mergeWaterfallBatchDeferredRanking(
+  state: WaterfallFeedState,
+  incoming: WaterfallCandidate[],
+  sourceState: WaterfallSourceState,
+  refreshDisplayWindow: boolean = true
+): WaterfallFeedUpdate {
+  const next = copyState(state);
+  const previousCount = totalCandidateCount(next);
+  const received = copySourceState(sourceState);
+  replaceSource(next.sources, received);
+  if ((next.reserve ?? []).length > 0) {
+    next.tail = next.tail.concat(next.reserve ?? []);
+    next.reserve = [];
+  }
+
+  const occupied = deferredInventory(next);
+  const occupiedIds = idsOf(occupied);
+  const occupiedUrls = occupied.map((item: WaterfallRankedCandidate): string => item.normalizedUrl)
+    .filter((url: string): boolean => url.length > 0);
+  incoming.forEach((candidate: WaterfallCandidate): void => {
+    const normalizedUrl = normalizedHttpUrl(candidate.url);
+    if (occupiedIds.indexOf(candidate.id) >= 0 ||
+      (normalizedUrl.length > 0 && occupiedUrls.indexOf(normalizedUrl) >= 0)) {
+      return;
+    }
+    next.tail.push(deferredRankedCandidate(candidate));
+    occupiedIds.push(candidate.id);
+    if (normalizedUrl.length > 0) {
+      occupiedUrls.push(normalizedUrl);
+    }
+  });
+  if (refreshDisplayWindow) {
+    refreshCurrentAndStable(next);
+  }
+  trimWaterfallInventory(next);
+  next.roundNewItemCount = (next.roundNewItemCount ?? 0) +
+    Math.max(0, totalCandidateCount(next) - previousCount);
+  return { state: next, loadRequests: [] };
+}
+
+export function finalizeDeferredWaterfallRanking(
+  state: WaterfallFeedState,
+  nowMs: number
+): WaterfallFeedState {
+  const next = copyState(state);
+  const unshown = rankedToCandidates(
+    (next.current === null ? [] : [next.current])
+      .concat(next.stable)
+      .concat(next.tail)
+      .concat(next.reserve ?? [])
+  );
+  const allSources: string[] = [];
+  unshown.forEach((candidate: WaterfallCandidate): void => {
+    if (allSources.indexOf(candidate.source) < 0) {
+      allSources.push(candidate.source);
+    }
+  });
+  next.current = null;
+  next.stable = [];
+  next.tail = rankWaterfallCandidates({
+    query: next.query,
+    candidates: unshown,
+    enabledSources: allSources,
+    shownIds: idsOf(next.shown),
+    stableIds: [],
+    preferenceDescription: next.preferenceDescription,
+    mode: next.mode ?? 'search',
+    profile: next.profile
+  }, nowMs);
+  next.reserve = [];
+  refreshCurrentAndStable(next);
+  trimWaterfallInventory(next);
+  return next;
+}
+
+function finalizeDeferredWaterfallTailRanking(
+  state: WaterfallFeedState,
+  nowMs: number
+): WaterfallFeedState {
+  const next = copyState(state);
+  const candidates = rankedToCandidates(next.tail.concat(next.reserve ?? []));
+  const allSources: string[] = [];
+  candidates.forEach((candidate: WaterfallCandidate): void => {
+    if (allSources.indexOf(candidate.source) < 0) {
+      allSources.push(candidate.source);
+    }
+  });
+  next.tail = rankWaterfallCandidates({
+    query: next.query,
+    candidates: candidates,
+    enabledSources: allSources,
+    shownIds: fixedDisplayIds(next),
+    stableIds: idsOf(next.stable),
+    preferenceDescription: next.preferenceDescription,
+    mode: next.mode ?? 'search',
+    profile: next.profile
+  }, nowMs);
+  next.reserve = [];
+  refreshCurrentAndStable(next);
+  trimWaterfallInventory(next);
+  return next;
+}
+
 function sortTail(state: WaterfallFeedState, incoming: WaterfallCandidate[], nowMs: number): WaterfallRankedCandidate[] {
   const fixedIds = fixedDisplayIds(state);
   const fixedUrls = fixedDisplayUrls(state);
@@ -1434,14 +1577,18 @@ export function mergeWaterfallFeedSnapshot(
     (incoming.current === null ? [] : [incoming.current]).concat(
       incoming.stable, incoming.tail, incoming.reserve ?? [])
   );
-  if (incoming.sources.length > 0) {
-    next = mergeWaterfallBatchState(next, candidates, incoming.sources[0], nowMs);
-    incoming.sources.slice(1).forEach((source: WaterfallSourceState): void => {
-      const received = copySourceState(source);
-      received.inFlight = false;
-      received.reservedCount = 0;
-      replaceSource(next.sources, received);
-    });
+  const partial = incoming.sources.some((source: WaterfallSourceState): boolean =>
+    source.inFlight || source.phase === 'loading');
+  incoming.sources.forEach((source: WaterfallSourceState): void => {
+    next = mergeWaterfallBatchDeferredRanking(
+      next,
+      candidates.filter((candidate: WaterfallCandidate): boolean => candidate.source === source.source),
+      source,
+      partial
+    ).state;
+  });
+  if (!partial) {
+    next = finalizeDeferredWaterfallTailRanking(next, nowMs);
   }
   return planLoads ? finalizeUpdate(next) : { state: next, loadRequests: [] };
 }
@@ -1455,6 +1602,21 @@ export function advanceWaterfallFeed(
     next.shown.push(next.current);
   }
   next.current = null;
+  if ((next.mode ?? 'search') === 'interest') {
+    const remaining = next.stable.concat(next.tail, next.reserve ?? []);
+    const rankingWindow = remaining.slice(0, WATERFALL_TARGET_INVENTORY);
+    next.stable = [];
+    next.tail = rankUnshownCandidates(
+      next,
+      rankedToCandidates(rankingWindow),
+      idsOf(next.shown),
+      [],
+      nowMs
+    );
+    next.reserve = remaining.slice(rankingWindow.length);
+    refreshCurrentAndStable(next);
+    return { state: next, loadRequests: [] };
+  }
   refreshCurrentAndStable(next);
   return finalizeUpdate(next);
 }
