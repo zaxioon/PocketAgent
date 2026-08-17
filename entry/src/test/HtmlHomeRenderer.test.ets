@@ -3344,6 +3344,32 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('https://i1.hdslb.com/bfs/archive/cover.jpg')).assertLarger(-1);
     });
 
+    it('renders official local icons for the new aggregate search sources', 0, () => {
+      const doc = aggregateSearchDocumentFixture();
+      doc.blocks.push({
+        id: 'status-douban', kind: 'aggregate-source-status', title: '豆瓣', subtitle: 'ok',
+        status: 'success', source: 'douban', metrics: [], rows: [], actions: []
+      }, {
+        id: 'status-applepodcasts', kind: 'aggregate-source-status', title: 'Apple Podcasts', subtitle: 'ok',
+        status: 'success', source: 'applepodcasts', metrics: [], rows: [], actions: []
+      }, {
+        id: 'status-twitch', kind: 'aggregate-source-status', title: 'Twitch', subtitle: 'ok',
+        status: 'success', source: 'twitch', metrics: [], rows: [], actions: []
+      });
+      doc.waterfall = waterfallRendererFixture().waterfall;
+
+      const html = renderHtmlHomeDocument(doc);
+
+      expect(html.indexOf('data-source="douban" aria-label="豆瓣"><img src="data:image/png;base64,')).assertLarger(-1);
+      expect(html.indexOf('data-source="applepodcasts" aria-label="Apple Podcasts"><img src="data:image/png;base64,'))
+        .assertLarger(-1);
+      expect(html.indexOf('data-source="twitch" aria-label="Twitch"><img src="data:image/svg+xml;base64,'))
+        .assertLarger(-1);
+      expect(html.indexOf('"douban":"data:image/png;base64,')).assertLarger(-1);
+      expect(html.indexOf('"applepodcasts":"data:image/png;base64,')).assertLarger(-1);
+      expect(html.indexOf('"twitch":"data:image/svg+xml;base64,')).assertLarger(-1);
+    });
+
     it('renders the Waterfall discovery stream inside aggregate search', 0, () => {
       const doc = waterfallRendererFixture();
       const state = doc.waterfall as WaterfallFeedState;

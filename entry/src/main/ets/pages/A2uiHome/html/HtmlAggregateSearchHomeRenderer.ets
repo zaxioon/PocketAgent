@@ -16,9 +16,12 @@ import {
   WaterfallHomePayload
 } from './HtmlHomeTypes';
 import {
+  APP_LOGO_APPLE_PODCASTS,
   APP_LOGO_BILIBILI,
+  APP_LOGO_DOUBAN,
   APP_LOGO_HACKERNEWS,
   APP_LOGO_REDDIT,
+  APP_LOGO_TWITCH,
   APP_LOGO_X,
   APP_LOGO_YOUTUBE,
   APP_LOGO_ZHIHU
@@ -2751,7 +2754,10 @@ export function renderAggregateSearchHomeDocument(
     x: APP_LOGO_X,
     hackernews: APP_LOGO_HACKERNEWS,
     reddit: APP_LOGO_REDDIT,
-    zhihu: APP_LOGO_ZHIHU
+    zhihu: APP_LOGO_ZHIHU,
+    douban: APP_LOGO_DOUBAN,
+    applepodcasts: APP_LOGO_APPLE_PODCASTS,
+    twitch: APP_LOGO_TWITCH
   }).replace(/</g, '\\u003c');
   const uiIconsJson = JSON.stringify({
     back: waterfallUiIconMarkup('back'),
@@ -3043,14 +3049,23 @@ function sourceLogoUrl(source: string): string {
   if (source === 'zhihu') {
     return APP_LOGO_ZHIHU;
   }
+  if (source === 'douban') {
+    return APP_LOGO_DOUBAN;
+  }
+  if (source === 'applepodcasts') {
+    return APP_LOGO_APPLE_PODCASTS;
+  }
+  if (source === 'twitch') {
+    return APP_LOGO_TWITCH;
+  }
   return '';
 }
 
 function sourceCssValue(source: string): string {
   const clean = source.trim().toLowerCase();
   if (clean === 'youtube' || clean === 'bilibili' || clean === 'x' || clean === 'hackernews' ||
-    clean === 'reddit' ||
-    clean === 'zhihu') {
+    clean === 'reddit' || clean === 'zhihu' || clean === 'douban' || clean === 'applepodcasts' ||
+    clean === 'twitch') {
     return clean;
   }
   return 'unknown';
@@ -3074,6 +3089,15 @@ function aggregateSourceLabel(source: string, fallback: string): string {
   }
   if (source === 'zhihu') {
     return '知乎';
+  }
+  if (source === 'douban') {
+    return '豆瓣';
+  }
+  if (source === 'applepodcasts') {
+    return 'Apple Podcasts';
+  }
+  if (source === 'twitch') {
+    return 'Twitch';
   }
   return fallback;
 }
