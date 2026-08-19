@@ -193,6 +193,7 @@ import {
   callAggregateSearchContinuation,
   callAggregateSearchContinuationForContext,
   configureAggregateExternalProvidersForRuntime,
+  waterfallInterestSourceAllowedForRuntime,
   waterfallSearchPolicyForRuntime
 } from './AggregateSearchClient';
 import {
@@ -14577,13 +14578,15 @@ export async function callConfiguredWaterfallInterestRecall(
   let batchIndex = 0;
   for (let requestIndex = 0; requestIndex < requests.length; requestIndex += 1) {
     const recall = requests[requestIndex];
-    recall.sources.forEach((source: string): void => {
+    const allowedSources = recall.sources.filter((source: string): boolean =>
+      waterfallInterestSourceAllowedForRuntime(source));
+    allowedSources.forEach((source: string): void => {
       aiLogInfo('[AIPhone][WaterfallInterestRecallRequest] route=' + recall.route + ' source=' + source +
         ' limit=' + waterfallInterestRecallLimitForSource(source).toString() +
         (source === 'twitch' ? ' mode=provider-discovery' :
           ' query=' + waterfallInterestDiagnosticText(recall.query, 80)));
     });
-    if (recall.route === 'popular' && recall.sources.indexOf('youtube') >= 0) {
+    if (recall.route === 'popular' && allowedSources.indexOf('youtube') >= 0) {
       const token = recall.continuation !== undefined && recall.continuation !== null &&
         recall.continuation.kind === 'cursor' ? recall.continuation.value : '';
       const dynamic = await callYouTubeMostPopularVideos(localProviderConfig.youtubeApiKey, 10, token);
@@ -14597,7 +14600,7 @@ export async function callConfiguredWaterfallInterestRecall(
       });
       continue;
     }
-    const loads: WaterfallLoadRequest[] = recall.sources.map((source: string): WaterfallLoadRequest => ({
+    const loads: WaterfallLoadRequest[] = allowedSources.map((source: string): WaterfallLoadRequest => ({
       source,
       continuation: recall.continuation ?? null,
       limit: waterfallInterestRecallLimitForSource(source),

@@ -23,6 +23,7 @@ import {
   WaterfallSourceState,
   advanceWaterfallFeed,
   aggregateContinuationFromDynamicResult,
+  callAggregateSearch,
   callAggregateSearchContinuation,
   callAggregateSearchContinuationForContext,
   configureWaterfallEnabledSourcesForRuntime,
@@ -319,6 +320,27 @@ export default function aggregateSearchClientTest() {
       expect(aggregateYouTubeRelevanceLanguage(aggregateSearchPolicyFromArgs(globalMultilingual))).assertEqual('');
     });
 
+    it('preserves the runtime policy when an internal aggregate call omits policy fields', 0, async () => {
+      configureWaterfallSearchPolicyForRuntime({ domesticOnly: false, multilingual: true });
+      try {
+        const result = await callAggregateSearch(
+          'daily brief', { query: 'daily brief', sources: ['youtube'] } as QueryArgsFixture,
+          '', { apiKey: '' }, null, WATERFALL_NOW_MS
+        );
+        const policy = waterfallSearchPolicyForRuntime();
+        expect(result.sourceStatuses.length).assertEqual(1);
+        expect(result.sourceStatuses[0].source).assertEqual('youtube');
+        expect(policy.domesticOnly).assertFalse();
+        expect(policy.multilingual).assertTrue();
+        expect(aggregateSearchSourcesFromArgs(
+          { query: 'codex', sources: ['hackernews'] } as QueryArgsFixture, policy
+        ).join(',')).assertEqual('hackernews');
+      } finally {
+        configureWaterfallEnabledSourcesForRuntime(aggregateSearchRegistrySourceIds());
+        configureWaterfallSearchPolicyForRuntime({ domesticOnly: true, multilingual: false });
+      }
+    });
+
     it('keeps explicit sources subordinate to settings and exposes source tags', 0, () => {
       const blocked: QueryArgsFixture = {
         query: 'codex', sources: ['youtube', 'hackernews', 'reddit', 'bilibili'],
@@ -447,6 +469,7 @@ export default function aggregateSearchClientTest() {
       expect(normalizeAggregateSearchStatus('connected', 0)).assertEqual('empty');
       expect(normalizeAggregateSearchStatus('needs_auth', 0)).assertEqual('needs_auth');
       expect(normalizeAggregateSearchStatus('auth_required', 0)).assertEqual('needs_auth');
+      expect(normalizeAggregateSearchStatus('unsupported', 0)).assertEqual('unsupported');
       expect(normalizeAggregateSearchStatus('limited', 0)).assertEqual('error');
       expect(normalizeAggregateSearchStatus('disabled', 0)).assertEqual('error');
     });
@@ -1749,6 +1772,8 @@ export default function aggregateSearchClientTest() {
     });
 
     it('dispatches Twitch only for interest continuation context', 0, async () => {
+      configureWaterfallEnabledSourcesForRuntime(['youtube', 'twitch']);
+      configureWaterfallSearchPolicyForRuntime({ domesticOnly: false, multilingual: true });
       const requests: WaterfallLoadRequest[] = [{
         source: 'youtube', continuation: null, limit: 10, phase: 'loading', message: '', mode: 'search'
       }, {
@@ -1763,17 +1788,47 @@ export default function aggregateSearchClientTest() {
         return Promise.resolve(aggregateBatch(source, 'context-' + source));
       };
 
-      await callAggregateSearchContinuation(
-        '', requests, '', { apiKey: '' },
-        (_batch: AggregateSearchSourceBatch): void => {}, loaderFor(ordinaryLoaded)
-      );
-      await callAggregateSearchContinuationForContext(
-        'interest', '', requests, '', { apiKey: '' },
-        (_batch: AggregateSearchSourceBatch): void => {}, loaderFor(interestLoaded)
-      );
+      try {
+        await callAggregateSearchContinuation(
+          '', requests, '', { apiKey: '' },
+          (_batch: AggregateSearchSourceBatch): void => {}, loaderFor(ordinaryLoaded)
+        );
+        await callAggregateSearchContinuationForContext(
+          'interest', '', requests, '', { apiKey: '' },
+          (_batch: AggregateSearchSourceBatch): void => {}, loaderFor(interestLoaded)
+        );
 
-      expect(ordinaryLoaded.join(',')).assertEqual('youtube');
-      expect(interestLoaded.join(',')).assertEqual('youtube,twitch');
+        expect(ordinaryLoaded.join(',')).assertEqual('youtube');
+        expect(interestLoaded.join(',')).assertEqual('youtube,twitch');
+      } finally {
+        configureWaterfallEnabledSourcesForRuntime(aggregateSearchRegistrySourceIds());
+        configureWaterfallSearchPolicyForRuntime({ domesticOnly: true, multilingual: false });
+      }
+    });
+
+    it('intersects interest recalls with enabled sources and the runtime search policy', 0, async () => {
+      configureWaterfallEnabledSourcesForRuntime(['bilibili', 'youtube', 'hackernews', 'twitch']);
+      configureWaterfallSearchPolicyForRuntime({ domesticOnly: true, multilingual: false });
+      const requests: WaterfallLoadRequest[] = ['bilibili', 'zhihu', 'youtube', 'hackernews', 'twitch'].map(
+        (source: string): WaterfallLoadRequest => ({
+          source: source, continuation: null, limit: 10, phase: 'loading', message: '', mode: 'search'
+        })
+      );
+      const loaded: string[] = [];
+      try {
+        await callAggregateSearchContinuationForContext(
+          'interest', '', requests, '', { apiKey: '' },
+          (_batch: AggregateSearchSourceBatch): void => {},
+          (source: AggregateSearchSource): Promise<AggregateSearchSourceBatch> => {
+            loaded.push(source);
+            return Promise.resolve(aggregateBatch(source, 'filtered-' + source));
+          }
+        );
+        expect(loaded.join(',')).assertEqual('bilibili');
+      } finally {
+        configureWaterfallEnabledSourcesForRuntime(aggregateSearchRegistrySourceIds());
+        configureWaterfallSearchPolicyForRuntime({ domesticOnly: true, multilingual: false });
+      }
     });
 
     it('passes the configured multilingual policy into interest recall source loading', 0, async () => {

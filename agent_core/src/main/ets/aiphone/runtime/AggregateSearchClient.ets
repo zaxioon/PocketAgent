@@ -349,6 +349,19 @@ export function aggregateSearchPolicyFromArgs(args: Object | null): AggregateSea
   };
 }
 
+function aggregateSearchArgsContainPolicy(args: Object | null): boolean {
+  if (args === null) {
+    return false;
+  }
+  const record = args as AggregateArgRecord;
+  return record.onlyDomesticSources !== undefined || record.domesticOnly !== undefined ||
+    record.includeMultilingualResults !== undefined || record.multilingual !== undefined;
+}
+
+function aggregateSearchPolicyForCall(args: Object | null): AggregateSearchPolicy {
+  return aggregateSearchArgsContainPolicy(args) ? aggregateSearchPolicyFromArgs(args) : waterfallSearchPolicyForRuntime();
+}
+
 export function aggregateSearchSourceMetadata(): AggregateSearchSourceMetadata[] {
   return aggregateSearchRegistryMetadata();
 }
@@ -368,6 +381,12 @@ function sourceAllowedByPolicy(source: AggregateSearchSource, policy: AggregateS
   return (metadata.languageFilterMode === 'native' || metadata.languageFilterMode === 'regional' ||
     metadata.languageFilterMode === 'post_filter') &&
     (metadata.languages.indexOf('zh-Hans') >= 0 || metadata.languages.indexOf('zh-Hant') >= 0);
+}
+
+export function waterfallInterestSourceAllowedForRuntime(source: string): boolean {
+  const candidate = source as AggregateSearchSource;
+  return aggregateSearchSourceIdsForContext('interest').indexOf(candidate) >= 0 &&
+    runtimeEnabledSources.indexOf(candidate) >= 0 && sourceAllowedByPolicy(candidate, runtimeSearchPolicy);
 }
 
 export function configureAggregateExternalProvidersForRuntime(config: AggregateExternalProviderConfig): void {
@@ -401,8 +420,10 @@ function normalizedAggregateSource(value: string): AggregateSearchSource | null 
     normalized as AggregateSearchSource : null;
 }
 
-export function aggregateSearchSourcesFromArgs(args: Object | null): AggregateSearchSource[] {
-  const policy = aggregateSearchPolicyFromArgs(args);
+export function aggregateSearchSourcesFromArgs(
+  args: Object | null,
+  policy: AggregateSearchPolicy = aggregateSearchPolicyFromArgs(args)
+): AggregateSearchSource[] {
   const raw = args === null ? undefined : (args as AggregateArgRecord).sources;
   const explicitSources: AggregateSearchSource[] = [];
   if (Array.isArray(raw)) {
@@ -537,6 +558,9 @@ export function normalizeAggregateSearchStatus(status: string, count: number): A
   }
   if (status === 'needs_auth' || status === 'auth_required') {
     return 'needs_auth';
+  }
+  if (status === 'unsupported') {
+    return 'unsupported';
   }
   return 'error';
 }
@@ -2074,8 +2098,13 @@ export async function callAggregateSearchContinuationForContext(
   loadSource: AggregateSearchSourceLoader = aggregateSourceBatch
 ): Promise<void> {
   const availableSources = aggregateSearchSourceIdsForContext(context);
-  const availableRequests = requests.filter((request: WaterfallLoadRequest): boolean =>
-    availableSources.indexOf(request.source as AggregateSearchSource) >= 0);
+  const availableRequests = requests.filter((request: WaterfallLoadRequest): boolean => {
+    const source = request.source as AggregateSearchSource;
+    if (availableSources.indexOf(source) < 0) {
+      return false;
+    }
+    return context !== 'interest' || waterfallInterestSourceAllowedForRuntime(source);
+  });
   await Promise.all(availableRequests.map((request: WaterfallLoadRequest): Promise<void> => {
     if (request.mode === 'native' && request.continuation === null) {
       onBatch(exhaustedAggregateBatch(request));
@@ -2129,8 +2158,8 @@ export async function callAggregateSearch(
   nowMs: number = Date.now()
 ): Promise<AggregateSearchResult> {
   const query = aggregateSearchQueryFromArgs(prompt, args);
-  const sources = aggregateSearchSourcesFromArgs(args);
-  const policy = aggregateSearchPolicyFromArgs(args);
+  const policy = aggregateSearchPolicyForCall(args);
+  const sources = aggregateSearchSourcesFromArgs(args, policy);
   configureWaterfallSearchPolicyForRuntime(policy);
   const preferenceDescription = args === null ? '' : textOf((args as AggregateArgRecord).preferenceDescription).trim();
   const tasks: Promise<AggregateSearchSourceBatch>[] = [];
