@@ -23,7 +23,8 @@ import { isRollingGoHotelBookingUrl, validHotelBookingOpenArgs } from '@loop/age
 import {
   advanceWaterfallFeed,
   applyWaterfallProfile,
-  aggregateSearchRegistrySourceIds,
+  aggregateSearchInterestSourceIds,
+  aggregateSearchSearchSourceIds,
   applyWaterfallExpandedQuery,
   applyWaterfallSourceSelection,
   callConfiguredAggregateSearchContinuation,
@@ -32,9 +33,11 @@ import {
   AggregateSearchSourceBatch,
   configureWaterfallEnabledSourcesForRuntime,
   configureWaterfallPreferenceProfileForRuntime,
+  configureWaterfallSearchPolicyForRuntime,
   failWaterfallExpansion,
+  finalizeInterestWaterfallRecallRanking,
   mergeAggregateSearchContinuationBatch,
-  mergeWaterfallBatch,
+  mergeWaterfallBatchDeferredRanking,
   mergeWaterfallFeedSnapshot,
   planWaterfallInterestRecall,
   planWaterfallContinuation,
@@ -49,7 +52,8 @@ import {
   WaterfallRankedCandidate,
   WaterfallSourcePhase,
   WaterfallSourceState,
-  waterfallExpansionPrompt
+  waterfallExpansionPrompt,
+  waterfallSearchPolicyForRuntime
 } from '@loop/agent-core';
 import router from '@ohos.router';
 import { abilityAccessCtrl, bundleManager, common, Permissions } from '@kit.AbilityKit';
@@ -874,6 +878,11 @@ function calendarPermissionGranted(permissions: string[], authResults: number[])
     authResults[readIndex] === 0 && authResults[writeIndex] === 0;
 }
 
+function waterfallSourcesForContext(enabledSources: string[], availableSources: AggregateSearchSource[]): string[] {
+  return enabledSources.filter((source: string): boolean =>
+    availableSources.indexOf(source as AggregateSearchSource) >= 0);
+}
+
 @Entry
 @Component
 struct Index {
@@ -1674,15 +1683,23 @@ struct Index {
   private runInterestRecallRequests(requests: WaterfallInterestRecallRequest[]): void {
     if (requests.length === 0 || this.interestWaterfallFeedState === null) return;
     const generation = this.interestWaterfallGeneration;
-    const requestedSources = requests.map((request: WaterfallInterestRecallRequest): string => request.sources[0]);
+    const requestedSources: string[] = [];
+    requests.forEach((request: WaterfallInterestRecallRequest): void => {
+      request.sources.forEach((source: string): void => {
+        if (requestedSources.indexOf(source) < 0) requestedSources.push(source);
+      });
+    });
     const requestSequences: Map<string, number> = new Map<string, number>();
     requestedSources.forEach((source: string): void => {
       const sequence = (this.interestSourceRequestSeq.get(source) ?? 0) + 1;
       this.interestSourceRequestSeq.set(source, sequence);
       requestSequences.set(source, sequence);
     });
+    const policy = waterfallSearchPolicyForRuntime();
     aiLogInfo('[AIPhone][WaterfallInterestRecallStart] generation=' + generation.toString() +
-      ' requests=' + requests.length.toString());
+      ' requests=' + requests.length.toString() +
+      ' domesticOnly=' + (policy.domesticOnly ? 'true' : 'false') +
+      ' multilingual=' + (policy.multilingual ? 'true' : 'false'));
     callConfiguredWaterfallInterestRecall(requests, (result: WaterfallInterestRecallBatch): void => {
       let current = this.interestWaterfallFeedState;
       if (current === null || generation !== this.interestWaterfallGeneration) return;
@@ -1695,12 +1712,12 @@ struct Index {
       } else if (result.batch.status.status !== 'success' && explorationIndex >= 0) {
         this.interestExplorationSources.splice(explorationIndex, 1);
       }
-      current = mergeWaterfallBatch(
-        current, result.candidates, this.interestSourceState(result), Date.now(), false).state;
+      current = mergeWaterfallBatchDeferredRanking(
+        current, result.candidates, this.interestSourceState(result)).state;
       this.interestWaterfallFeedState = current;
       this.publishInterestWaterfallPayload();
     }).then((): void => {
-      const current = this.interestWaterfallFeedState;
+      let current = this.interestWaterfallFeedState;
       if (current === null || generation !== this.interestWaterfallGeneration) return;
       current.sources.forEach((source: WaterfallSourceState): void => {
         if (requestedSources.indexOf(source.source) >= 0 &&
@@ -1712,6 +1729,8 @@ struct Index {
           source.reservedCount = 0;
         }
       });
+      current = finalizeInterestWaterfallRecallRanking(current, Date.now());
+      this.interestWaterfallFeedState = current;
       this.applyInterestWaterfallUpdate(planWaterfallContinuation(current));
       aiLogInfo('[AIPhone][WaterfallInterestRecallReady] generation=' + generation.toString());
     }).catch((error: Error): void => {
@@ -1726,7 +1745,9 @@ struct Index {
             source.message = '内容补充失败';
           }
         });
-        this.applyInterestWaterfallUpdate(planWaterfallContinuation(current));
+        const finalized = finalizeInterestWaterfallRecallRanking(current, Date.now());
+        this.interestWaterfallFeedState = finalized;
+        this.applyInterestWaterfallUpdate(planWaterfallContinuation(finalized));
       }
       aiLogError('[AIPhone][WaterfallInterestRecallFailed] generation=' + generation.toString() +
         ' error=' + error.message.substring(0, 240));
@@ -1736,7 +1757,8 @@ struct Index {
   private runInterestRecall(sources: string[] | null = null): void {
     const state = this.interestWaterfallFeedState;
     if (state === null) return;
-    const enabledSources = sources === null ? state.enabledSources : sources;
+    const enabledSources = waterfallSourcesForContext(
+      sources === null ? state.enabledSources : sources, aggregateSearchInterestSourceIds());
     state.sources.forEach((source: WaterfallSourceState): void => {
       if (enabledSources.indexOf(source.source) < 0 || state.enabledSources.indexOf(source.source) < 0) return;
       source.phase = 'loading';
@@ -1756,7 +1778,9 @@ struct Index {
       this.interestWaterfallGeneration += 1;
       this.interestRecallRound = 0;
       this.interestExplorationSources = [];
-      const enabledSources = this.waterfallPreferenceProfile.discoveryEnabledSources.slice();
+      const interestSources = aggregateSearchInterestSourceIds();
+      const enabledSources = waterfallSourcesForContext(
+        this.waterfallPreferenceProfile.discoveryEnabledSources, interestSources);
       this.interestWaterfallFeedState = {
         mode: 'interest',
         interestFallbackStarted: true,
@@ -1772,7 +1796,7 @@ struct Index {
         stable: [],
         tail: [],
         reserve: [],
-        sources: aggregateSearchRegistrySourceIds().map(
+        sources: interestSources.map(
           (source: string): WaterfallSourceState => ({
           source,
           phase: enabledSources.indexOf(source) >= 0 ? 'loading' : 'exhausted',
@@ -1905,15 +1929,16 @@ struct Index {
       this.waterfallFeedSurfaceId = surfaceId;
     }
     if (action.id === 'waterfall.sources.select') {
-      const enabledSources = waterfallEnabledSourcesFromAction(action, surfaceId);
-      if (enabledSources === null) {
+      const selectedSources = waterfallEnabledSourcesFromAction(action, surfaceId);
+      if (selectedSources === null) {
         this.logHtmlHomeActionError(action, 'invalid_waterfall_source_selection');
         return true;
       }
+      const searchEnabledSources = waterfallSourcesForContext(selectedSources, aggregateSearchSearchSourceIds());
       const feedState = this.waterfallFeedState as WaterfallFeedState;
       const next = applyWaterfallSourceSelection(
         feedState,
-        enabledSources,
+        searchEnabledSources,
         Date.now()
       );
       this.applyWaterfallUpdate(document, next);
@@ -1953,13 +1978,16 @@ struct Index {
     }
     if (state === null) return;
     if (action.id === 'waterfall.sources.select') {
-      const enabledSources = waterfallEnabledSourcesFromAction(action, surfaceId);
-      if (enabledSources === null) return;
-      const addedSources = enabledSources.filter((source: string): boolean =>
+      const selectedSources = waterfallEnabledSourcesFromAction(action, surfaceId);
+      if (selectedSources === null) return;
+      const interestEnabledSources = waterfallSourcesForContext(
+        selectedSources, aggregateSearchInterestSourceIds());
+      const addedSources = interestEnabledSources.filter((source: string): boolean =>
         state.enabledSources.indexOf(source) < 0);
-      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().saveDiscoveryEnabledSources(enabledSources);
-      configureWaterfallEnabledSourcesForRuntime(enabledSources as AggregateSearchSource[]);
-      const update = applyWaterfallSourceSelection(state, enabledSources, Date.now());
+      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().saveDiscoveryEnabledSources(
+        interestEnabledSources);
+      configureWaterfallEnabledSourcesForRuntime(interestEnabledSources as AggregateSearchSource[]);
+      const update = applyWaterfallSourceSelection(state, interestEnabledSources, Date.now());
       const plannedSources = update.loadRequests.map((request: WaterfallLoadRequest): string => request.source);
       const recallSources = addedSources.filter((source: string): boolean => plannedSources.indexOf(source) < 0);
       this.applyInterestWaterfallUpdate(update);
@@ -3076,11 +3104,19 @@ struct Index {
     return typeof value === 'boolean' ? value : fallback;
   }
 
+  private syncAggregateSearchRuntimePolicy(): void {
+    configureWaterfallSearchPolicyForRuntime({
+      domesticOnly: this.aggregateDomesticOnly,
+      multilingual: this.aggregateMultilingual
+    });
+  }
+
   private loadAggregateSearchPolicy(): void {
     const store = this.aggregateSearchPolicyPreferences();
     if (store === null) {
       this.aggregateDomesticOnly = DEFAULT_AGGREGATE_SEARCH_POLICY.onlyDomesticSources;
       this.aggregateMultilingual = DEFAULT_AGGREGATE_SEARCH_POLICY.includeMultilingualResults;
+      this.syncAggregateSearchRuntimePolicy();
       return;
     }
     try {
@@ -3096,9 +3132,11 @@ struct Index {
       this.aggregateDomesticOnly = DEFAULT_AGGREGATE_SEARCH_POLICY.onlyDomesticSources;
       this.aggregateMultilingual = DEFAULT_AGGREGATE_SEARCH_POLICY.includeMultilingualResults;
     }
+    this.syncAggregateSearchRuntimePolicy();
   }
 
   private saveAggregateSearchPolicy(): void {
+    this.syncAggregateSearchRuntimePolicy();
     const store = this.aggregateSearchPolicyPreferences();
     if (store === null) {
       return;
@@ -3157,7 +3195,7 @@ struct Index {
 
   private loadWaterfallPreferences(): void {
     try {
-      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().load();
+      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().loadForNewSession();
     } catch (_error) {
       this.waterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
     }

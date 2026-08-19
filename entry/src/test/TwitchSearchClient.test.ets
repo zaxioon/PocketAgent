@@ -1,143 +1,296 @@
 import { describe, expect, it } from '@ohos/hypium';
 import {
+  acquireTwitchAppToken,
+  discoverTwitchInterestStreams,
+  resetTwitchTokenCacheForTests,
+  twitchAppTokenUrl,
+  twitchGamesUrl,
+  twitchHelixHeaders,
+  twitchStreamsUrl,
+  twitchTopGamesUrl,
   TwitchHttpResult,
-  TwitchSearchTransport,
-  searchTwitchChannels,
-  twitchBatchFromHttpResult,
-  twitchChannelSearchUrl,
-  twitchChannelsFromPayload
+  TwitchSearchConfig,
+  TwitchSearchTransport
 } from '@loop/agent-core';
 
-interface TwitchChannelFixture {
-  broadcaster_language: string;
-  broadcaster_login: string;
-  display_name: string;
-  game_id?: string;
-  game_name?: string;
+interface TwitchRequestFixture {
+  method: string;
+  url: string;
+  body: string;
+  authorization: string;
+}
+
+interface TwitchGameFixture {
   id: string;
-  is_live: boolean;
-  tags?: string[];
-  thumbnail_url: string;
+  name: string;
+  igdb_id?: string;
+}
+
+interface TwitchStreamFixture {
+  id: string;
+  user_login: string;
+  user_name: string;
+  game_id: string;
+  game_name: string;
+  type: string;
   title: string;
+  viewer_count: number;
   started_at: string;
+  language: string;
+  thumbnail_url: string;
+  tags: string[];
 }
 
-interface TwitchPaginationFixture {
-  cursor: string;
+interface TwitchGamesPayloadFixture {
+  data: TwitchGameFixture[];
 }
 
-interface TwitchChannelPayloadFixture {
-  data: TwitchChannelFixture[];
-  pagination: TwitchPaginationFixture;
+interface TwitchStreamsPayloadFixture {
+  data: TwitchStreamFixture[];
 }
 
-const LIVE_CHANNEL_FIXTURE: TwitchChannelFixture = {
-  broadcaster_language: 'EN',
-  broadcaster_login: 'twitchdev',
-  display_name: 'TwitchDev',
-  game_id: '509670',
-  game_name: 'Science & Technology',
-  id: '141981764',
-  is_live: true,
-  tags: ['English', 'SoftwareDevelopment', 'English'],
-  thumbnail_url: 'https://static-cdn.example/twitchdev-300.png',
-  title: 'Twitch API live coding',
-  started_at: '2026-08-14T08:30:00Z'
-};
+function tokenResponse(token: string, expiresIn: number = 3600): TwitchHttpResult {
+  return { code: 200, text: '{"access_token":' + JSON.stringify(token) +
+    ',"expires_in":' + expiresIn.toString() + ',"token_type":"bearer"}' };
+}
 
-const OFFLINE_CHANNEL_FIXTURE: TwitchChannelFixture = {
-  broadcaster_language: 'zh',
-  broadcaster_login: 'offline_dev',
-  display_name: 'Offline Dev',
-  id: '2',
-  is_live: false,
-  thumbnail_url: 'https://static-cdn.example/offline.png',
-  title: 'Previous stream',
-  started_at: '2026-08-01T00:00:00Z'
-};
+function gamesResponse(data: TwitchGameFixture[]): TwitchHttpResult {
+  const payload: TwitchGamesPayloadFixture = { data: data };
+  return { code: 200, text: JSON.stringify(payload) };
+}
 
-const PAGINATION_FIXTURE: TwitchPaginationFixture = { cursor: 'next-cursor==' };
-const CHANNEL_PAYLOAD_FIXTURE: TwitchChannelPayloadFixture = {
-  data: [LIVE_CHANNEL_FIXTURE, OFFLINE_CHANNEL_FIXTURE],
-  pagination: PAGINATION_FIXTURE
-};
-const CHANNEL_PAYLOAD: string = JSON.stringify(CHANNEL_PAYLOAD_FIXTURE);
+function stream(id: string, login: string, gameId: string, gameName: string,
+  viewerCount: number, language: string = 'en'): TwitchStreamFixture {
+  return {
+    id: id, user_login: login, user_name: login, game_id: gameId, game_name: gameName,
+    type: 'live', title: login + ' title', viewer_count: viewerCount,
+    started_at: '2026-08-19T08:00:00Z', language: language,
+    thumbnail_url: 'https://img.example/' + id + '-{width}x{height}.jpg', tags: ['Live']
+  };
+}
 
-class RecordingTransport implements TwitchSearchTransport {
-  calls: number = 0;
-  result: TwitchHttpResult;
+function streamsResponse(data: TwitchStreamFixture[]): TwitchHttpResult {
+  const payload: TwitchStreamsPayloadFixture = { data: data };
+  return { code: 200, text: JSON.stringify(payload) };
+}
 
-  constructor(result: TwitchHttpResult) {
-    this.result = result;
+const TECH_GAMES: TwitchGameFixture[] = [
+  { id: 'tech-1', name: 'Science & Technology' },
+  { id: 'tech-2', name: 'Software and Game Development' },
+  { id: 'tech-3', name: 'Makers & Crafting' }
+];
+const TOP_GAMES: TwitchGameFixture[] = [
+  { id: 'chatting', name: 'Just Chatting', igdb_id: '' },
+  { id: 'game-1', name: 'Actual Hot Game', igdb_id: 'igdb-1' }
+];
+const TECH_STREAMS: TwitchStreamFixture[] = [
+  stream('tech-stream-2', 'tech-two', 'tech-2', 'Software and Game Development', 200),
+  stream('tech-stream-1', 'tech-one', 'tech-1', 'Science & Technology', 300),
+  stream('tech-stream-3', 'tech-three', 'tech-3', 'Makers & Crafting', 100)
+];
+const GAME_STREAMS: TwitchStreamFixture[] = [
+  stream('game-stream-1', 'game-one', 'game-1', 'Actual Hot Game', 999)
+];
+const EMPTY_GAMES: TwitchGameFixture[] = [];
+
+class QueueTransport implements TwitchSearchTransport {
+  getResponses: TwitchHttpResult[];
+  postResponses: TwitchHttpResult[];
+  getIndex: number = 0;
+  postIndex: number = 0;
+  calls: TwitchRequestFixture[] = [];
+
+  constructor(postResponses: TwitchHttpResult[], getResponses: TwitchHttpResult[]) {
+    this.postResponses = postResponses;
+    this.getResponses = getResponses;
   }
 
-  async get(_url: string, _clientId: string, _appAccessToken: string): Promise<TwitchHttpResult> {
-    this.calls += 1;
-    return this.result;
+  async get(url: string, headers: Record<string, string>): Promise<TwitchHttpResult> {
+    this.calls.push({ method: 'GET', url: url, body: '', authorization: headers['Authorization'] ?? '' });
+    const response = this.getResponses[this.getIndex];
+    this.getIndex += 1;
+    return response === undefined ? { code: 599, text: 'missing fake GET response' } : response;
+  }
+
+  async post(url: string, _headers: Record<string, string>, body: string): Promise<TwitchHttpResult> {
+    this.calls.push({ method: 'POST', url: url, body: body, authorization: '' });
+    const response = this.postResponses[this.postIndex];
+    this.postIndex += 1;
+    return response === undefined ? { code: 599, text: 'missing fake POST response' } : response;
+  }
+}
+
+class FailingTokenTransport implements TwitchSearchTransport {
+  async get(_url: string, _headers: Record<string, string>): Promise<TwitchHttpResult> {
+    return { code: 200, text: '{"data":[]}' };
+  }
+
+  async post(_url: string, _headers: Record<string, string>, _body: string): Promise<TwitchHttpResult> {
+    throw new Error('simulated token transport failure');
   }
 }
 
 export default function twitchSearchClientTest(): void {
-  describe('twitchSearchClient', () => {
-    it('builds the official Helix channel-search URL with live and cursor controls', 0, () => {
-      const url = twitchChannelSearchUrl('Codex 中文', { limit: 999, liveOnly: true, cursor: 'next==' });
-      expect(url).assertEqual('https://api.twitch.tv/helix/search/channels?' +
-        'query=Codex%20%E4%B8%AD%E6%96%87&first=100&live_only=true&after=next%3D%3D');
+  describe('twitchInterestDiscoveryClient', () => {
+    it('builds multi-category, top-games and language-aware stream URLs', 0, () => {
+      expect(twitchAppTokenUrl()).assertEqual('https://id.twitch.tv/oauth2/token');
+      expect(twitchGamesUrl(['Science & Technology', 'Makers & Crafting'])).assertEqual(
+        'https://api.twitch.tv/helix/games?name=Science%20%26%20Technology&name=Makers%20%26%20Crafting');
+      expect(twitchTopGamesUrl(10)).assertEqual('https://api.twitch.tv/helix/games/top?first=10');
+      expect(twitchStreamsUrl(['tech-1', 'tech-2'], 3, false)).assertEqual(
+        'https://api.twitch.tv/helix/streams?first=3&game_id=tech-1&game_id=tech-2&language=zh');
+      expect(twitchStreamsUrl(['game-1'], 1, true)).assertEqual(
+        'https://api.twitch.tv/helix/streams?first=1&game_id=game-1');
+      const headers = twitchHelixHeaders(' client-id ', ' app-token ');
+      expect(headers['Client-Id']).assertEqual('client-id');
+      expect(headers['Authorization']).assertEqual('Bearer app-token');
     });
 
-    it('normalizes broadcaster, live, language, game, thumbnail and cursor fields', 0, () => {
-      const batch = twitchChannelsFromPayload(CHANNEL_PAYLOAD);
+    it('returns three hottest technology streams and one hottest actual-game stream', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const transport = new QueueTransport([tokenResponse('token')], [
+        gamesResponse(TECH_GAMES), streamsResponse(TECH_STREAMS), gamesResponse(TOP_GAMES), streamsResponse(GAME_STREAMS)
+      ]);
+      const batch = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, { multilingual: true }, transport, 1000);
       expect(batch.status).assertEqual('success');
-      expect(batch.items.length).assertEqual(2);
-      expect(batch.continuation).assertEqual('next-cursor==');
-      expect(batch.items[0].broadcasterLogin).assertEqual('twitchdev');
-      expect(batch.items[0].broadcasterName).assertEqual('TwitchDev');
-      expect(batch.items[0].title).assertEqual('Twitch API live coding');
-      expect(batch.items[0].gameName).assertEqual('Science & Technology');
-      expect(batch.items[0].language).assertEqual('en');
-      expect(batch.items[0].isLive).assertTrue();
-      expect(batch.items[0].startedAt).assertEqual('2026-08-14T08:30:00Z');
-      expect(batch.items[0].thumbnailUrl).assertEqual('https://static-cdn.example/twitchdev-300.png');
-      expect(batch.items[0].url).assertEqual('https://www.twitch.tv/twitchdev');
-      expect(batch.items[0].tags.join(',')).assertEqual('English,SoftwareDevelopment');
-      expect(batch.items[1].isLive).assertFalse();
-      expect(batch.items[1].startedAt).assertEqual('');
+      expect(batch.items.length).assertEqual(4);
+      expect(batch.items[0].id).assertEqual('tech-stream-1');
+      expect(batch.items[0].viewerCount).assertEqual(300);
+      expect(batch.items[0].kind).assertEqual('tech');
+      expect(batch.items[3].kind).assertEqual('game');
+      expect(transport.calls[2].url.indexOf('language=')).assertEqual(-1);
+      expect(transport.calls[3].url).assertEqual('https://api.twitch.tv/helix/games/top?first=10');
+      expect(transport.calls[4].url.indexOf('game_id=game-1')).assertLarger(-1);
+      expect(batch.message.indexOf('Actual Hot Game')).assertLarger(-1);
     });
 
-    it('does not call the network when deployment credentials are missing', 0, async () => {
-      const transport = new RecordingTransport({ code: 200, text: CHANNEL_PAYLOAD });
-      const batch = await searchTwitchChannels({ clientId: '', appAccessToken: '' }, 'codex', {}, transport);
-      expect(transport.calls).assertEqual(0);
-      expect(batch.status).assertEqual('unsupported');
-      expect(batch.reason).assertEqual('disabled');
-      expect(batch.message.indexOf('未发起网络请求') >= 0).assertTrue();
-      expect(batch.message.indexOf('client_credentials') >= 0).assertTrue();
+    it('caches categories for 24h and top game for 10m', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const config: TwitchSearchConfig = { clientId: 'id', clientSecret: 'secret' };
+      const transport = new QueueTransport([tokenResponse('token')], [
+        gamesResponse(TECH_GAMES), streamsResponse(TECH_STREAMS), gamesResponse(TOP_GAMES), streamsResponse(GAME_STREAMS),
+        streamsResponse(TECH_STREAMS), streamsResponse(GAME_STREAMS),
+        streamsResponse(TECH_STREAMS), gamesResponse(TOP_GAMES), streamsResponse(GAME_STREAMS)
+      ]);
+      await discoverTwitchInterestStreams(config, { multilingual: true }, transport, 1000);
+      const afterCold = transport.calls.length;
+      await discoverTwitchInterestStreams(config, { multilingual: true }, transport, 2000);
+      expect(transport.calls.length - afterCold).assertEqual(2);
+      const afterWarm = transport.calls.length;
+      await discoverTwitchInterestStreams(config, { multilingual: true }, transport, 602001);
+      expect(transport.calls.length - afterWarm).assertEqual(3);
+      expect(transport.calls[afterWarm + 1].url.indexOf('/helix/games/top')).assertLarger(-1);
     });
 
-    it('distinguishes auth failure, rate limiting, empty results and malformed payloads', 0, () => {
-      const auth = twitchBatchFromHttpResult({ code: 401, text: 'Unauthorized' });
-      const limited = twitchBatchFromHttpResult({ code: 429, text: 'Too Many Requests', retryAfterSeconds: 30 });
-      const empty = twitchBatchFromHttpResult({ code: 200, text: '{"data":[],"pagination":{}}' });
-      const malformed = twitchBatchFromHttpResult({ code: 200, text: '{bad json' });
-      expect(auth.status).assertEqual('needs_auth');
-      expect(auth.reason).assertEqual('auth');
-      expect(auth.message.indexOf('无需终端用户登录') >= 0).assertTrue();
-      expect(limited.status).assertEqual('error');
-      expect(limited.reason).assertEqual('rate_limited');
-      expect(limited.retryAfterSeconds).assertEqual(30);
+    it('accepts partial category resolution and de-duplicates a repeated stream', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const duplicateGame: TwitchStreamFixture[] = [
+        stream('same-stream', 'same-channel', 'game-1', 'Actual Hot Game', 999)
+      ];
+      const duplicateTech: TwitchStreamFixture[] = [
+        stream('same-stream', 'same-channel', 'tech-1', 'Science & Technology', 100)
+      ];
+      const partialGames: TwitchGameFixture[] = [{ id: 'tech-1', name: 'Science & Technology' }];
+      const transport = new QueueTransport([tokenResponse('token')], [
+        gamesResponse(partialGames), streamsResponse(duplicateTech),
+        gamesResponse(TOP_GAMES), streamsResponse(duplicateGame)
+      ]);
+      const batch = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, { multilingual: false }, transport, 1000);
+      expect(batch.status).assertEqual('success');
+      expect(batch.items.length).assertEqual(1);
+      expect(batch.message.indexOf('科技分类解析 1/3')).assertLarger(-1);
+      expect(transport.calls[2].url.indexOf('game_id=tech-1')).assertLarger(-1);
+      expect(transport.calls[2].url.indexOf('language=zh')).assertLarger(-1);
+      expect(transport.calls[4].url.indexOf('language=zh')).assertLarger(-1);
+    });
+
+    it('keeps the successful branch when the other discovery branch fails', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const gameOnlyTransport = new QueueTransport([tokenResponse('token')], [
+        { code: 500, text: '' }, gamesResponse(TOP_GAMES), streamsResponse(GAME_STREAMS)
+      ]);
+      const gameOnly = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, { multilingual: true }, gameOnlyTransport, 1000);
+      expect(gameOnly.status).assertEqual('success');
+      expect(gameOnly.items[0].kind).assertEqual('game');
+      expect(gameOnly.message.indexOf('部分分支失败')).assertLarger(-1);
+
+      resetTwitchTokenCacheForTests();
+      const techOnlyTransport = new QueueTransport([tokenResponse('token')], [
+        gamesResponse(TECH_GAMES), streamsResponse(TECH_STREAMS), { code: 500, text: '' }
+      ]);
+      const techOnly = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, { multilingual: true }, techOnlyTransport, 1000);
+      expect(techOnly.status).assertEqual('success');
+      expect(techOnly.items.length).assertEqual(3);
+      expect(techOnly.items[0].kind).assertEqual('tech');
+      expect(techOnly.message.indexOf('部分分支失败')).assertLarger(-1);
+    });
+
+    it('distinguishes true empty results from double-empty failures', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const emptyTransport = new QueueTransport(
+        [tokenResponse('token')], [gamesResponse(EMPTY_GAMES), gamesResponse(EMPTY_GAMES)]);
+      const empty = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, {}, emptyTransport, 1000);
       expect(empty.status).assertEqual('empty');
-      expect(empty.reason).assertEqual('empty');
-      expect(malformed.status).assertEqual('error');
-      expect(malformed.reason).assertEqual('provider_error');
+
+      resetTwitchTokenCacheForTests();
+      const failedTransport = new QueueTransport([tokenResponse('token')], [
+        { code: 429, text: '', retryAfterSeconds: 30 }, { code: 500, text: '' }
+      ]);
+      const failed = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, {}, failedTransport, 1000);
+      expect(failed.status).assertEqual('error');
+      expect(failed.reason).assertEqual('rate_limited');
+      expect(failed.retryAfterSeconds).assertEqual(30);
     });
 
-    it('uses the injected transport and preserves the provider cursor', 0, async () => {
-      const transport = new RecordingTransport({ code: 200, text: CHANNEL_PAYLOAD });
-      const batch = await searchTwitchChannels({ clientId: 'client-id', appAccessToken: 'app-token' },
-        'twitchdev', { liveOnly: false }, transport);
-      expect(transport.calls).assertEqual(1);
-      expect(batch.items.length).assertEqual(2);
-      expect(batch.continuation).assertEqual('next-cursor==');
+    it('retries the whole discovery operation once after a Helix 401', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const transport = new QueueTransport([tokenResponse('old-token'), tokenResponse('new-token')], [
+        gamesResponse(TECH_GAMES), { code: 401, text: '' },
+        gamesResponse(TECH_GAMES), streamsResponse(TECH_STREAMS), gamesResponse(TOP_GAMES), streamsResponse(GAME_STREAMS)
+      ]);
+      const batch = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, { multilingual: true }, transport, 1000);
+      expect(batch.status).assertEqual('success');
+      const gameResolveCalls = transport.calls.filter((call: TwitchRequestFixture): boolean =>
+        call.url.indexOf('/helix/games?') >= 0);
+      expect(gameResolveCalls.length).assertEqual(2);
+      expect(transport.postIndex).assertEqual(2);
+      expect(transport.calls[2].authorization).assertEqual('Bearer old-token');
+      expect(transport.calls[5].authorization).assertEqual('Bearer new-token');
+    });
+
+    it('does no network work without credentials and classifies token failures as auth', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const missingTransport = new QueueTransport([], []);
+      const missing = await discoverTwitchInterestStreams(
+        { clientId: '', clientSecret: '' }, {}, missingTransport, 1000);
+      expect(missingTransport.calls.length).assertEqual(0);
+      expect(missing.reason).assertEqual('disabled');
+
+      resetTwitchTokenCacheForTests();
+      const tokenFailure = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, {}, new FailingTokenTransport(), 1000);
+      expect(tokenFailure.status).assertEqual('needs_auth');
+      expect(tokenFailure.reason).assertEqual('auth');
+    });
+
+    it('mints once for concurrent requests and refreshes before expiry', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const config: TwitchSearchConfig = { clientId: 'client-id', clientSecret: 'client-secret' };
+      const transport = new QueueTransport([tokenResponse('token-1'), tokenResponse('token-2')], []);
+      const tokens = await Promise.all([
+        acquireTwitchAppToken(config, transport, 1000), acquireTwitchAppToken(config, transport, 1000)
+      ]);
+      expect(tokens.join(',')).assertEqual('token-1,token-1');
+      expect(await acquireTwitchAppToken(config, transport, 3000000)).assertEqual('token-1');
+      expect(await acquireTwitchAppToken(config, transport, 3301000)).assertEqual('token-2');
+      expect(transport.postIndex).assertEqual(2);
     });
   });
 }

@@ -5,6 +5,12 @@ export type AggregateSearchSource = 'youtube' | 'bilibili' | 'x' | 'hackernews' 
 export type AggregateSearchStatus = 'success' | 'empty' | 'needs_auth' | 'unsupported' | 'error';
 export type AggregateSearchLanguageTag = 'zh-Hans' | 'zh-Hant' | 'en';
 export type AggregateSearchLanguageFilterMode = 'intrinsic' | 'native' | 'regional' | 'post_filter' | 'none';
+export type AggregateSearchSourceContext = 'search' | 'interest';
+
+export interface AggregateSearchSourceCapabilities {
+  search: boolean;
+  interest: boolean;
+}
 
 export interface AggregateSearchPolicy {
   domesticOnly: boolean;
@@ -18,6 +24,7 @@ export interface AggregateSearchSourceMetadata {
   languageFilterMode: AggregateSearchLanguageFilterMode;
   introducedInRegistryVersion: number;
   defaultEnabled: boolean;
+  capabilities: AggregateSearchSourceCapabilities;
 }
 
 export interface AggregateSearchRowData {
@@ -78,6 +85,7 @@ export interface AggregateSearchSourceBatch {
   posts: AggregateSearchPost[];
   status: AggregateSearchSourceStatus;
   continuation: WaterfallContinuation | null;
+  rawCount?: number;
 }
 
 export function emptyAggregateSearchResult(): AggregateSearchResult {

@@ -7,7 +7,10 @@ import {
   aggregateSearchDefaultEnabledSourceIds,
   aggregateSearchRegistryMetadata,
   aggregateSearchRegistrySourceIds,
-  aggregateSearchRegistryVersion
+  aggregateSearchSearchSourceIds,
+  aggregateSearchRegistryVersion,
+  WaterfallExplicitPreference,
+  WaterfallPreferenceWeight
 } from '@loop/agent-core';
 import {
   emptyWaterfallPreferenceProfile,
@@ -44,6 +47,17 @@ interface SearchSourceArgs {
   includeMultilingualResults?: boolean;
 }
 
+interface LegacyPreferenceFixture {
+  version: number;
+  topicWeights: WaterfallPreferenceWeight[];
+  sourceWeights: WaterfallPreferenceWeight[];
+  formatWeights: WaterfallPreferenceWeight[];
+  explicitRules: WaterfallExplicitPreference[];
+  recentEvidence: WaterfallBehaviorEvidence[];
+  enabledSources: string[];
+  updatedAt: number;
+}
+
 function event(
   behavior: 'play_complete' | 'read_complete' | 'dwell' | 'quick_skip',
   timestamp: number,
@@ -67,7 +81,7 @@ function weight(profile: WaterfallPreferenceProfile, key: string): number {
   return 0;
 }
 
-function legacyProfile(enabledSources: string[]): Object {
+function legacyProfile(enabledSources: string[]): LegacyPreferenceFixture {
   return {
     version: 1,
     topicWeights: [],
@@ -100,7 +114,7 @@ export default function waterfallPreferencesStoreTest() {
       const migrated = new WaterfallPreferencesStore(native as Object as preferences.Preferences).load();
       expect(migrated.version).assertEqual(2);
       expect(migrated.discoveryEnabledSources.join(','))
-        .assertEqual('youtube,x,douban,applepodcasts,twitch');
+        .assertEqual('youtube,x,applepodcasts,twitch');
 
       native.putSync(WATERFALL_PREFERENCES_KEY, JSON.stringify({ version: 2 }));
       expect(new WaterfallPreferencesStore(native as Object as preferences.Preferences).load().recentEvidence.length)
@@ -128,7 +142,7 @@ export default function waterfallPreferencesStoreTest() {
         includeMultilingualResults: true
       };
       expect(aggregateSearchSourcesFromArgs(allSources).join(','))
-        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
+        .assertEqual(aggregateSearchSearchSourceIds().join(','));
     });
 
     it('adds newly registered default sources without re-enabling an older disabled source', 0, () => {
@@ -141,7 +155,7 @@ export default function waterfallPreferencesStoreTest() {
 
       const migrated = new WaterfallPreferencesStore(native as Object as preferences.Preferences).load();
       expect(migrated.enabledSources.indexOf('x')).assertEqual(-1);
-      expect(migrated.enabledSources.indexOf('douban') >= 0).assertTrue();
+      expect(migrated.enabledSources.indexOf('douban')).assertEqual(-1);
       expect(migrated.enabledSources.indexOf('applepodcasts') >= 0).assertTrue();
       expect(migrated.enabledSources.indexOf('twitch') >= 0).assertTrue();
       expect(migrated.sourceRegistryVersion).assertEqual(aggregateSearchRegistryVersion());
@@ -165,8 +179,40 @@ export default function waterfallPreferencesStoreTest() {
         maxVersion = Math.max(maxVersion, item.introducedInRegistryVersion);
       });
       expect(aggregateSearchRegistryVersion()).assertEqual(maxVersion);
+      expect(aggregateSearchRegistrySourceIds().indexOf('douban')).assertEqual(-1);
+      expect(aggregateSearchRegistrySourceIds().indexOf('applepodcasts')).assertLarger(-1);
+      expect(aggregateSearchRegistrySourceIds().indexOf('twitch')).assertLarger(-1);
       expect(emptyWaterfallPreferenceProfile().enabledSources.join(','))
         .assertEqual(aggregateSearchDefaultEnabledSourceIds().join(','));
+    });
+
+    it('resets stored source selection for a new session without losing other preferences', 0, () => {
+      const native = new MemoryPreferences();
+      const stored = legacyProfile(['twitch']);
+      stored.topicWeights = [{ key: 'AI', weight: 4, updatedAt: 900 }];
+      stored.sourceWeights = [{ key: 'youtube', weight: 2, updatedAt: 900 }];
+      stored.formatWeights = [{ key: 'landscape_video', weight: 1, updatedAt: 900 }];
+      stored.explicitRules = [{ dimension: 'source', key: 'x', effect: 'downweight' }];
+      stored.recentEvidence = [event('dwell', 900)];
+      native.putSync(WATERFALL_PREFERENCES_KEY, JSON.stringify(stored));
+
+      const store = new WaterfallPreferencesStore(native as Object as preferences.Preferences);
+      const started = store.loadForNewSession();
+      const defaults = aggregateSearchDefaultEnabledSourceIds().join(',');
+      expect(started.enabledSources.join(',')).assertEqual(defaults);
+      expect(started.topicWeights[0].weight).assertEqual(4);
+      expect(started.sourceWeights[0].weight).assertEqual(2);
+      expect(started.formatWeights[0].weight).assertEqual(1);
+      expect(started.explicitRules[0].effect).assertEqual('downweight');
+      expect(started.recentEvidence[0].candidateId).assertEqual('candidate-1');
+
+      const reopened = new WaterfallPreferencesStore(native as Object as preferences.Preferences);
+      expect(reopened.load().enabledSources.join(',')).assertEqual(defaults);
+      expect(store.recordBehavior(event('read_complete', 2000, 'candidate-2')).enabledSources.join(','))
+        .assertEqual(defaults);
+      expect(store.replaceExplicitPreferences([
+        { dimension: 'topic', key: '科技', effect: 'boost' }
+      ]).enabledSources.join(',')).assertEqual(defaults);
     });
 
     it('applies behavior weights, half-life, repeated quick-skip and clamps dimensions', 0, () => {

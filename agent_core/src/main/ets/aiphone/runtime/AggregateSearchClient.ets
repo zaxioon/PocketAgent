@@ -14,17 +14,19 @@ import {
   DoubanPublicSearchItem
 } from './DoubanPlaywrightMcpClient';
 import {
-  searchTwitchChannels,
+  discoverTwitchInterestStreams,
   TwitchChannelSearchBatch,
   TwitchChannelSearchItem,
   TwitchSearchConfig
 } from './TwitchSearchClient';
+import { aiLogInfo } from './AiphoneLogger';
 import {
   AggregateSearchPolicy,
   AggregateSearchPost,
   AggregateSearchResult,
   AggregateSearchRowData,
   AggregateSearchSource,
+  AggregateSearchSourceContext,
   AggregateSearchSourceMetadata,
   AggregateSearchStatus,
   AggregateSearchSourceStatus,
@@ -35,7 +37,9 @@ import {
 import {
   aggregateSearchRegistryMetadata,
   aggregateSearchRegistryMetadataFor,
-  aggregateSearchRegistrySourceIds
+  aggregateSearchRegistrySourceIds,
+  aggregateSearchSearchSourceIds,
+  aggregateSearchSourceIdsForContext
 } from './AggregateSearchSourceRegistry';
 import {
   WaterfallCandidate,
@@ -235,7 +239,7 @@ export const AGGREGATE_SEARCH_PARTIAL_THROTTLE_MS: number = 5000;
 let runtimeEnabledSources: AggregateSearchSource[] = aggregateSearchRegistrySourceIds();
 let runtimeExternalProviderConfig: AggregateExternalProviderConfig = {
   doubanPlaywright: { mcpUrl: '', bearerToken: '' },
-  twitch: { clientId: '', appAccessToken: '' }
+  twitch: { clientId: '', clientSecret: '' }
 };
 let runtimePreferenceProfile: WaterfallPreferenceSnapshot | undefined = undefined;
 let runtimeSearchPolicy: AggregateSearchPolicy = {
@@ -374,7 +378,7 @@ export function configureAggregateExternalProvidersForRuntime(config: AggregateE
     },
     twitch: {
       clientId: config.twitch.clientId.trim(),
-      appAccessToken: config.twitch.appAccessToken.trim()
+      clientSecret: config.twitch.clientSecret.trim()
     }
   };
 }
@@ -393,7 +397,7 @@ function normalizedAggregateSource(value: string): AggregateSearchSource | null 
   if (normalized === '红迪') {
     normalized = 'reddit';
   }
-  return aggregateSearchRegistrySourceIds().indexOf(normalized as AggregateSearchSource) >= 0 ?
+  return aggregateSearchSearchSourceIds().indexOf(normalized as AggregateSearchSource) >= 0 ?
     normalized as AggregateSearchSource : null;
 }
 
@@ -410,7 +414,7 @@ export function aggregateSearchSourcesFromArgs(args: Object | null): AggregateSe
     });
   }
   const candidates: AggregateSearchSource[] = !Array.isArray(raw) || explicitSources.length === 0 ?
-    aggregateSearchRegistrySourceIds() : explicitSources;
+    aggregateSearchSearchSourceIds() : explicitSources;
   const sources: AggregateSearchSource[] = [];
   candidates.forEach((source: AggregateSearchSource) => {
     if (sourceAllowedByPolicy(source, policy)) {
@@ -439,6 +443,20 @@ export function configureWaterfallEnabledSourcesForRuntime(sources: AggregateSea
       runtimeEnabledSources.push(source);
     }
   });
+}
+
+export function configureWaterfallSearchPolicyForRuntime(policy: AggregateSearchPolicy): void {
+  runtimeSearchPolicy = {
+    domesticOnly: policy.domesticOnly,
+    multilingual: policy.multilingual
+  };
+}
+
+export function waterfallSearchPolicyForRuntime(): AggregateSearchPolicy {
+  return {
+    domesticOnly: runtimeSearchPolicy.domesticOnly,
+    multilingual: runtimeSearchPolicy.multilingual
+  };
 }
 
 export function configureWaterfallPreferenceProfileForRuntime(
@@ -1882,6 +1900,8 @@ function twitchPost(item: TwitchChannelSearchItem): AggregateSearchPost {
     rows.push({ label: 'Thumbnail', value: item.thumbnailUrl });
   }
   rows.push({ label: 'Live', value: item.isLive ? 'true' : 'false' });
+  rows.push({ label: 'Kind', value: item.kind });
+  rows.push({ label: 'Viewers', value: item.viewerCount.toString() });
   if (item.gameName.length > 0) {
     rows.push({ label: 'Game', value: item.gameName });
   }
@@ -1895,6 +1915,11 @@ function twitchPost(item: TwitchChannelSearchItem): AggregateSearchPost {
     rows.push({ label: 'Tags', value: item.tags.join(' / ') });
   }
   const details: string[] = [item.isLive ? '正在直播' : '近期频道'];
+  if (item.kind === 'tech') {
+    details.push('科技热门');
+  } else if (item.kind === 'game') {
+    details.push('游戏热门');
+  }
   if (item.gameName.length > 0) {
     details.push(item.gameName);
   }
@@ -1908,7 +1933,7 @@ function twitchPost(item: TwitchChannelSearchItem): AggregateSearchPost {
     text: details.join(' · '),
     url: item.url,
     publishedAt: item.startedAt,
-    score: '',
+    score: item.viewerCount.toString(),
     commentCount: '',
     status: 'success',
     rows: rows
@@ -1919,13 +1944,19 @@ async function aggregateTwitchSourceBatch(
   query: string,
   continuation: WaterfallContinuation | null,
   limit: number,
-  policy: AggregateSearchPolicy
+  policy: AggregateSearchPolicy,
+  context: AggregateSearchSourceContext
 ): Promise<AggregateSearchSourceBatch> {
-  const cursor = continuation !== null && continuation.kind === 'cursor' ? continuation.value : '';
-  const result: TwitchChannelSearchBatch = await searchTwitchChannels(
+  if (context !== 'interest') {
+    return {
+      source: 'twitch', videos: [], posts: [],
+      status: statusFor('twitch', 'unsupported', 'Twitch 仅用于发现流，普通聚合搜索不会发起请求。', 0),
+      continuation: null, rawCount: 0
+    };
+  }
+  const result: TwitchChannelSearchBatch = await discoverTwitchInterestStreams(
     runtimeExternalProviderConfig.twitch,
-    query,
-    { limit: limit, cursor: cursor, liveOnly: false }
+    { multilingual: policy.multilingual, technologyLimit: 3 }
   );
   const posts = result.items.filter((item: TwitchChannelSearchItem): boolean =>
     twitchItemAllowedByPolicy(item, policy)).map((item: TwitchChannelSearchItem): AggregateSearchPost =>
@@ -1934,13 +1965,17 @@ async function aggregateTwitchSourceBatch(
   if (!policy.multilingual && result.items.length > posts.length) {
     message += ' 中文频道过滤后保留 ' + posts.length.toString() + ' 条。';
   }
+  aiLogInfo('[AIPhone][TwitchPostFilter] multilingual=' + (policy.multilingual ? 'true' : 'false') +
+    ' raw=' + result.items.length.toString() + ' kept=' + posts.length.toString() +
+    ' status=' + result.status);
   const status: AggregateSearchStatus = result.status === 'success' && posts.length === 0 ? 'empty' : result.status;
   return {
     source: 'twitch',
     videos: [],
     posts: posts,
     status: statusFor('twitch', status, message, posts.length),
-    continuation: result.continuation === null ? null : { kind: 'cursor', value: result.continuation }
+    continuation: result.continuation === null ? null : { kind: 'cursor', value: result.continuation },
+    rawCount: result.items.length
   };
 }
 
@@ -1951,7 +1986,8 @@ function aggregateSourceBatch(
   zhihuConfig: AggregateZhihuConfig,
   continuation: WaterfallContinuation | null,
   limit: number,
-  policy: AggregateSearchPolicy = runtimeSearchPolicy
+  policy: AggregateSearchPolicy = runtimeSearchPolicy,
+  context: AggregateSearchSourceContext = 'search'
 ): Promise<AggregateSearchSourceBatch> {
   if (source === 'youtube' || source === 'bilibili') {
     return aggregateMediaSourceBatch(source, query, youtubeApiKey, continuation, limit, policy);
@@ -1963,7 +1999,7 @@ function aggregateSourceBatch(
     return aggregateDoubanSourceBatch(query, limit);
   }
   if (source === 'twitch') {
-    return aggregateTwitchSourceBatch(query, continuation, limit, policy);
+    return aggregateTwitchSourceBatch(query, continuation, limit, policy, context);
   }
   if (source === 'x') {
     const args: AggregateXSearchArgs = {
@@ -2010,7 +2046,9 @@ export type AggregateSearchSourceLoader = (
   youtubeApiKey: string,
   zhihuConfig: AggregateZhihuConfig,
   continuation: WaterfallContinuation | null,
-  limit: number
+  limit: number,
+  policy: AggregateSearchPolicy,
+  context?: AggregateSearchSourceContext
 ) => Promise<AggregateSearchSourceBatch>;
 
 export async function callAggregateSearchContinuation(
@@ -2021,7 +2059,24 @@ export async function callAggregateSearchContinuation(
   onBatch: AggregateSearchBatchObserver,
   loadSource: AggregateSearchSourceLoader = aggregateSourceBatch
 ): Promise<void> {
-  await Promise.all(requests.map((request: WaterfallLoadRequest): Promise<void> => {
+  return callAggregateSearchContinuationForContext(
+    'search', query, requests, youtubeApiKey, zhihuConfig, onBatch, loadSource
+  );
+}
+
+export async function callAggregateSearchContinuationForContext(
+  context: 'search' | 'interest',
+  query: string,
+  requests: WaterfallLoadRequest[],
+  youtubeApiKey: string,
+  zhihuConfig: AggregateZhihuConfig,
+  onBatch: AggregateSearchBatchObserver,
+  loadSource: AggregateSearchSourceLoader = aggregateSourceBatch
+): Promise<void> {
+  const availableSources = aggregateSearchSourceIdsForContext(context);
+  const availableRequests = requests.filter((request: WaterfallLoadRequest): boolean =>
+    availableSources.indexOf(request.source as AggregateSearchSource) >= 0);
+  await Promise.all(availableRequests.map((request: WaterfallLoadRequest): Promise<void> => {
     if (request.mode === 'native' && request.continuation === null) {
       onBatch(exhaustedAggregateBatch(request));
       return Promise.resolve();
@@ -2032,7 +2087,9 @@ export async function callAggregateSearchContinuation(
       youtubeApiKey,
       zhihuConfig,
       request.continuation,
-      request.limit
+      request.limit,
+      runtimeSearchPolicy,
+      context
     ).then((batch: AggregateSearchSourceBatch): void => onBatch(batch)).catch(
       (error: Error | Object | string | number | boolean | null | undefined): void => {
         const failed = failedAggregateBatch(request.source as AggregateSearchSource, error);
@@ -2074,10 +2131,7 @@ export async function callAggregateSearch(
   const query = aggregateSearchQueryFromArgs(prompt, args);
   const sources = aggregateSearchSourcesFromArgs(args);
   const policy = aggregateSearchPolicyFromArgs(args);
-  runtimeSearchPolicy = {
-    domesticOnly: policy.domesticOnly,
-    multilingual: policy.multilingual
-  };
+  configureWaterfallSearchPolicyForRuntime(policy);
   const preferenceDescription = args === null ? '' : textOf((args as AggregateArgRecord).preferenceDescription).trim();
   const tasks: Promise<AggregateSearchSourceBatch>[] = [];
   sources.forEach((source: AggregateSearchSource): void => {

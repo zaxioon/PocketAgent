@@ -5,7 +5,7 @@ import {
   ToolBackendType,
   ToolDefinition
 } from './ToolDefinitionTypes';
-import { aggregateSearchRegistrySourceIds } from './AggregateSearchSourceRegistry';
+import { aggregateSearchSearchSourceIds } from './AggregateSearchSourceRegistry';
 
 const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -812,7 +812,7 @@ export function toolPlanningDescriptionForToolId(
   } else if (definition.toolId === 'media.video.search') {
     description += '. Use for Bilibili/B站/哔哩哔哩 video search or multi-source video search. If the same request mentions YouTube and Bilibili, choose media.video.search with sources ["youtube","bilibili"].';
   } else if (definition.toolId === 'media.aggregate.search') {
-    const providerIds = JSON.stringify(aggregateSearchRegistrySourceIds());
+    const providerIds = JSON.stringify(aggregateSearchSearchSourceIds());
     description += '. Use only for mixed-content topic research where the user asks for videos plus news, discussions, posts, or public reactions around one topic; use media.video.search for video-only requests. Input must be JSON with a non-empty query and optional sources. Every sources item must be an exact provider ID from ' + providerIds + '. Content categories such as news, discussion, video, article, and posts are never source IDs. When the user does not explicitly name a provider, omit sources entirely. Host settings inject onlyDomesticSources and includeMultilingualResults; the model must not override them. Runtime policy deterministically constrains configured public media and discussion providers and their languages even when sources are present. Never fabricate media or posts.';
   } else if (definition.toolId === 'worldcup.open') {
     description += '. Use when the user wants to open the World Cup experience, view World Cup schedules, next match time, previews, highlights, teams, players, or matchup cards. Use media tools instead for explicit YouTube-only, Bilibili-only, or mixed-content search requests.';

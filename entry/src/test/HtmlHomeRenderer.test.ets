@@ -12,6 +12,7 @@ import { renderHtmlHomeDocument } from '../main/ets/pages/A2uiHome/html/HtmlHome
 import {
   buildWaterfallHomePayload,
   renderAggregateSearchHomeDocument,
+  shouldShowWaterfallReaderAction,
   waterfallAdvanceCurrentFromAction,
   waterfallBehaviorFromAction,
   waterfallEnabledSourcesFromAction
@@ -2518,8 +2519,10 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('异常或提示')).assertEqual(-1);
       expect(html.indexOf('返回日报')).assertEqual(-1);
       expect(html.indexOf('data-aggregate-action="')).assertEqual(-1);
-      expect(html.indexOf('target="_blank"')).assertEqual(-1);
-      expect(html.indexOf('target="_self"')).assertLarger(-1);
+      expect(html.indexOf('class="aggregate-link-preview" href="https://news.ycombinator.com/item?id=123" target="_blank"'))
+        .assertLarger(-1);
+      expect(html.indexOf('class="aggregate-link-preview" href="https://news.ycombinator.com/item?id=123" target="_self"'))
+        .assertEqual(-1);
     });
 
     it('leaves daily brief child return navigation to the native shell', 0, () => {
@@ -3344,12 +3347,9 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('https://i1.hdslb.com/bfs/archive/cover.jpg')).assertLarger(-1);
     });
 
-    it('renders official local icons for the new aggregate search sources', 0, () => {
+    it('renders official local icons for active new aggregate search sources', 0, () => {
       const doc = aggregateSearchDocumentFixture();
       doc.blocks.push({
-        id: 'status-douban', kind: 'aggregate-source-status', title: '豆瓣', subtitle: 'ok',
-        status: 'success', source: 'douban', metrics: [], rows: [], actions: []
-      }, {
         id: 'status-applepodcasts', kind: 'aggregate-source-status', title: 'Apple Podcasts', subtitle: 'ok',
         status: 'success', source: 'applepodcasts', metrics: [], rows: [], actions: []
       }, {
@@ -3360,12 +3360,12 @@ export default function htmlHomeRendererTest() {
 
       const html = renderHtmlHomeDocument(doc);
 
-      expect(html.indexOf('data-source="douban" aria-label="豆瓣"><img src="data:image/png;base64,')).assertLarger(-1);
       expect(html.indexOf('data-source="applepodcasts" aria-label="Apple Podcasts"><img src="data:image/png;base64,'))
         .assertLarger(-1);
       expect(html.indexOf('data-source="twitch" aria-label="Twitch"><img src="data:image/svg+xml;base64,'))
         .assertLarger(-1);
-      expect(html.indexOf('"douban":"data:image/png;base64,')).assertLarger(-1);
+      expect(html.indexOf('data-source="douban"')).assertEqual(-1);
+      expect(html.indexOf('"douban":"data:image')).assertEqual(-1);
       expect(html.indexOf('"applepodcasts":"data:image/png;base64,')).assertLarger(-1);
       expect(html.indexOf('"twitch":"data:image/svg+xml;base64,')).assertLarger(-1);
     });
@@ -3451,6 +3451,11 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('data-waterfall-preferences')).assertLarger(-1);
       expect(html.indexOf('data-waterfall-empty-sources')).assertLarger(-1);
       expect(html.indexOf('打开内容来源')).assertLarger(-1);
+      expect(html.indexOf('var sourceNames = sources.map')).assertEqual(-1);
+      expect(html.indexOf('var sourceNames = directDiscovery ? ["youtube"')).assertLarger(-1);
+      expect(html.indexOf('"applepodcasts","twitch"] : ["youtube"')).assertLarger(-1);
+      expect(html.indexOf('target="_blank" rel="noopener noreferrer">查看来源</a>')).assertEqual(-1);
+      expect(html.indexOf('target="_self" rel="noopener noreferrer">查看来源</a>')).assertEqual(-1);
       expect(html.indexOf('data-waterfall-reason')).assertLarger(-1);
       expect(html.indexOf('data-waterfall-media-fallback')).assertEqual(-1);
       expect(html.indexOf('class="waterfall-icon"')).assertLarger(-1);
@@ -3499,6 +3504,57 @@ export default function htmlHomeRendererTest() {
       expect(hasLlmReply([{ id: 'u1', role: 'user', content: '你好' }])).assertFalse();
       expect(hasLlmReply([{ id: 'a1', role: 'assistant', content: '  ' }])).assertFalse();
       expect(hasLlmReply([{ id: 'a2', role: 'assistant', content: '你好，我能帮你什么？' }])).assertTrue();
+    });
+
+    it('keeps external media catalog sources source-only while ordinary image text cards retain the reader action', 0, () => {
+      const doc = waterfallRendererFixture();
+      const state = doc.waterfall as WaterfallFeedState;
+      const podcast: WaterfallRankedCandidate = {
+        id: 'apple-podcast-1',
+        source: 'applepodcasts',
+        mediaType: 'image_text',
+        title: 'Apple podcast title',
+        summary: 'Apple podcast summary',
+        url: 'https://podcasts.apple.com/show/1',
+        coverUrl: 'https://img.example/apple-podcast.jpg',
+        publishedAt: '2026-08-05T00:00:00.000Z',
+        originalIndex: 4,
+        normalizedUrl: 'https://podcasts.apple.com/show/1',
+        signals: { relevanceTier: 3, titleHits: 1, summaryHits: 0, freshnessTier: 4 },
+        reason: '标题命中查询'
+      };
+      const twitch: WaterfallRankedCandidate = {
+        id: 'twitch-channel-1',
+        source: 'twitch',
+        mediaType: 'image_text',
+        title: 'A Twitch channel with a long live title',
+        summary: 'Twitch channel summary',
+        url: 'https://www.twitch.tv/example',
+        coverUrl: 'https://img.example/twitch-channel.jpg',
+        publishedAt: '2026-08-05T00:00:00.000Z',
+        originalIndex: 5,
+        normalizedUrl: 'https://www.twitch.tv/example',
+        signals: { relevanceTier: 3, titleHits: 1, summaryHits: 0, freshnessTier: 4 },
+        reason: '标题命中查询'
+      };
+      state.stable.push(podcast, twitch);
+
+      const html = renderHtmlHomeDocument(doc);
+
+      expect(shouldShowWaterfallReaderAction('applepodcasts', 'image_text')).assertFalse();
+      expect(shouldShowWaterfallReaderAction('twitch', 'image_text')).assertFalse();
+      expect(shouldShowWaterfallReaderAction('youtube', 'video')).assertTrue();
+      expect(shouldShowWaterfallReaderAction('youtube', 'image_text')).assertTrue();
+      expect(shouldShowWaterfallReaderAction('hackernews', 'post')).assertTrue();
+      expect(html.indexOf('var sourceOnly = ["applepodcasts","twitch"].indexOf(item.source) >= 0'))
+        .assertLarger(-1);
+      expect(html.indexOf('var openAttributes = sourceOnly ?')).assertLarger(-1);
+      expect(html.indexOf('if (!item || ["applepodcasts","twitch"].indexOf(item.source) >= 0) return'))
+        .assertLarger(-1);
+      expect(html.indexOf('https://podcasts.apple.com/show/1')).assertLarger(-1);
+      expect(html.indexOf('https://www.twitch.tv/example')).assertLarger(-1);
+      expect(html.indexOf('-webkit-line-clamp: 4;')).assertLarger(-1);
+      expect(html.indexOf('-webkit-line-clamp: 6;')).assertLarger(-1);
     });
 
     it('opens the home discovery page directly in the shared Waterfall renderer', 0, () => {

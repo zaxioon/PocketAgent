@@ -87,7 +87,7 @@ function validEvidence(value: WaterfallBehaviorEvidence): boolean {
 
 function validSources(value: string[] | undefined): boolean {
   if (!Array.isArray(value)) return false;
-  return value.every((item: string): boolean => REGISTERED_SOURCES.indexOf(item) >= 0);
+  return value.every((item: string): boolean => typeof item === 'string' && item.trim().length > 0);
 }
 
 function validProfile(value: StoredWaterfallPreferenceProfile): boolean {
@@ -120,7 +120,7 @@ function migratedEnabledSources(
   sources: string[],
   value: StoredWaterfallPreferenceProfile | WaterfallPreferenceProfile
 ): string[] {
-  const enabled = sources.slice();
+  const enabled = sources.filter((source: string): boolean => REGISTERED_SOURCES.indexOf(source) >= 0);
   aggregateSearchDefaultEnabledSourceIdsAfter(profileSourceRegistryVersion(value)).forEach(
     (source: string): void => {
       if (enabled.indexOf(source) < 0) enabled.push(source);
@@ -264,6 +264,14 @@ export class WaterfallPreferencesStore {
       this.profile = parsedProfile(typeof value === 'string' ? value : '');
     }
     return copyProfile(this.profile);
+  }
+
+  loadForNewSession(): WaterfallPreferenceProfile {
+    const profile = this.load();
+    profile.discoveryEnabledSources = aggregateSearchDefaultEnabledSourceIds();
+    profile.enabledSources = profile.discoveryEnabledSources.slice();
+    profile.updatedAt = Date.now();
+    return this.save(profile);
   }
 
   private save(profile: WaterfallPreferenceProfile): WaterfallPreferenceProfile {

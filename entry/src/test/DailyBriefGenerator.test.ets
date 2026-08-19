@@ -6,7 +6,7 @@ import {
   A2uiGenericToolResultData,
   A2uiGenericToolResultRowData,
   A2uiSurfaceState,
-  aggregateSearchRegistrySourceIds,
+  aggregateSearchSearchSourceIds,
   AggregateSearchResult,
   AggregateSearchSourceStatus,
   WaterfallFeedState
@@ -720,7 +720,7 @@ export default function dailyBriefGeneratorTest() {
 
       const input = dailyBriefWaterfallInput(preference, '个人日报 Demo');
 
-      expect(input.sources.join(',')).assertEqual(aggregateSearchRegistrySourceIds().join(','));
+      expect(input.sources.join(',')).assertEqual(aggregateSearchSearchSourceIds().join(','));
       expect(input.query).assertEqual('AI 产品 HarmonyOS 个人日报 Demo');
       expect(input.preferenceDescription.indexOf('中文优先')).assertLarger(-1);
       expect(input.preferenceDescription.indexOf('15 分钟内')).assertLarger(-1);

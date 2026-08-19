@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
   AggregateSearchPost,
+  AggregateSearchPolicy,
   AggregateSearchResult,
   AggregateSearchSourceBatch,
   AggregateSearchStatus,
@@ -23,15 +24,20 @@ import {
   advanceWaterfallFeed,
   aggregateContinuationFromDynamicResult,
   callAggregateSearchContinuation,
+  callAggregateSearchContinuationForContext,
   configureWaterfallEnabledSourcesForRuntime,
   configureWaterfallPreferenceProfileForRuntime,
+  configureWaterfallSearchPolicyForRuntime,
   applyWaterfallSourceSelection,
   applyWaterfallExpandedQuery,
   failWaterfallExpansion,
+  finalizeInterestWaterfallRecallRanking,
   aggregateSearchQueryFromArgs,
   aggregateSearchPolicyFromArgs,
   aggregateSearchSourceMetadata,
+  aggregateSearchInterestSourceIds,
   aggregateSearchRegistrySourceIds,
+  aggregateSearchSearchSourceIds,
   aggregateYouTubeRelevanceLanguage,
   aggregateMediaCandidates,
   aggregateXSearchQuery,
@@ -52,7 +58,8 @@ import {
   planWaterfallContinuation,
   parseWaterfallExpandedQuery,
   planWaterfallInterestRecall,
-  rankWaterfallCandidates
+  rankWaterfallCandidates,
+  waterfallSearchPolicyForRuntime
 } from '@loop/agent-core';
 
 interface QueryArgsFixture {
@@ -282,7 +289,11 @@ export default function aggregateSearchClientTest() {
       expect(aggregateSearchQueryFromArgs('我想看看有关 openai codex 的相关新闻和讨论', null)).assertEqual('openai codex');
       expect(aggregateSearchQueryFromArgs('openai codex 新闻讨论', null)).assertEqual('openai codex');
       expect(aggregateSearchSourcesFromArgs(args).join(',')).assertEqual('');
-      expect(aggregateSearchSourcesFromArgs(null).join(',')).assertEqual('bilibili,zhihu,douban');
+      expect(aggregateSearchSourcesFromArgs(null).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs({
+        query: 'ignored', sources: ['twitch'],
+        onlyDomesticSources: false, includeMultilingualResults: true
+      } as QueryArgsFixture).join(',')).assertEqual(aggregateSearchSearchSourceIds().join(','));
     });
 
     it('applies all four deterministic aggregate source policy combinations', 0, () => {
@@ -298,12 +309,12 @@ export default function aggregateSearchClientTest() {
       const globalMultilingual: QueryArgsFixture = {
         query: 'codex', onlyDomesticSources: false, includeMultilingualResults: true
       };
-      expect(aggregateSearchSourcesFromArgs(domesticChinese).join(',')).assertEqual('bilibili,zhihu,douban');
-      expect(aggregateSearchSourcesFromArgs(domesticMultilingual).join(',')).assertEqual('bilibili,zhihu,douban');
+      expect(aggregateSearchSourcesFromArgs(domesticChinese).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs(domesticMultilingual).join(',')).assertEqual('bilibili,zhihu');
       expect(aggregateSearchSourcesFromArgs(globalChinese).join(','))
-        .assertEqual('youtube,bilibili,x,zhihu,douban,applepodcasts,twitch');
+        .assertEqual('youtube,bilibili,x,zhihu,applepodcasts');
       expect(aggregateSearchSourcesFromArgs(globalMultilingual).join(','))
-        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
+        .assertEqual(aggregateSearchSearchSourceIds().join(','));
       expect(aggregateYouTubeRelevanceLanguage(aggregateSearchPolicyFromArgs(globalChinese))).assertEqual('zh-Hans');
       expect(aggregateYouTubeRelevanceLanguage(aggregateSearchPolicyFromArgs(globalMultilingual))).assertEqual('');
     });
@@ -341,10 +352,14 @@ export default function aggregateSearchClientTest() {
         .assertEqual('regional');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'twitch')[0].languageFilterMode)
         .assertEqual('post_filter');
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'twitch')[0]
+        .capabilities.search).assertFalse();
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'twitch')[0]
+        .capabilities.interest).assertTrue();
       expect(aggregateSearchSourcesFromArgs(emptyExplicitSources).join(','))
-        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
+        .assertEqual(aggregateSearchSearchSourceIds().join(','));
       expect(aggregateSearchSourcesFromArgs(invalidExplicitSources).join(','))
-        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
+        .assertEqual(aggregateSearchSearchSourceIds().join(','));
       expect(aggregateSearchSourcesFromArgs(partiallyValidSources).join(',')).assertEqual('youtube');
       expect(aggregateSearchSourcesFromArgs(policyBlockedSources).length).assertEqual(0);
     });
@@ -356,9 +371,9 @@ export default function aggregateSearchClientTest() {
         onlyDomesticSources: false, includeMultilingualResults: true
       };
 
-      expect(aggregateSearchSourcesFromArgs(firstQuery).join(',')).assertEqual('bilibili,zhihu,douban');
+      expect(aggregateSearchSourcesFromArgs(firstQuery).join(',')).assertEqual('bilibili,zhihu');
       expect(aggregateSearchSourcesFromArgs(secondQuery).join(','))
-        .assertEqual(aggregateSearchRegistrySourceIds().join(','));
+        .assertEqual(aggregateSearchSearchSourceIds().join(','));
     });
 
     it('builds X language expressions from the selected aggregate policy', 0, () => {
@@ -453,6 +468,19 @@ export default function aggregateSearchClientTest() {
       expect(posts[0].commentCount).assertEqual('3');
       expect(JSON.stringify(posts[0].rows).indexOf('avatar.jpg')).assertLarger(-1);
       expect(aggregateMediaCandidates([], posts, 0)[0].mediaType).assertEqual('post');
+    });
+
+    it('preserves Twitch viewer count as the provider ranking score', 0, () => {
+      const twitchPost: AggregateSearchPost = {
+        id: 'twitch-stream-1', source: 'twitch', provider: 'Twitch', title: 'Live coding',
+        author: 'coder', handle: 'coder', text: '正在直播 · 科技热门',
+        url: 'https://www.twitch.tv/coder', publishedAt: '2026-08-19T08:00:00Z',
+        score: '321', commentCount: '', status: 'success',
+        rows: [{ label: 'Kind', value: 'tech' }, { label: 'Viewers', value: '321' }]
+      };
+      const candidate = aggregateMediaCandidates([], [twitchPost], 0)[0];
+      expect(candidate.providerScore).assertEqual(321);
+      expect(candidate.source).assertEqual('twitch');
     });
 
     it('turns dynamic text rows into readable post cards with images', 0, () => {
@@ -974,7 +1002,7 @@ export default function aggregateSearchClientTest() {
       expect(Date.now() - startedAt).assertLess(2000);
     });
 
-    it('plans one equal-priority interest request per enabled source', 0, () => {
+    it('plans bounded personalized interest requests without Twitch', 0, () => {
       const profile = emptyPreferenceProfile();
       profile.topicWeights = [
         { key: '科幻', weight: 8, updatedAt: WATERFALL_NOW_MS },
@@ -988,29 +1016,50 @@ export default function aggregateSearchClientTest() {
       recent[1].topics = ['足球'];
       const requests: WaterfallInterestRecallRequest[] =
         planWaterfallInterestRecall(profile, recent, ['youtube', 'x', 'reddit']);
-      expect(requests.length).assertEqual(3);
       expect(requests.every((request: WaterfallInterestRecallRequest): boolean =>
-        request.sources.length === 1 && request.weight === 1 && request.continuation === null &&
-        request.query.length <= 24)).assertTrue();
-      expect(requests.map((request: WaterfallInterestRecallRequest): string => request.sources[0]).join(','))
-        .assertEqual('youtube,x,reddit');
-      expect(requests.map((request: WaterfallInterestRecallRequest): string => request.route).join(','))
-        .assertEqual('popular,similar,similar');
+        request.sources.every((source: string): boolean =>
+        ['youtube', 'x', 'reddit'].indexOf(source) >= 0))).assertTrue();
+      expect(requests.length <= 7).assertTrue();
+      expect(requests.every((request: WaterfallInterestRecallRequest): boolean =>
+        request.sources.indexOf('twitch') < 0)).assertTrue();
     });
 
-    it('uses honest popular plus rotating exploration for an empty profile', 0, () => {
+    it('uses provider discovery for Twitch plus technology exploration for an empty profile', 0, () => {
       const requests: WaterfallInterestRecallRequest[] =
-        planWaterfallInterestRecall(emptyPreferenceProfile(), [], ['youtube', 'x']);
-      const nextRound: WaterfallInterestRecallRequest[] =
-        planWaterfallInterestRecall(emptyPreferenceProfile(), [], ['youtube', 'x'], 1);
-      expect(requests.some((request: WaterfallInterestRecallRequest): boolean => request.route === 'popular' &&
-        request.sources.join(',') === 'youtube')).assertTrue();
+        planWaterfallInterestRecall(emptyPreferenceProfile(), [], ['youtube', 'x', 'twitch']);
+      expect(requests[0].query).assertEqual('AI 科技');
+      expect(requests[0].sources.join(',')).assertEqual('youtube,x');
+      expect(requests[1].query).assertEqual('');
+      expect(requests[1].sources.join(',')).assertEqual('twitch');
       expect(requests.some((request: WaterfallInterestRecallRequest): boolean => request.route === 'explore' &&
-        request.query === '科技新知' && request.sources.join(',') === 'x')).assertTrue();
-      expect(nextRound.some((request: WaterfallInterestRecallRequest): boolean => request.route === 'explore' &&
-        request.query === '影视文化' && request.sources.join(',') === 'x')).assertTrue();
+        request.query === 'AI 科技' && request.sources.join(',') === 'youtube,x')).assertTrue();
+      expect(requests.some((request: WaterfallInterestRecallRequest): boolean => request.route === 'explore' &&
+        request.query === '' && request.sources.join(',') === 'twitch')).assertTrue();
       expect(requests.every((request: WaterfallInterestRecallRequest): boolean =>
         request.sources.indexOf('reddit') < 0)).assertTrue();
+      expect(aggregateSearchSearchSourceIds().indexOf('twitch')).assertEqual(-1);
+      expect(aggregateSearchInterestSourceIds().indexOf('twitch')).assertLarger(-1);
+    });
+
+    it('dispatches Twitch provider discovery after personalized and technology recall', 0, () => {
+      const profile = emptyPreferenceProfile();
+      profile.topicWeights = [{ key: '科幻', weight: 8, updatedAt: WATERFALL_NOW_MS }];
+      const recent = [rankedWaterfallCandidate('recent-game', 'youtube', '游戏直播', 0)];
+      recent[0].topics = ['游戏'];
+      const requests = planWaterfallInterestRecall(profile, recent, ['youtube', 'x', 'twitch']);
+
+      expect(requests[0].route).assertEqual('similar');
+      expect(requests[0].query).assertEqual('游戏');
+      expect(requests[1].route).assertEqual('profile');
+      expect(requests[1].query).assertEqual('科幻');
+      expect(requests[2].route).assertEqual('explore');
+      expect(requests[2].query).assertEqual('AI 科技');
+      expect(requests[3].route).assertEqual('explore');
+      expect(requests[3].query).assertEqual('');
+      expect(requests[3].sources.join(',')).assertEqual('twitch');
+      expect(requests.filter((request: WaterfallInterestRecallRequest): boolean => request.route === 'explore')
+        .reduce((sum: number, request: WaterfallInterestRecallRequest): number => sum + request.weight, 0))
+        .assertEqual(10);
     });
 
     it('keeps interest batches on the shared ranker without starting search expansion', 0, () => {
@@ -1035,6 +1084,71 @@ export default function aggregateSearchClientTest() {
       expect(merged.expansionRequest).assertEqual(undefined);
       expect(advanced.loadRequests.length).assertEqual(0);
       expect(advanced.expansionRequest).assertEqual(undefined);
+    });
+
+    it('shows the first deferred interest batch without suppressing or reordering later partials', 0, () => {
+      const sources = ['youtube', 'x'].map((source: string): WaterfallSourceState =>
+        sourceState(source, null, 'loading', true, 10));
+      const state = feedState(null, [], [], sources);
+      state.mode = 'interest';
+      state.query = '';
+      state.profile = emptyPreferenceProfile();
+      const firstBatch = [
+        waterfallCandidate('visible', 'youtube', 'Visible first card', '', 'https://youtube.test/visible', '', 0),
+        waterfallCandidate('stable-a', 'youtube', 'Stable card A', '', 'https://youtube.test/stable-a', '', 1),
+        waterfallCandidate('stable-b', 'youtube', 'Stable card B', '', 'https://youtube.test/stable-b', '', 2),
+        waterfallCandidate('dup-a', 'youtube', 'OpenAI Codex agent tools release',
+          'New agent tools capability overview', 'https://youtube.test/dup-a', '', 3)
+      ];
+      let partial = mergeWaterfallBatchDeferredRanking(
+        state, firstBatch, sourceState('youtube', null, 'exhausted')).state;
+      partial = mergeWaterfallBatchDeferredRanking(partial, [
+        waterfallCandidate('dup-b', 'x', 'OpenAI Codex agent tools release',
+          'New agent tools capability overview', 'https://x.test/dup-b', '', 4)
+      ], sourceState('x', null, 'exhausted')).state;
+
+      expect(partial.current?.id).assertEqual('visible');
+      expect(partial.stable.map((candidate: WaterfallRankedCandidate): string => candidate.id).join(','))
+        .assertEqual('stable-a,stable-b');
+      expect(partial.tail.filter((candidate: WaterfallRankedCandidate): boolean =>
+        candidate.id.indexOf('dup-') === 0).length).assertEqual(2);
+      expect(partial.tail.every((candidate: WaterfallRankedCandidate): boolean =>
+        candidate.reason === '等待最终排序')).assertTrue();
+
+      const finalized = finalizeInterestWaterfallRecallRanking(partial, WATERFALL_NOW_MS);
+      expect(finalized.current?.id).assertEqual('visible');
+      expect(finalized.stable.map((candidate: WaterfallRankedCandidate): string => candidate.id).join(','))
+        .assertEqual('stable-a,stable-b');
+      expect(finalized.tail.filter((candidate: WaterfallRankedCandidate): boolean =>
+        candidate.id.indexOf('dup-') === 0).length).assertEqual(1);
+    });
+
+    it('bounds final interest inventory across four or more partial sources', 0, () => {
+      const sourceNames = ['youtube', 'bilibili', 'x', 'reddit', 'zhihu', 'twitch'];
+      let state = feedState(null, [], [], sourceNames.map((source: string): WaterfallSourceState =>
+        sourceState(source, null, 'loading', true, 10)));
+      state.mode = 'interest';
+      state.query = '';
+      state.profile = emptyPreferenceProfile();
+      sourceNames.forEach((source: string, sourceIndex: number): void => {
+        const candidates: WaterfallCandidate[] = [];
+        for (let item = 0; item < 10; item += 1) {
+          const id = source + '-' + item.toString();
+          candidates.push(waterfallCandidate(
+            id, source, 'Unique ' + id, '', 'https://' + source + '.test/' + id, '', sourceIndex * 10 + item));
+        }
+        state = mergeWaterfallBatchDeferredRanking(
+          state, candidates, sourceState(source, null, 'exhausted')).state;
+      });
+
+      expect(waterfallInventoryIds(state).length).assertEqual(60);
+      const finalized = finalizeInterestWaterfallRecallRanking(state, WATERFALL_NOW_MS);
+      const active = (finalized.current === null ? [] : [finalized.current])
+        .concat(finalized.stable, finalized.tail);
+      expect(active.length).assertEqual(20);
+      expect(finalized.reserve?.length).assertEqual(40);
+      expect(waterfallInventoryIds(finalized).length).assertEqual(60);
+      expect(active.some((candidate: WaterfallRankedCandidate): boolean => candidate.source === 'twitch')).assertTrue();
     });
 
     it('keeps promoting interest reserve without starting search loads', 0, () => {
@@ -1105,6 +1219,88 @@ export default function aggregateSearchClientTest() {
       expect(update.state.current?.id).assertEqual('next-1');
       expect(update.state.stable.map((item) => item.id).join(',')).assertEqual('next-2,tail-old');
       expect(update.state.tail.length).assertEqual(0);
+    });
+
+    it('reranks the remaining interest inventory from the latest behavior profile after advancing', 0, () => {
+      const consumed = rankedWaterfallCandidate('consumed', 'youtube', 'OpenAI Codex watched', 0);
+      const youtubeNext = rankedWaterfallCandidate('youtube-next', 'youtube', 'OpenAI Codex video', 1);
+      const xNext = rankedWaterfallCandidate('x-next', 'x', 'OpenAI Codex discussion', 2);
+      const redditNext = rankedWaterfallCandidate('reddit-next', 'reddit', 'OpenAI Codex thread', 3);
+      const state = feedState(consumed, [youtubeNext, xNext], [redditNext], [
+        sourceState('youtube', null, 'exhausted'), sourceState('x', null, 'exhausted'),
+        sourceState('reddit', null, 'exhausted')
+      ]);
+      state.mode = 'interest';
+      state.profile = emptyPreferenceProfile();
+      const beforeBehavior = advanceWaterfallFeed(state, WATERFALL_NOW_MS).state;
+      state.profile.sessionSourceWeights = [{ key: 'x', weight: 3, updatedAt: WATERFALL_NOW_MS }];
+
+      const update = advanceWaterfallFeed(state, WATERFALL_NOW_MS);
+
+      expect(beforeBehavior.current?.id).assertEqual('youtube-next');
+      expect(update.state.shown.map((item: WaterfallRankedCandidate): string => item.id).join(','))
+        .assertEqual('consumed');
+      expect(update.state.current?.id).assertEqual('x-next');
+      expect(update.state.current?.id === beforeBehavior.current?.id).assertFalse();
+      expect(waterfallInventoryIds(update.state).indexOf('consumed')).assertEqual(0);
+      expect(update.state.stable.concat(update.state.tail, update.state.reserve ?? [])
+        .some((item: WaterfallRankedCandidate): boolean => item.id === 'consumed')).assertFalse();
+    });
+
+    it('keeps interest advance ranking deterministic when the profile is unchanged', 0, () => {
+      const state = feedState(
+        rankedWaterfallCandidate('deterministic-current', 'youtube', 'OpenAI Codex current', 0),
+        [
+          rankedWaterfallCandidate('deterministic-youtube', 'youtube', 'OpenAI Codex video', 1),
+          rankedWaterfallCandidate('deterministic-x', 'x', 'OpenAI Codex post', 2)
+        ],
+        [rankedWaterfallCandidate('deterministic-reddit', 'reddit', 'OpenAI Codex thread', 3)],
+        [sourceState('youtube', null, 'exhausted'), sourceState('x', null, 'exhausted'),
+          sourceState('reddit', null, 'exhausted')]
+      );
+      state.mode = 'interest';
+      state.profile = emptyPreferenceProfile();
+
+      const first = advanceWaterfallFeed(state, WATERFALL_NOW_MS).state;
+      const second = advanceWaterfallFeed(state, WATERFALL_NOW_MS).state;
+
+      expect(waterfallInventoryIds(first).join(',')).assertEqual(waterfallInventoryIds(second).join(','));
+    });
+
+    it('reranks only the bounded active interest window and preserves overflow reserve', 0, () => {
+      const remaining: WaterfallRankedCandidate[] = [];
+      for (let index = 0; index < 59; index += 1) {
+        remaining.push(rankedWaterfallCandidate(
+          'bounded-' + index.toString(), index % 2 === 0 ? 'youtube' : 'x',
+          'OpenAI Codex bounded ' + index.toString(), index + 1));
+      }
+      const state = feedState(
+        rankedWaterfallCandidate('bounded-current', 'youtube', 'OpenAI Codex current', 0),
+        remaining.slice(0, 2), remaining.slice(2, 19),
+        [sourceState('youtube', null, 'exhausted'), sourceState('x', null, 'exhausted')]
+      );
+      state.mode = 'interest';
+      state.profile = emptyPreferenceProfile();
+      state.reserve = remaining.slice(19);
+
+      const first = advanceWaterfallFeed(state, WATERFALL_NOW_MS).state;
+      const firstReserveHead = first.reserve?.[0].id ?? '';
+      const second = advanceWaterfallFeed(first, WATERFALL_NOW_MS).state;
+      const third = advanceWaterfallFeed(second, WATERFALL_NOW_MS).state;
+      const activeCount = (first.current === null ? 0 : 1) + first.stable.length + first.tail.length;
+      const secondActive = (second.current === null ? [] : [second.current]).concat(second.stable, second.tail);
+
+      expect(activeCount).assertEqual(20);
+      expect(first.reserve?.length).assertEqual(39);
+      expect(second.reserve?.length).assertEqual(38);
+      expect(third.reserve?.length).assertEqual(37);
+      expect(secondActive.some((item: WaterfallRankedCandidate): boolean => item.id === firstReserveHead)).assertTrue();
+      expect(waterfallInventoryIds(first).length).assertEqual(60);
+      expect(waterfallInventoryIds(second).length).assertEqual(60);
+      expect(waterfallInventoryIds(third).length).assertEqual(60);
+      expect(first.shown.map((item: WaterfallRankedCandidate): string => item.id).join(','))
+        .assertEqual('bounded-current');
+      expect(third.shown.length).assertEqual(3);
     });
 
     it('reorders all unshown items after an explicit source toggle', 0, () => {
@@ -1550,6 +1746,66 @@ export default function aggregateSearchClientTest() {
       );
 
       expect(loaded.join(',')).assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
+    });
+
+    it('dispatches Twitch only for interest continuation context', 0, async () => {
+      const requests: WaterfallLoadRequest[] = [{
+        source: 'youtube', continuation: null, limit: 10, phase: 'loading', message: '', mode: 'search'
+      }, {
+        source: 'twitch', continuation: null, limit: 10, phase: 'loading', message: '', mode: 'search'
+      }];
+      const ordinaryLoaded: string[] = [];
+      const interestLoaded: string[] = [];
+      const loaderFor = (loaded: string[]) => (
+        source: AggregateSearchSource
+      ): Promise<AggregateSearchSourceBatch> => {
+        loaded.push(source);
+        return Promise.resolve(aggregateBatch(source, 'context-' + source));
+      };
+
+      await callAggregateSearchContinuation(
+        '', requests, '', { apiKey: '' },
+        (_batch: AggregateSearchSourceBatch): void => {}, loaderFor(ordinaryLoaded)
+      );
+      await callAggregateSearchContinuationForContext(
+        'interest', '', requests, '', { apiKey: '' },
+        (_batch: AggregateSearchSourceBatch): void => {}, loaderFor(interestLoaded)
+      );
+
+      expect(ordinaryLoaded.join(',')).assertEqual('youtube');
+      expect(interestLoaded.join(',')).assertEqual('youtube,twitch');
+    });
+
+    it('passes the configured multilingual policy into interest recall source loading', 0, async () => {
+      const configured: AggregateSearchPolicy = { domesticOnly: false, multilingual: true };
+      configureWaterfallSearchPolicyForRuntime(configured);
+      const observed: AggregateSearchPolicy[] = [];
+      const requests: WaterfallLoadRequest[] = [{
+        source: 'twitch', continuation: null, limit: 10, phase: 'loading', message: '', mode: 'search'
+      }];
+
+      await callAggregateSearchContinuationForContext(
+        'interest', '', requests, '', { apiKey: '' },
+        (_batch: AggregateSearchSourceBatch): void => {},
+        (
+          source: AggregateSearchSource,
+          _query: string,
+          _youtubeApiKey: string,
+          _zhihuConfig: AggregateZhihuConfig,
+          _continuation: WaterfallContinuation | null,
+          _limit: number,
+          policy: AggregateSearchPolicy
+        ): Promise<AggregateSearchSourceBatch> => {
+          observed.push(policy);
+          return Promise.resolve(aggregateBatch(source, 'policy-' + source));
+        }
+      );
+
+      expect(observed.length).assertEqual(1);
+      expect(observed[0].domesticOnly).assertFalse();
+      expect(observed[0].multilingual).assertTrue();
+      expect(waterfallSearchPolicyForRuntime().multilingual).assertTrue();
+      configureWaterfallSearchPolicyForRuntime({ domesticOnly: true, multilingual: false });
     });
 
     it('emits a partial aggregate snapshot as soon as one source resolves', 0, async () => {

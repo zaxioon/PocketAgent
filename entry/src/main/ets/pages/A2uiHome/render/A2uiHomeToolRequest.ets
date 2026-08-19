@@ -1,6 +1,6 @@
 import {
   A2uiSurfaceState,
-  aggregateSearchRegistrySourceIds,
+  aggregateSearchSearchSourceIds,
   aggregateSearchQueryFromArgs,
   firecrawlHttpUrlOf
 } from '@loop/agent-core';
@@ -357,7 +357,7 @@ function aggregateArgsForPrompt(prompt: string): Object | null {
     return null;
   }
   const query = aggregateSearchQueryFromArgs(prompt, null);
-  const args: AggregateFallbackArgs = { sources: aggregateSearchRegistrySourceIds() };
+  const args: AggregateFallbackArgs = { sources: aggregateSearchSearchSourceIds() };
   if (query.length > 0 && query !== prompt.trim()) {
     args.query = query;
   }

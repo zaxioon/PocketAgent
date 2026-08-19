@@ -1,7 +1,9 @@
 import {
   A2uiAction,
   AggregateSearchSource,
+  aggregateSearchInterestSourceIds,
   aggregateSearchRegistrySourceIds,
+  aggregateSearchSearchSourceIds,
   aggregateSourceLabel as registryAggregateSourceLabel,
   WaterfallFeedState,
   WaterfallRankedCandidate,
@@ -32,7 +34,11 @@ interface WaterfallSourceDisplayMetadata {
   label: string;
 }
 
-const WATERFALL_SOURCE_IDS_JSON: string = JSON.stringify(aggregateSearchRegistrySourceIds());
+const WATERFALL_SOURCE_ONLY_SOURCES: AggregateSearchSource[] = ['applepodcasts', 'twitch'];
+const WATERFALL_SOURCE_ONLY_SOURCES_JSON: string = JSON.stringify(WATERFALL_SOURCE_ONLY_SOURCES);
+const WATERFALL_SEARCH_SOURCE_IDS_JSON: string = JSON.stringify(aggregateSearchSearchSourceIds());
+const WATERFALL_INTEREST_SOURCE_IDS_JSON: string = JSON.stringify(aggregateSearchInterestSourceIds());
+
 const WATERFALL_SOURCE_LABELS_JSON: string = JSON.stringify(
   aggregateSearchRegistrySourceIds().map((source: AggregateSearchSource): WaterfallSourceDisplayMetadata => ({
     source: source,
@@ -918,11 +924,14 @@ const WATERFALL_CSS: string = `
   display: flex; flex-direction: column; justify-content: flex-start;
 }
 .waterfall-cinema-card h2 {
-  display: block; max-width: none; margin-top: 0; overflow: visible;
+  display: -webkit-box; max-width: none; margin-top: 0; overflow: hidden;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 4;
   color: var(--ink); font-size: clamp(26px, 7vw, 36px); line-height: 1.08; letter-spacing: -0.028em;
   font-weight: 800; overflow-wrap: anywhere; text-wrap: balance;
 }
-.waterfall-card--text h2 { max-width: 16ch; font-size: clamp(32px, 9vw, 46px); }
+.waterfall-card--text h2 {
+  max-width: 16ch; font-size: clamp(32px, 9vw, 46px); -webkit-line-clamp: 6;
+}
 .waterfall-cinema-card p {
   display: block; min-height: 0; max-width: none; flex: 1 1 auto; margin-top: 10px; overflow: hidden;
   color: #525c67; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere;
@@ -2019,7 +2028,7 @@ const WATERFALL_JS: string = `
   function openReader(id) {
     if (!reader || !track) return;
     var item = candidates(state).find(function (candidate) { return text(candidate.id) === text(id); });
-    if (!item) return;
+    if (!item || ${WATERFALL_SOURCE_ONLY_SOURCES_JSON}.indexOf(item.source) >= 0) return;
     var format = candidateFormat(item);
     var summary = cleanSummary(item.summary) || cleanSummary(item.reason);
     var title = text(item.title).trim() || sourceLabel(item.source) + ' 内容';
@@ -2113,8 +2122,11 @@ const WATERFALL_JS: string = `
       (cover ? '<div class="waterfall-cinema-stage">' + cover + '</div>' : '');
     var reason = reasonText ? '<span class="waterfall-recommendation" aria-label="推荐理由" data-waterfall-reason>' +
       escapeHtml(reasonText) + '</span>' : '<span></span>';
+    var sourceOnly = ${WATERFALL_SOURCE_ONLY_SOURCES_JSON}.indexOf(item.source) >= 0;
+    var openAttributes = sourceOnly ? '' : ' role="button" tabindex="0" data-waterfall-open="' +
+      escapeHtml(item.id) + '"';
     return '<article class="' + cardClass + '" data-waterfall-id="' + escapeHtml(item.id) + '" data-waterfall-media-type="' +
-      escapeHtml(item.mediaType) + '"><div class="waterfall-card-shell" role="button" tabindex="0" data-waterfall-open="' + escapeHtml(item.id) + '">' +
+      escapeHtml(item.mediaType) + '"><div class="waterfall-card-shell"' + openAttributes + '>' +
       stage + '<div class="waterfall-cinema-copy">' + meta + '<h2>' + escapeHtml(title) + '</h2>' +
       (summary ? '<p>' + escapeHtml(summary) + '</p>' : '') +
       (item.publishedAt ? '<div class="waterfall-meta">' + escapeHtml(publishedLabel(item.publishedAt)) + '</div>' : '') +
@@ -2123,7 +2135,7 @@ const WATERFALL_JS: string = `
   }
   function renderPreferences() {
     if (!preferences || !state) return;
-    var sourceNames = ${WATERFALL_SOURCE_IDS_JSON};
+    var sourceNames = directDiscovery ? ${WATERFALL_INTEREST_SOURCE_IDS_JSON} : ${WATERFALL_SEARCH_SOURCE_IDS_JSON};
     if (preferenceApplyTimer !== null) clearTimeout(preferenceApplyTimer);
     preferenceApplyTimer = null;
     preferenceBaseline = enabledSources.join('|');
@@ -2755,7 +2767,6 @@ export function renderAggregateSearchHomeDocument(
     hackernews: APP_LOGO_HACKERNEWS,
     reddit: APP_LOGO_REDDIT,
     zhihu: APP_LOGO_ZHIHU,
-    douban: APP_LOGO_DOUBAN,
     applepodcasts: APP_LOGO_APPLE_PODCASTS,
     twitch: APP_LOGO_TWITCH
   }).replace(/</g, '\\u003c');
@@ -2973,7 +2984,7 @@ function renderPostLink(block: HtmlHomeBlock): string {
     return '';
   }
   return '<a class="aggregate-link-preview" href="' + escapeAttribute(url) +
-    '" target="_self" rel="noopener noreferrer"><span class="aggregate-link-host">' +
+    '" target="_blank" rel="noopener noreferrer"><span class="aggregate-link-host">' +
     escapeHtml(hostLabel(url)) + '</span><b>打开原文</b></a>';
 }
 
@@ -3059,6 +3070,10 @@ function sourceLogoUrl(source: string): string {
     return APP_LOGO_TWITCH;
   }
   return '';
+}
+
+export function shouldShowWaterfallReaderAction(source: AggregateSearchSource, _mediaType: string): boolean {
+  return WATERFALL_SOURCE_ONLY_SOURCES.indexOf(source) < 0;
 }
 
 function sourceCssValue(source: string): string {

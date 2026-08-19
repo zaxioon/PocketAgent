@@ -4,7 +4,7 @@ import {
   A2uiAction,
   A2uiComponent,
   A2uiSurfaceState,
-  aggregateSearchRegistrySourceIds,
+  aggregateSearchSearchSourceIds,
   AggregateSearchPost,
   AggregateSearchResult,
   AggregateSearchSource,
@@ -108,7 +108,7 @@ const HIGHLIGHT_SLOTS: DailyBriefHighlightSlot[] = [
   'status_alert'
 ];
 
-const WATERFALL_SOURCES: string[] = aggregateSearchRegistrySourceIds();
+const WATERFALL_SOURCES: string[] = aggregateSearchSearchSourceIds();
 const DAILY_BRIEF_MAIL_LIMIT = 6;
 const DAILY_BRIEF_MAIL_DIGEST_LIMIT = 90;
 
