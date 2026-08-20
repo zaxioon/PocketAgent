@@ -45,6 +45,12 @@ function uniquePositiveTopics(weights: WaterfallPreferenceWeight[], excluded: st
   return sorted.slice(0, 3).map((weight: WaterfallPreferenceWeight): string => weight.key.trim());
 }
 
+function splitRecallWeight(total: number, count: number, index: number): number {
+  if (count <= 0) return 0;
+  const base = Math.floor(total / count);
+  return base + (index < total - base * count ? 1 : 0);
+}
+
 export function planWaterfallInterestRecall(
   profile: WaterfallPreferenceSnapshot,
   recentPositiveCandidates: WaterfallRankedCandidate[],
@@ -114,6 +120,14 @@ export interface WaterfallCandidate {
   url: string;
   coverUrl: string;
   mediaUrl?: string;
+  feedUrl?: string;
+  audioTitle?: string;
+  audioMimeType?: string;
+  audioDuration?: string;
+  audioPublishedAt?: string;
+  audioLoadState?: 'loading' | 'ready' | 'error';
+  audioError?: string;
+  audioRetryable?: boolean;
   publishedAt: string;
   duration?: string;
   originalIndex: number;
@@ -449,6 +463,14 @@ function toRankedCandidate(item: RankedCandidateInternal): WaterfallRankedCandid
     url: item.candidate.url,
     coverUrl: item.candidate.coverUrl,
     mediaUrl: item.candidate.mediaUrl,
+    feedUrl: item.candidate.feedUrl,
+    audioTitle: item.candidate.audioTitle,
+    audioMimeType: item.candidate.audioMimeType,
+    audioDuration: item.candidate.audioDuration,
+    audioPublishedAt: item.candidate.audioPublishedAt,
+    audioLoadState: item.candidate.audioLoadState,
+    audioError: item.candidate.audioError,
+    audioRetryable: item.candidate.audioRetryable,
     publishedAt: item.candidate.publishedAt,
     duration: item.candidate.duration,
     originalIndex: item.candidate.originalIndex,
@@ -1244,6 +1266,14 @@ function rankedToCandidates(items: WaterfallRankedCandidate[]): WaterfallCandida
     url: item.url,
     coverUrl: item.coverUrl,
     mediaUrl: item.mediaUrl,
+    feedUrl: item.feedUrl,
+    audioTitle: item.audioTitle,
+    audioMimeType: item.audioMimeType,
+    audioDuration: item.audioDuration,
+    audioPublishedAt: item.audioPublishedAt,
+    audioLoadState: item.audioLoadState,
+    audioError: item.audioError,
+    audioRetryable: item.audioRetryable,
     publishedAt: item.publishedAt,
     duration: item.duration,
     originalIndex: item.originalIndex,
@@ -1287,6 +1317,14 @@ function deferredRankedCandidate(candidate: WaterfallCandidate): WaterfallRanked
     url: candidate.url,
     coverUrl: candidate.coverUrl,
     mediaUrl: candidate.mediaUrl,
+    feedUrl: candidate.feedUrl,
+    audioTitle: candidate.audioTitle,
+    audioMimeType: candidate.audioMimeType,
+    audioDuration: candidate.audioDuration,
+    audioPublishedAt: candidate.audioPublishedAt,
+    audioLoadState: candidate.audioLoadState,
+    audioError: candidate.audioError,
+    audioRetryable: candidate.audioRetryable,
     publishedAt: candidate.publishedAt,
     duration: candidate.duration,
     originalIndex: candidate.originalIndex,

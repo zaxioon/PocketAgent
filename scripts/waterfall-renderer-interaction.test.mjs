@@ -41,7 +41,21 @@ const aggregateCss = template('AGGREGATE_CSS');
 const aggregateJs = template('AGGREGATE_JS');
 const waterfallCss = template('WATERFALL_CSS');
 const waterfallJs = template('WATERFALL_JS');
-const emittedWaterfallJs = Function('return `' + waterfallJs + '`;')();
+const sourceLabelsJson = JSON.stringify([
+  { source: 'youtube', label: 'YouTube' },
+  { source: 'bilibili', label: 'B 站' },
+  { source: 'applepodcasts', label: 'Apple Podcasts' },
+  { source: 'twitch', label: 'Twitch' }
+]);
+const sourceOnlyJson = JSON.stringify(['applepodcasts', 'twitch']);
+const searchSourcesJson = JSON.stringify(['youtube', 'bilibili', 'applepodcasts']);
+const interestSourcesJson = JSON.stringify(['youtube', 'bilibili', 'applepodcasts', 'twitch']);
+const waterfallTemplateWithRegistry = waterfallJs
+  .split('${WATERFALL_SOURCE_LABELS_JSON}').join(sourceLabelsJson)
+  .split('${WATERFALL_SOURCE_ONLY_SOURCES_JSON}').join(sourceOnlyJson)
+  .split('${WATERFALL_SEARCH_SOURCE_IDS_JSON}').join(searchSourcesJson)
+  .split('${WATERFALL_INTEREST_SOURCE_IDS_JSON}').join(interestSourcesJson);
+const emittedWaterfallJs = Function('return `' + waterfallTemplateWithRegistry + '`;')();
 assert.doesNotThrow(() => new vm.Script(emittedWaterfallJs));
 const reducedMotionCss = waterfallCss.slice(waterfallCss.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
 assert.match(indexPage, /@State interestWaterfallFullscreen:\s*boolean\s*=\s*false/,
@@ -199,6 +213,12 @@ assert.match(waterfallCss, /\.waterfall-reader\.active\.closing\s*\{[^}]*opacity
 assert.match(waterfallCss, /\n\.waterfall-reader-layout \{ width: min\(100%, 640px\); margin: 0 auto; \}/,
   'the long scrolling detail content must not remain transformed');
 assert.match(waterfallCss, /\.waterfall-media-frame\s*\{[^}]*pointer-events:\s*auto/s);
+assert.match(waterfallCss, /\.waterfall-inline-play\s*\{[^}]*min-height:\s*48px/s);
+assert.match(waterfallCss, /\.waterfall-inline-play\[hidden\]\s*\{[^}]*display:\s*none/s);
+assert.match(waterfallCss, /\.waterfall-inline-audio\s*\{[^}]*top:\s*50%[^}]*bottom:\s*auto[^}]*transform:\s*translateY\(-50%\)[^}]*min-height:\s*48px/s);
+assert.match(waterfallCss, /\.waterfall-card--inline-twitch \.waterfall-inline-media-frame\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*min-height:\s*300px/s);
+assert.match(waterfallCss, /\.waterfall-empty button, \.waterfall-status button\s*\{[^}]*min-height:\s*48px/s);
+assert.match(waterfallCss, /\.waterfall-status--empty\s*\{[^}]*min-height:\s*calc\(100dvh - 150px\)[^}]*display:\s*grid/s);
 assert.match(aggregateCss, /--ease-out:\s*cubic-bezier\(0\.23, 1, 0\.32, 1\)/);
 assert.match(aggregateCss, /--ease-drawer:\s*cubic-bezier\(0\.32, 0\.72, 0, 1\)/);
 assert.match(waterfallCss, /\.waterfall-reader\s*\{[^}]*visibility:\s*hidden[^}]*visibility 0s linear 180ms/s);
@@ -217,6 +237,8 @@ assert.match(reducedMotionCss, /\.waterfall-video-fullscreen-toggle,[^}]*\.water
 assert.match(reducedMotionCss, /\.waterfall-video-fullscreen-toggle:active,[^}]*\.waterfall-card-shell:active,[^}]*\{[^}]*transform:\s*none[^}]*opacity:\s*0\.82/s);
 assert.match(reducedMotionCss, /\.waterfall-overlay\.active\s*\{[^}]*animation:\s*waterfall-overlay-in 140ms var\(--ease-out\) both !important/s);
 assert.match(waterfallCss, /\.waterfall-cinema-card p\s*\{[^}]*-webkit-line-clamp:\s*3/s);
+assert.match(waterfallCss, /\.waterfall-cinema-card h2\s*\{[^}]*-webkit-line-clamp:\s*4/s);
+assert.match(waterfallCss, /\.waterfall-card--text h2\s*\{[^}]*-webkit-line-clamp:\s*6/s);
 assert.match(waterfallCss, /\.waterfall-preferences label\s*\{[^}]*border:\s*1px solid/s);
 assert.doesNotMatch(waterfallCss, /\.waterfall-preferences > div:last-child > button/,
   'the source sheet must not end in an oversized full-width done button');
@@ -333,6 +355,20 @@ const preferenceChangeSource = waterfallJs.slice(
 );
 assert.doesNotMatch(preferenceChangeSource, /postSourceSelection\(\)|render\(\)/,
   'source toggles must not synchronously bridge and rebuild the feed');
+assert.doesNotThrow(() => new vm.Script(emittedWaterfallJs), 'generated ArkWeb script must remain valid JavaScript');
+assert.match(waterfallJs, /host !== 'twitch\.tv' && host !== 'www\.twitch\.tv'/);
+assert.match(waterfallJs, /\^\[a-z0-9_\]\{1,25\}\$/);
+assert.match(waterfallJs, /https:\/\/player\.twitch\.tv\/\?channel=/);
+assert.match(waterfallJs, /&autoplay=false&muted=false/);
+assert.match(waterfallJs, /id: 'waterfall\.applepodcasts\.resolve'/);
+assert.match(waterfallJs, /args: \{ surfaceId: state\.surfaceId \|\| '', candidateId: candidateId \}/);
+assert.match(waterfallJs, /document\.createElement\('audio'\)/);
+assert.match(waterfallJs, /audio\.setAttribute\('preload', 'none'\)/);
+assert.match(waterfallJs, /coverFailure = sourceOnly \? 'this\.hidden=true' : 'this\.parentElement\.hidden=true'/,
+  'an inline source cover failure must not hide its playback controls');
+assert.match(waterfallJs, /youtube\.com\/embed\/.*\?playsinline=1/);
+assert.match(waterfallJs, /player\.bilibili\.com\/player\.html\?bvid=.*&autoplay=0&poster=true&danmaku=0&isOutside=true/);
+assert.doesNotMatch(waterfallJs, /TWITCH_CLIENT_(?:ID|SECRET)|access_token/i);
 
 function element() {
   const classes = new Set();
@@ -341,10 +377,12 @@ function element() {
   let htmlWrites = 0;
   let appendedHtmlWrites = 0;
   let classToggleWrites = 0;
+  let outerHtmlWrites = 0;
   const removedChildren = [];
-  return {
+  const node = {
     scrollTop: 0,
     clientHeight: 1000,
+    rect: { top: 0, bottom: 1000 },
     removedChildren,
     parentNode: { removeChild: (child) => { removedChildren.push(child); child.removed = true; } },
     style: {
@@ -353,7 +391,10 @@ function element() {
     },
     get innerHTML() { return html; },
     set innerHTML(value) { html = value; htmlWrites += 1; },
+    get outerHTML() { return html; },
+    set outerHTML(value) { html = value; outerHtmlWrites += 1; },
     get innerHTMLWrites() { return htmlWrites; },
+    get outerHTMLWrites() { return outerHtmlWrites; },
     get appendedHtmlWrites() { return appendedHtmlWrites; },
     get classToggleWrites() { return classToggleWrites; },
     insertAdjacentHTML: (_position, value) => { html += value; appendedHtmlWrites += 1; },
@@ -380,8 +421,10 @@ function element() {
       listeners[type]?.(event);
     },
     querySelector: () => null,
+    getBoundingClientRect: () => node.rect,
     querySelectorAll: () => []
   };
+  return node;
 }
 
 const overlay = element();
@@ -391,6 +434,7 @@ const reader = element();
 const readerHead = element();
 reader.querySelector = (selector) => selector === '.waterfall-reader-head' ? readerHead : null;
 const toolbar = element();
+const toast = element();
 const backButton = element();
 const preferencesButton = element();
 const preferenceBackButton = element();
@@ -420,6 +464,7 @@ const actions = [];
 const openedSources = [];
 const fullscreenStates = [];
 const timers = [];
+const createdFrames = [];
 let now = 1000;
 const FakeDate = { now: () => now };
 const actionCount = (id) => actions.filter((action) => action.id === id).length;
@@ -464,13 +509,33 @@ const document = {
     'waterfall-track': track,
     'waterfall-preferences': preferences,
     'waterfall-reader': reader,
-    'waterfall-toolbar': toolbar
+    'waterfall-toolbar': toolbar,
+    'waterfall-toast': toast
   })[id] ?? null,
   querySelector: () => null,
   querySelectorAll: (selector) => ({
     '[data-waterfall-back]': [backButton],
     '[data-waterfall-preferences]': [preferencesButton]
   })[selector] ?? [],
+  createElement: (tagName) => {
+    assert.ok(tagName === 'iframe' || tagName === 'audio');
+    const attributes = {};
+    const listeners = {};
+    const media = {
+      tagName: tagName.toUpperCase(),
+      className: '',
+      removed: false,
+      paused: false,
+      attributes,
+      setAttribute: (name, value) => { attributes[name] = String(value); },
+      addEventListener: (type, listener) => { listeners[type] = listener; },
+      emit: (type) => listeners[type]?.(),
+      pause: () => { media.paused = true; },
+      remove: () => { media.removed = true; }
+    };
+    createdFrames.push(media);
+    return media;
+  },
   addEventListener: (type, listener) => {
     const previous = documentListeners[type];
     documentListeners[type] = previous ? (event) => {
@@ -524,6 +589,7 @@ const window = {
   innerWidth: 400,
   innerHeight: 1000,
   matchMedia: () => ({ matches: false }),
+  location: { hostname: 'aiphone.local' },
   __aiphoneWaterfallInitial: {
     surfaceId: 'surface-1',
     currentId: 'current',
@@ -1228,7 +1294,7 @@ window.__aiphoneApplyWaterfallUpdate({
   enabledSources: ['youtube'],
   aggregateHtml: '',
   candidates: [],
-  sources: [],
+  sources: [{ source: 'youtube', phase: 'success' }],
   replenishing: false,
   exhausted: true
 });
@@ -1241,7 +1307,18 @@ preferences.emit('click', { preventDefault: () => {}, target: preferenceBackButt
 runLatestTimer(140);
 assert.match(track.innerHTML, /本轮内容已结束/);
 assert.doesNotMatch(track.innerHTML, /至少开启一个来源/);
-assert.doesNotMatch(track.innerHTML, /data-waterfall-empty-sources/);
+assert.match(track.innerHTML, /data-waterfall-empty-sources[^>]*>调整内容来源<\/button>/);
+preferences.classList.remove('active');
+track.emit('click', {
+  target: {
+    closest: (selector) => selector === '[data-waterfall-empty-sources]' ? {} : null
+  }
+});
+assert.equal(preferences.classList.contains('active'), true,
+  'terminal empty state must allow reopening source preferences');
+assert.match(preferences.innerHTML, /data-waterfall-source="youtube"/);
+preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
+runLatestTimer(140);
 
 window.__aiphoneApplyWaterfallUpdate({
   surfaceId: 'surface-1',
@@ -1349,3 +1426,205 @@ assert.equal(droppedFeedNodes[0].removed, undefined,
   'the card the user is looking at must survive a payload that drops a neighbor');
 assert.equal(track.appendedHtmlWrites, appendsBeforeDrop + 1,
   'newly ranked cards must still append after the surviving cards');
+assert.doesNotMatch(track.innerHTML, /\\u672c\\u8f6e\\u5185\\u5bb9\\u5df2\\u7ed3\\u675f/);
+
+function inlinePlayerFixture(source, id) {
+  const card = element();
+  const stage = {
+    children: [],
+    appendChild: (child) => { stage.children.push(child); }
+  };
+  const button = {
+    hidden: false,
+    disabled: false,
+    textContent: '播放',
+    getAttribute: (name) => name === (source === 'applepodcasts' ? 'data-waterfall-apple-play' :
+      'data-waterfall-inline-play') ? id : '',
+    closest: (selector) => {
+      if (source === 'applepodcasts' && selector === '[data-waterfall-apple-play]') return button;
+      if (source === 'twitch' && selector === '[data-waterfall-inline-play]') return button;
+      if (selector === '.waterfall-cinema-stage') return stage;
+      if (selector === '[data-waterfall-id]') return card;
+      return null;
+    }
+  };
+  card.getAttribute = (name) => name === 'data-waterfall-id' ? id : '';
+  card.querySelector = (selector) => {
+    if (selector === '.waterfall-cinema-stage') return stage;
+    if (source === 'applepodcasts' && selector === '[data-waterfall-apple-play]') return button;
+    if (source === 'twitch' && selector === '[data-waterfall-inline-play]') return button;
+    return null;
+  };
+  return { button, card, stage };
+}
+
+const appleCandidate = {
+  ...candidate('apple-podcast-1'),
+  source: 'applepodcasts',
+  mediaType: 'image_text',
+  url: 'https://podcasts.apple.com/us/podcast/apple-events-video/id275834665',
+  feedUrl: 'https://feeds.example.com/apple-events.xml',
+  coverUrl: 'https://img.example/apple-podcast.jpg'
+};
+const twitchCandidate = {
+  ...candidate('twitch-channel-1'),
+  source: 'twitch',
+  mediaType: 'image_text',
+  url: 'https://www.twitch.tv/example',
+  coverUrl: 'https://img.example/twitch.jpg'
+};
+const sourcePayload = (appleOverrides = {}) => ({
+  surfaceId: 'surface-1',
+  currentId: 'apple-podcast-1',
+  enabledSources: ['applepodcasts', 'twitch'],
+  aggregateHtml: '',
+  candidates: [{ ...appleCandidate, ...appleOverrides }, twitchCandidate],
+  mediaEmbeds: {},
+  sources: [{ source: 'applepodcasts', phase: 'success' }, { source: 'twitch', phase: 'success' }],
+  replenishing: false,
+  exhausted: false
+});
+window.__aiphoneApplyWaterfallUpdate(sourcePayload());
+assert.match(track.innerHTML, /data-waterfall-apple-play="apple-podcast-1"/);
+assert.match(track.innerHTML, /data-waterfall-apple-play="apple-podcast-1"[^>]*>加载节目<\/button>/);
+assert.match(track.innerHTML, /data-waterfall-inline-play="twitch-channel-1"/);
+assert.doesNotMatch(track.innerHTML, /<audio|player\.twitch\.tv/,
+  'new-source players must not load before an explicit click');
+
+const applePlayer = inlinePlayerFixture('applepodcasts', 'apple-podcast-1');
+const twitchPlayer = inlinePlayerFixture('twitch', 'twitch-channel-1');
+const sourceCards = [applePlayer.card, twitchPlayer.card];
+track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? sourceCards : [];
+track.querySelector = () => null;
+const framesBeforeInlinePlay = createdFrames.length;
+const actionsBeforeApplePlay = actions.length;
+track.emit('click', { target: applePlayer.button });
+assert.equal(createdFrames.length, framesBeforeInlinePlay, 'Apple click must resolve RSS before creating media');
+assert.equal(actions.length, actionsBeforeApplePlay + 1);
+assert.equal(actions.at(-1)?.id, 'waterfall.applepodcasts.resolve');
+assert.deepEqual(Object.keys(actions.at(-1)?.args ?? {}).sort(), ['candidateId', 'surfaceId']);
+assert.equal(actions.at(-1)?.args?.candidateId, 'apple-podcast-1');
+assert.equal(applePlayer.button.disabled, true);
+
+window.__aiphoneApplyWaterfallUpdate(sourcePayload({ audioLoadState: 'loading' }));
+assert.equal(createdFrames.length, framesBeforeInlinePlay);
+window.__aiphoneApplyWaterfallUpdate(sourcePayload({
+  audioLoadState: 'ready',
+  mediaUrl: 'https://cdn.example.com/episode.mp3',
+  audioTitle: 'Resolved episode',
+  audioMimeType: 'audio/mpeg'
+}));
+assert.equal(createdFrames.length, framesBeforeInlinePlay + 1, 'ready RSS metadata must mount one audio element');
+const appleAudio = createdFrames.at(-1);
+assert.equal(appleAudio.tagName, 'AUDIO');
+assert.equal(appleAudio.attributes.preload, 'none');
+assert.equal(appleAudio.attributes.src, 'https://cdn.example.com/episode.mp3');
+assert.equal(applePlayer.button.hidden, true);
+
+track.emit('click', { target: twitchPlayer.button });
+const twitchFrame = createdFrames.at(-1);
+assert.equal(appleAudio.paused, true, 'switching providers must pause the previous podcast');
+assert.equal(appleAudio.removed, true, 'switching providers must destroy the previous podcast');
+assert.equal(applePlayer.button.hidden, false);
+assert.equal(twitchPlayer.button.hidden, true);
+assert.equal(twitchFrame.tagName, 'IFRAME');
+assert.equal(twitchFrame.attributes.src,
+  'https://player.twitch.tv/?channel=example&parent=aiphone.local&autoplay=false&muted=false');
+assert.equal(twitchFrame.attributes['data-inline-source'], 'twitch');
+
+track.emit('click', {
+  target: { closest: (selector) => selector === '.waterfall-source-action' ? { href: 'https://www.twitch.tv/example' } : null }
+});
+assert.equal(twitchFrame.removed, true, 'opening the source link must destroy the active inline player');
+assert.equal(twitchPlayer.button.hidden, false);
+
+track.emit('click', { target: twitchPlayer.button });
+const offscreenFrame = createdFrames.at(-1);
+twitchPlayer.card.rect = { top: 1001, bottom: 2001 };
+track.emit('scroll');
+runLatestTimer(180);
+assert.equal(offscreenFrame.removed, true, 'scrolling the active card outside the viewport must destroy its iframe');
+twitchPlayer.card.rect = { top: 0, bottom: 1000 };
+
+track.emit('click', { target: twitchPlayer.button });
+const hiddenFrame = createdFrames.at(-1);
+document.hidden = true;
+documentListeners.visibilitychange();
+assert.equal(hiddenFrame.removed, true, 'hiding the document must destroy the inline player');
+document.hidden = false;
+documentListeners.visibilitychange();
+
+track.emit('click', { target: twitchPlayer.button });
+const preferencesFrame = createdFrames.at(-1);
+preferencesButton.emit('click');
+assert.equal(preferencesFrame.removed, true, 'opening source preferences must destroy the inline player');
+preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
+runLatestTimer(140);
+
+track.emit('click', { target: twitchPlayer.button });
+const readerFrame = createdFrames.at(-1);
+const openReaderLifecycleSource = waterfallJs.slice(
+  waterfallJs.indexOf('function openReader'), waterfallJs.indexOf('function toggleVideoFullscreen'));
+assert.match(openReaderLifecycleSource, /destroyInlinePlayer\(\)/,
+  'opening the ordinary release reader must destroy the active inline player first');
+document.hidden = true;
+documentListeners.visibilitychange();
+assert.equal(readerFrame.removed, true, 'the active player used by the reader lifecycle test must be cleaned up');
+document.hidden = false;
+documentListeners.visibilitychange();
+
+for (let backAttempt = 0; backAttempt < 3; backAttempt += 1) {
+  const handled = window.__aiphoneHandleWaterfallBack();
+  timers.filter((timer) => (timer.delay === 140 || timer.delay === 180) && !timer.canceled)
+    .forEach((timer) => { timer.canceled = true; timer.callback(); });
+  if (!handled) break;
+}
+documentListeners.touchend?.();
+
+window.__aiphoneApplyWaterfallUpdate(sourcePayload({
+  audioLoadState: 'error',
+  audioError: '播客音频加载失败，可重试',
+  audioRetryable: true
+}));
+const pendingSettleTimer = timers.filter((timer) => timer.delay === 96 && !timer.canceled).at(-1);
+if (pendingSettleTimer) {
+  pendingSettleTimer.canceled = true;
+  pendingSettleTimer.callback();
+}
+assert.match(applePlayer.card.outerHTML, /data-waterfall-apple-play="apple-podcast-1"[^>]*>重试<\/button>/);
+assert.match(applePlayer.card.outerHTML, /播客音频加载失败，可重试/);
+assert.doesNotMatch(applePlayer.card.outerHTML, /<audio/);
+assert.equal(toast.textContent, '播客音频加载失败，可重试');
+assert.equal(toast.classList.contains('active'), true);
+const toastTimerCount = timers.filter((timer) => timer.delay === 2600).length;
+window.__aiphoneApplyWaterfallUpdate(sourcePayload({
+  audioLoadState: 'error',
+  audioError: '播客音频加载失败，可重试',
+  audioRetryable: true
+}));
+assert.equal(timers.filter((timer) => timer.delay === 2600).length, toastTimerCount,
+  'the same candidate and message must not show twice');
+
+window.__aiphoneApplyWaterfallUpdate(sourcePayload({
+  audioLoadState: 'loading',
+  audioError: '',
+  audioRetryable: true
+}));
+window.__aiphoneApplyWaterfallUpdate(sourcePayload({
+  audioLoadState: 'error',
+  audioError: '播客音频加载失败，可重试',
+  audioRetryable: true
+}));
+assert.equal(timers.filter((timer) => timer.delay === 2600).length, toastTimerCount + 1,
+  'a new loading attempt must allow the same candidate and message to toast again');
+assert.equal(toast.textContent, '播客音频加载失败，可重试');
+
+window.__aiphoneApplyWaterfallUpdate(sourcePayload({
+  audioLoadState: 'error',
+  audioError: '该节目仅提供 HTTP 音频，请在来源页收听',
+  audioRetryable: false
+}));
+assert.doesNotMatch(applePlayer.card.outerHTML, /data-waterfall-apple-play="apple-podcast-1"/);
+assert.match(applePlayer.card.outerHTML, /该节目仅提供 HTTP 音频，请在来源页收听/);
+assert.equal(toast.textContent, '该节目仅提供 HTTP 音频，请在来源页收听');
+assert.equal(toast.classList.contains('active'), true);

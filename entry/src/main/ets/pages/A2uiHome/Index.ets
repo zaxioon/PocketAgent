@@ -31,6 +31,9 @@ import {
   callConfiguredWaterfallInterestRecall,
   AggregateSearchSource,
   AggregateSearchSourceBatch,
+  ApplePodcastEpisodeAudio,
+  ApplePodcastResolverFailure,
+  applePodcastResolverFailure,
   configureWaterfallEnabledSourcesForRuntime,
   configureWaterfallPreferenceProfileForRuntime,
   configureWaterfallSearchPolicyForRuntime,
@@ -41,6 +44,7 @@ import {
   mergeWaterfallFeedSnapshot,
   planWaterfallInterestRecall,
   planWaterfallContinuation,
+  resolveApplePodcastEpisode,
   parseWaterfallExpandedQuery,
   WaterfallFeedState,
   WaterfallFeedUpdate,
@@ -336,6 +340,7 @@ import { buildMultiTaskHomePayload, renderHtmlHomeDocument } from './html/HtmlHo
 import {
   buildWaterfallHomePayload,
   renderAggregateSearchHomeDocument,
+  waterfallApplePodcastCandidateFromAction,
   waterfallAdvanceCurrentFromAction,
   waterfallBehaviorFromAction,
   waterfallEnabledSourcesFromAction
@@ -1915,7 +1920,7 @@ struct Index {
 
   private handleWaterfallClientAction(action: A2uiAction): boolean {
     if (action.id !== 'waterfall.sources.select' && action.id !== 'waterfall.feed.advance' &&
-      action.id !== 'waterfall.behavior.record') {
+      action.id !== 'waterfall.behavior.record' && action.id !== 'waterfall.applepodcasts.resolve') {
       return false;
     }
     const document = this.currentHtmlHomeDocument();
@@ -1927,6 +1932,17 @@ struct Index {
     if (this.waterfallFeedState === null || this.waterfallFeedSurfaceId !== surfaceId) {
       this.waterfallFeedState = document.waterfall;
       this.waterfallFeedSurfaceId = surfaceId;
+    }
+    if (action.id === 'waterfall.applepodcasts.resolve') {
+      const candidateId = waterfallApplePodcastCandidateFromAction(action, surfaceId);
+      const candidate = candidateId === null ? null : this.waterfallCandidate(candidateId, this.waterfallFeedState);
+      if (candidateId === null || candidate === null || candidate.source !== 'applepodcasts' ||
+        (candidate.feedUrl ?? '').trim().length === 0) {
+        this.logHtmlHomeActionError(action, 'invalid_apple_podcast_candidate');
+        return true;
+      }
+      this.resolveApplePodcastCandidate('search', surfaceId, candidate);
+      return true;
     }
     if (action.id === 'waterfall.sources.select') {
       const selectedSources = waterfallEnabledSourcesFromAction(action, surfaceId);
@@ -1977,6 +1993,17 @@ struct Index {
       return;
     }
     if (state === null) return;
+    if (action.id === 'waterfall.applepodcasts.resolve') {
+      const candidateId = waterfallApplePodcastCandidateFromAction(action, surfaceId);
+      const candidate = candidateId === null ? null : this.waterfallCandidate(candidateId, state);
+      if (candidate !== null && candidate.source === 'applepodcasts' &&
+        (candidate.feedUrl ?? '').trim().length > 0) {
+        this.resolveApplePodcastCandidate('interest', surfaceId, candidate);
+      } else {
+        this.logHtmlHomeActionError(action, 'invalid_apple_podcast_candidate');
+      }
+      return;
+    }
     if (action.id === 'waterfall.sources.select') {
       const selectedSources = waterfallEnabledSourcesFromAction(action, surfaceId);
       if (selectedSources === null) return;
@@ -2031,6 +2058,90 @@ struct Index {
       if (values[index].id === candidateId) return values[index];
     }
     return null;
+  }
+
+  private activeApplePodcastCandidate(
+    target: 'search' | 'interest',
+    surfaceId: string,
+    candidateId: string,
+    feedUrl: string,
+    runtimeOwner: RuntimeOwner,
+    runtimeGeneration: number,
+    interestGeneration: number
+  ): WaterfallRankedCandidate | null {
+    if (target === 'search') {
+      if (!runtimeCallbackIsCurrent(
+        this.activeRuntimeOwner, this.runtimeGeneration, runtimeOwner, runtimeGeneration)) return null;
+      const document = this.currentHtmlHomeDocument();
+      if (this.waterfallFeedSurfaceId !== surfaceId || document.kind !== 'aggregate-search' ||
+        (document.surfaceId ?? '') !== surfaceId) return null;
+    } else if (surfaceId !== 'waterfall-interest-home' ||
+      this.interestWaterfallGeneration !== interestGeneration) {
+      return null;
+    }
+    const state = target === 'search' ? this.waterfallFeedState : this.interestWaterfallFeedState;
+    const candidate = this.waterfallCandidate(candidateId, state);
+    if (candidate === null || candidate.source !== 'applepodcasts' || (candidate.feedUrl ?? '').trim() !== feedUrl) {
+      return null;
+    }
+    return candidate;
+  }
+
+  private publishApplePodcastCandidate(target: 'search' | 'interest', surfaceId: string): void {
+    if (target === 'interest') {
+      if (surfaceId === 'waterfall-interest-home') this.publishInterestWaterfallPayload();
+      return;
+    }
+    const document = this.currentHtmlHomeDocument();
+    if (this.waterfallFeedSurfaceId === surfaceId && document.kind === 'aggregate-search' &&
+      (document.surfaceId ?? '') === surfaceId) this.publishWaterfallPayload(document);
+  }
+
+  private resolveApplePodcastCandidate(
+    target: 'search' | 'interest',
+    surfaceId: string,
+    candidate: WaterfallRankedCandidate
+  ): void {
+    const feedUrl = (candidate.feedUrl ?? '').trim();
+    if (feedUrl.length === 0 || candidate.audioLoadState === 'loading') return;
+    const candidateId = candidate.id;
+    const runtimeOwner = this.activeRuntimeOwner;
+    const runtimeGeneration = this.runtimeGeneration;
+    const interestGeneration = this.interestWaterfallGeneration;
+    candidate.audioLoadState = 'loading';
+    candidate.audioError = '';
+    candidate.audioRetryable = true;
+    this.publishApplePodcastCandidate(target, surfaceId);
+    aiLogInfo('[AIPhone][ApplePodcastResolve] phase=loading surface=' + surfaceId + ' candidate=' + candidateId);
+    resolveApplePodcastEpisode(feedUrl).then((episode: ApplePodcastEpisodeAudio): void => {
+      const current = this.activeApplePodcastCandidate(
+        target, surfaceId, candidateId, feedUrl, runtimeOwner, runtimeGeneration, interestGeneration);
+      if (current === null) {
+        aiLogInfo('[AIPhone][ApplePodcastResolve] phase=stale surface=' + surfaceId + ' candidate=' + candidateId);
+        return;
+      }
+      current.mediaUrl = episode.mediaUrl;
+      current.audioTitle = episode.audioTitle;
+      current.audioMimeType = episode.audioMimeType;
+      current.audioDuration = episode.audioDuration;
+      current.audioPublishedAt = episode.audioPublishedAt;
+      current.audioLoadState = 'ready';
+      current.audioError = '';
+      current.audioRetryable = false;
+      this.publishApplePodcastCandidate(target, surfaceId);
+      aiLogInfo('[AIPhone][ApplePodcastResolve] phase=ready surface=' + surfaceId + ' candidate=' + candidateId);
+    }).catch((error: Error): void => {
+      const current = this.activeApplePodcastCandidate(
+        target, surfaceId, candidateId, feedUrl, runtimeOwner, runtimeGeneration, interestGeneration);
+      if (current === null) return;
+      const failure: ApplePodcastResolverFailure = applePodcastResolverFailure(error);
+      current.audioLoadState = 'error';
+      current.audioError = failure.message;
+      current.audioRetryable = failure.retryable;
+      this.publishApplePodcastCandidate(target, surfaceId);
+      aiLogError('[AIPhone][ApplePodcastResolve] phase=error surface=' + surfaceId + ' candidate=' + candidateId +
+        ' code=' + failure.code);
+    });
   }
 
   private recordWaterfallBehavior(

@@ -508,6 +508,14 @@ function normalizeCandidate(value: WaterfallRankedCandidate): WaterfallRankedCan
       value.mediaUrl.startsWith('http://') && value.mediaUrl.length > 7)) {
     next.mediaUrl = value.mediaUrl;
   }
+  if (value.feedUrl !== undefined && value.feedUrl.startsWith('https://')) next.feedUrl = value.feedUrl;
+  if (value.audioTitle !== undefined) next.audioTitle = value.audioTitle;
+  if (value.audioMimeType !== undefined) next.audioMimeType = value.audioMimeType;
+  if (value.audioDuration !== undefined) next.audioDuration = value.audioDuration;
+  if (value.audioPublishedAt !== undefined) next.audioPublishedAt = value.audioPublishedAt;
+  if (value.audioLoadState !== undefined) next.audioLoadState = value.audioLoadState;
+  if (value.audioError !== undefined) next.audioError = value.audioError;
+  if (value.audioRetryable !== undefined) next.audioRetryable = value.audioRetryable;
   return next;
 }
 

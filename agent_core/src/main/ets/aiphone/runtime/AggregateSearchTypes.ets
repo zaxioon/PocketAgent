@@ -68,6 +68,7 @@ export interface AggregateSearchPost {
   commentCount: string;
   status: AggregateSearchStatus;
   rows: AggregateSearchRowData[];
+  feedUrl?: string;
 }
 
 export interface AggregateSearchResult {

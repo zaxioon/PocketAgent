@@ -202,6 +202,7 @@ export function aggregateMediaCandidates(
       url: post.url,
       coverUrl: coverUrl,
       mediaUrl: mediaUrl,
+      feedUrl: post.feedUrl,
       publishedAt: post.publishedAt,
       originalIndex: batchIndex * 1000 + videos.length + index,
       searchQuery: searchQuery,
