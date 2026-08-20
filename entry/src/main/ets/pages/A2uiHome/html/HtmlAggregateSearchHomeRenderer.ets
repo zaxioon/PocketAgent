@@ -1101,6 +1101,10 @@ const WATERFALL_CSS: string = `
 .waterfall-preferences.active {
   pointer-events: auto; visibility: visible; opacity: 1; transition-delay: 0s;
 }
+.waterfall-preferences:not(.active),
+.waterfall-preferences:not(.active) * {
+  pointer-events: none !important;
+}
 .waterfall-preferences .waterfall-toolbar {
   position: static; inset: auto; display: grid; grid-template-columns: 44px 1fr auto; gap: 8px;
   align-items: center; padding: 0; margin: 0 0 14px; pointer-events: auto;
@@ -1174,13 +1178,21 @@ const WATERFALL_CSS: string = `
   background: #fbfcfd;
   color: var(--card-ink);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 12px 30px var(--card-shadow);
-  cursor: pointer; touch-action: pan-y;
+  cursor: default; touch-action: pan-y;
   transition: transform 140ms var(--ease-out), box-shadow 180ms ease-out;
 }
+.waterfall-card-shell,
+.waterfall-card-shell * {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.waterfall-card-shell--interactive { cursor: pointer; }
 .waterfall-card--video .waterfall-card-shell { background: #fbfcfd; }
 .waterfall-card--text .waterfall-card-shell { background: var(--card-soft); }
-.waterfall-card-shell:active { transform: scale(0.992); }
-.waterfall-card-shell:focus-visible,
+.waterfall-card-shell--interactive:active,
+.waterfall-card-shell--interactive.is-pressed { transform: scale(0.992); }
+.waterfall-card-shell--interactive:focus-visible,
 .waterfall-source-action:focus-visible,
 .waterfall-reader-head a:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 3px;
@@ -1445,7 +1457,8 @@ const WATERFALL_CSS: string = `
   .waterfall-entry button:active, .waterfall-toolbar button:active, .waterfall-preferences button:active,
   .waterfall-preferences label:active, .waterfall-empty button:active { transform: none; }
   .waterfall-video-fullscreen-toggle:active,
-  .waterfall-card-shell:active,
+  .waterfall-card-shell--interactive:active,
+  .waterfall-card-shell--interactive.is-pressed,
   .waterfall-cinema-card a:active,
   .waterfall-read-button:active,
   .waterfall-inline-play:active,
@@ -2375,9 +2388,10 @@ const WATERFALL_JS: string = `
       escapeHtml(reasonText) + '</span>' : '<span></span>';
     var openAttributes = sourceOnly ? '' : ' role="button" tabindex="0" data-waterfall-open="' +
       escapeHtml(item.id) + '"';
+    var shellClass = 'waterfall-card-shell' + (sourceOnly ? '' : ' waterfall-card-shell--interactive');
     if (twitchEmbedUrl) cardClass += ' waterfall-card--inline-player waterfall-card--inline-twitch';
     return '<article class="' + cardClass + '" data-waterfall-id="' + escapeHtml(item.id) + '" data-waterfall-media-type="' +
-      escapeHtml(item.mediaType) + '"><div class="waterfall-card-shell"' + openAttributes + '>' +
+      escapeHtml(item.mediaType) + '"><div class="' + shellClass + '"' + openAttributes + '>' +
       stage + '<div class="waterfall-cinema-copy">' + meta + '<h2>' + escapeHtml(title) + '</h2>' +
       (summary ? '<p>' + escapeHtml(summary) + '</p>' : '') +
       (item.publishedAt ? '<div class="waterfall-meta">' + escapeHtml(publishedLabel(item.publishedAt)) + '</div>' : '') +

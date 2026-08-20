@@ -3450,6 +3450,8 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('prefers-reduced-motion: reduce')).assertLarger(-1);
       expect(html.indexOf('data-waterfall-enter')).assertLarger(-1);
       expect(html.indexOf('data-waterfall-preferences')).assertLarger(-1);
+      expect(html.indexOf('.waterfall-preferences:not(.active) *')).assertLarger(-1);
+      expect(html.indexOf('pointer-events: none !important')).assertLarger(-1);
       expect(html.indexOf('data-waterfall-empty-sources')).assertLarger(-1);
       expect(html.indexOf('打开内容来源')).assertLarger(-1);
       expect(html.indexOf('调整内容来源')).assertLarger(-1);
@@ -3554,6 +3556,15 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('var sourceOnly = ["applepodcasts","twitch"].indexOf(item.source) >= 0'))
         .assertLarger(-1);
       expect(html.indexOf('var openAttributes = sourceOnly ?')).assertLarger(-1);
+      expect(html.indexOf("var shellClass = 'waterfall-card-shell' + (sourceOnly ? '' : " +
+        "' waterfall-card-shell--interactive')")).assertLarger(-1);
+      expect(html.indexOf('.waterfall-card-shell--interactive { cursor: pointer; }')).assertLarger(-1);
+      expect(html.indexOf('.waterfall-card-shell--interactive:active,')).assertLarger(-1);
+      expect(html.indexOf('.waterfall-card-shell--interactive.is-pressed')).assertLarger(-1);
+      expect(html.indexOf('.waterfall-card-shell:active {')).assertEqual(-1);
+      expect(html.indexOf('-webkit-tap-highlight-color: transparent')).assertLarger(-1);
+      expect(html.indexOf('-webkit-user-select: none')).assertLarger(-1);
+      expect(html.indexOf('user-select: none')).assertLarger(-1);
       expect(html.indexOf('if (!item || ["applepodcasts","twitch"].indexOf(item.source) >= 0) return'))
         .assertLarger(-1);
       expect(html.indexOf('https://podcasts.apple.com/us/podcast/apple-events-video/id275834665')).assertLarger(-1);

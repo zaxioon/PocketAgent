@@ -134,6 +134,18 @@ assert.match(waterfallCss, /\.waterfall-card--image-text/);
 assert.match(waterfallCss, /\.waterfall-card--text/);
 assert.match(waterfallCss, /\.waterfall-card--video-fullscreen/);
 assert.match(waterfallCss, /\.waterfall-card-shell\s*\{/);
+assert.match(waterfallCss, /\.waterfall-card-shell\s*\{[^}]*cursor:\s*default/s,
+  'source-only cards must not advertise a whole-card action');
+assert.match(waterfallCss, /\.waterfall-card-shell--interactive\s*\{[^}]*cursor:\s*pointer/s,
+  'only cards with a reader action may advertise whole-card interaction');
+assert.match(waterfallCss,
+  /\.waterfall-card-shell,\s*\.waterfall-card-shell \*\s*\{[^}]*-webkit-tap-highlight-color:\s*transparent[^}]*-webkit-user-select:\s*none[^}]*user-select:\s*none/s,
+  'card shells must suppress ArkWeb tap flashes and transient text selection');
+assert.match(waterfallCss,
+  /\.waterfall-card-shell--interactive:active,\s*\.waterfall-card-shell--interactive\.is-pressed\s*\{[^}]*scale\(0\.992\)/s,
+  'whole-card press scaling must be limited to interactive cards');
+assert.doesNotMatch(waterfallCss, /\.waterfall-card-shell:active\s*\{/,
+  'source-only card shells must not shrink on touch');
 assert.doesNotMatch(waterfallCss, /\.waterfall-card-ambient/);
 assert.doesNotMatch(waterfallCss, /\.waterfall-card-shell\s*\{[^}]*height:\s*min\(70dvh/s);
 assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*scroll-snap-align:\s*center/s);
@@ -227,6 +239,9 @@ assert.doesNotMatch(waterfallJs, /querySelector\('\[data-waterfall-reader-close\
   'reopening a card must not stack another tap binder on the close button');
 assert.match(waterfallCss, /\.waterfall-preferences\s*\{[^}]*transform:\s*none[^}]*opacity:\s*0[^}]*visibility 0s linear 140ms/s);
 assert.match(waterfallCss, /\.waterfall-preferences\.active\s*\{[^}]*transition-delay:\s*0s/s);
+assert.match(waterfallCss,
+  /\.waterfall-preferences:not\(\.active\),\s*\.waterfall-preferences:not\(\.active\) \*\s*\{[^}]*pointer-events:\s*none !important/s,
+  'every descendant of the hidden source sheet must stop intercepting Twitch controls');
 assert.match(waterfallCss, /\.waterfall-video-fullscreen-toggle\s*\{[^}]*min-height:\s*44px[^}]*cursor:\s*pointer[^}]*transform 140ms var\(--ease-out\)/s);
 assert.match(waterfallCss, /\.waterfall-cinema-card a, \.waterfall-read-button\s*\{[^}]*transform 140ms var\(--ease-out\)/s);
 assert.match(waterfallCss, /\.waterfall-reader-head button\s*\{[^}]*transform 140ms var\(--ease-out\)/s);
@@ -234,7 +249,8 @@ assert.match(waterfallCss, /\.waterfall-video-fullscreen-toggle:active,[^}]*\.wa
 assert.match(waterfallCss, /\.waterfall-video-fullscreen-toggle:focus-visible,[^}]*outline:\s*2px solid var\(--accent\)/s);
 assert.match(reducedMotionCss, /\.waterfall-preferences\s*\{[^}]*transform:\s*none[^}]*opacity 140ms var\(--ease-out\)[^}]*visibility 0s linear 140ms !important/s);
 assert.match(reducedMotionCss, /\.waterfall-video-fullscreen-toggle,[^}]*\.waterfall-card-shell,[^}]*\{[^}]*opacity 140ms var\(--ease-out\)[^}]*background-color 140ms ease !important/s);
-assert.match(reducedMotionCss, /\.waterfall-video-fullscreen-toggle:active,[^}]*\.waterfall-card-shell:active,[^}]*\{[^}]*transform:\s*none[^}]*opacity:\s*0\.82/s);
+assert.match(reducedMotionCss,
+  /\.waterfall-video-fullscreen-toggle:active,[^}]*\.waterfall-card-shell--interactive:active,[^}]*\.waterfall-card-shell--interactive\.is-pressed,[^}]*\{[^}]*transform:\s*none[^}]*opacity:\s*0\.82/s);
 assert.match(reducedMotionCss, /\.waterfall-overlay\.active\s*\{[^}]*animation:\s*waterfall-overlay-in 140ms var\(--ease-out\) both !important/s);
 assert.match(waterfallCss, /\.waterfall-cinema-card p\s*\{[^}]*-webkit-line-clamp:\s*3/s);
 assert.match(waterfallCss, /\.waterfall-cinema-card h2\s*\{[^}]*-webkit-line-clamp:\s*4/s);
@@ -644,6 +660,12 @@ assert.doesNotMatch(track.innerHTML, /class="waterfall-card-ambient"/,
 assert.doesNotMatch(track.innerHTML, /waterfall-card-shell--ambient/);
 assert.match(track.innerHTML, /waterfall-tone--youtube[^"\n]*" data-waterfall-id="current"/);
 assert.match(track.innerHTML, /waterfall-tone--zhihu[^"\n]*" data-waterfall-id="image-current"/);
+assert.match(track.innerHTML,
+  /<article[^>]*data-waterfall-id="image-current"[^>]*><div class="waterfall-card-shell waterfall-card-shell--interactive" role="button" tabindex="0" data-waterfall-open="image-current">/,
+  'ordinary image-text cards such as Zhihu must retain their whole-card reader action');
+assert.match(track.innerHTML,
+  /<article[^>]*data-waterfall-id="text-current"[^>]*><div class="waterfall-card-shell waterfall-card-shell--interactive" role="button" tabindex="0" data-waterfall-open="text-current">/,
+  'ordinary post cards must retain their whole-card reader action');
 assert.match(track.innerHTML, /waterfall-tone--hackernews[^"\n]*" data-waterfall-id="text-current"/);
 assert.match(track.innerHTML, /waterfall-tone--bilibili[^"\n]*" data-waterfall-id="portrait-current"/);
 assert.doesNotMatch(track.innerHTML, /data-waterfall-video-direct/);
@@ -1488,6 +1510,15 @@ window.__aiphoneApplyWaterfallUpdate(sourcePayload());
 assert.match(track.innerHTML, /data-waterfall-apple-play="apple-podcast-1"/);
 assert.match(track.innerHTML, /data-waterfall-apple-play="apple-podcast-1"[^>]*>加载节目<\/button>/);
 assert.match(track.innerHTML, /data-waterfall-inline-play="twitch-channel-1"/);
+assert.match(track.innerHTML,
+  /<article[^>]*data-waterfall-id="apple-podcast-1"[^>]*><div class="waterfall-card-shell">/,
+  'Apple Podcasts source-only cards must use a non-interactive shell');
+assert.match(track.innerHTML,
+  /<article[^>]*data-waterfall-id="twitch-channel-1"[^>]*><div class="waterfall-card-shell">/,
+  'Twitch source-only cards must use a non-interactive shell');
+assert.doesNotMatch(track.innerHTML,
+  /<article[^>]*data-waterfall-id="(?:apple-podcast-1|twitch-channel-1)"[^>]*><div class="[^"]*waterfall-card-shell--interactive/,
+  'source-only media cards must not inherit whole-card press feedback');
 assert.doesNotMatch(track.innerHTML, /<audio|player\.twitch\.tv/,
   'new-source players must not load before an explicit click');
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@ohos/hypium';
 import {
   acquireTwitchAppToken,
+  DefaultTwitchSearchTransport,
   discoverTwitchInterestStreams,
   resetTwitchTokenCacheForTests,
   twitchAppTokenUrl,
@@ -9,6 +10,10 @@ import {
   twitchStreamsUrl,
   twitchTopGamesUrl,
   TwitchHttpResult,
+  TwitchRcpHttpMethod,
+  TwitchRcpResponse,
+  TwitchRcpSession,
+  TwitchRcpSessionFactory,
   TwitchSearchConfig,
   TwitchSearchTransport
 } from '@loop/agent-core';
@@ -127,6 +132,84 @@ class FailingTokenTransport implements TwitchSearchTransport {
 
   async post(_url: string, _headers: Record<string, string>, _body: string): Promise<TwitchHttpResult> {
     throw new Error('simulated token transport failure');
+  }
+}
+
+class ClosingQueueTransport extends QueueTransport {
+  closeCount: number = 0;
+
+  async close(): Promise<void> {
+    this.closeCount += 1;
+  }
+}
+
+function rcpResponse(result: TwitchHttpResult): TwitchRcpResponse {
+  const headers: Record<string, string> = {};
+  return { statusCode: result.code, text: result.text, headers: headers };
+}
+
+class QueueRcpSessionFactory implements TwitchRcpSessionFactory {
+  responses: TwitchRcpResponse[];
+  failAtRequest: number;
+  responseIndex: number = 0;
+  createCount: number = 0;
+  closeCount: number = 0;
+  requests: TwitchRequestFixture[] = [];
+
+  constructor(responses: TwitchRcpResponse[], failAtRequest: number = 0) {
+    this.responses = responses;
+    this.failAtRequest = failAtRequest;
+  }
+
+  create(): TwitchRcpSession {
+    this.createCount += 1;
+    return new QueueRcpSession(this);
+  }
+
+  async request(
+    url: string,
+    method: TwitchRcpHttpMethod,
+    headers: Record<string, string>,
+    body: string
+  ): Promise<TwitchRcpResponse> {
+    const requestNumber = this.requests.length + 1;
+    this.requests.push({
+      method: method,
+      url: url,
+      body: body,
+      authorization: headers['Authorization'] ?? ''
+    });
+    if (this.failAtRequest > 0 && requestNumber === this.failAtRequest) {
+      throw new Error('simulated RCP request failure');
+    }
+    const response = this.responses[this.responseIndex];
+    this.responseIndex += 1;
+    if (response === undefined) {
+      const emptyHeaders: Record<string, string> = {};
+      return { statusCode: 599, text: 'missing fake RCP response', headers: emptyHeaders };
+    }
+    return response;
+  }
+}
+
+class QueueRcpSession implements TwitchRcpSession {
+  private readonly factory: QueueRcpSessionFactory;
+
+  constructor(factory: QueueRcpSessionFactory) {
+    this.factory = factory;
+  }
+
+  request(
+    url: string,
+    method: TwitchRcpHttpMethod,
+    headers: Record<string, string>,
+    body: string
+  ): Promise<TwitchRcpResponse> {
+    return this.factory.request(url, method, headers, body);
+  }
+
+  close(): void {
+    this.factory.closeCount += 1;
   }
 }
 
@@ -250,7 +333,7 @@ export default function twitchSearchClientTest(): void {
 
     it('retries the whole discovery operation once after a Helix 401', 0, async () => {
       resetTwitchTokenCacheForTests();
-      const transport = new QueueTransport([tokenResponse('old-token'), tokenResponse('new-token')], [
+      const transport = new ClosingQueueTransport([tokenResponse('old-token'), tokenResponse('new-token')], [
         gamesResponse(TECH_GAMES), { code: 401, text: '' },
         gamesResponse(TECH_GAMES), streamsResponse(TECH_STREAMS), gamesResponse(TOP_GAMES), streamsResponse(GAME_STREAMS)
       ]);
@@ -263,6 +346,7 @@ export default function twitchSearchClientTest(): void {
       expect(transport.postIndex).assertEqual(2);
       expect(transport.calls[2].authorization).assertEqual('Bearer old-token');
       expect(transport.calls[5].authorization).assertEqual('Bearer new-token');
+      expect(transport.closeCount).assertEqual(1);
     });
 
     it('does no network work without credentials and classifies token failures as auth', 0, async () => {
@@ -291,6 +375,48 @@ export default function twitchSearchClientTest(): void {
       expect(await acquireTwitchAppToken(config, transport, 3000000)).assertEqual('token-1');
       expect(await acquireTwitchAppToken(config, transport, 3301000)).assertEqual('token-2');
       expect(transport.postIndex).assertEqual(2);
+    });
+
+    it('reuses one RCP session for a discovery and creates a new one for the next discovery', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const responses: TwitchRcpResponse[] = [
+        rcpResponse(tokenResponse('token')),
+        rcpResponse(gamesResponse(TECH_GAMES)),
+        rcpResponse(streamsResponse(TECH_STREAMS)),
+        rcpResponse(gamesResponse(TOP_GAMES)),
+        rcpResponse(streamsResponse(GAME_STREAMS)),
+        rcpResponse(streamsResponse(TECH_STREAMS)),
+        rcpResponse(streamsResponse(GAME_STREAMS))
+      ];
+      const factory = new QueueRcpSessionFactory(responses);
+      const transport = new DefaultTwitchSearchTransport(factory);
+      const config: TwitchSearchConfig = { clientId: 'id', clientSecret: 'secret' };
+
+      const first = await discoverTwitchInterestStreams(
+        config, { multilingual: true }, transport, 1000);
+      expect(first.status).assertEqual('success');
+      expect(factory.requests.length).assertEqual(5);
+      expect(factory.createCount).assertEqual(1);
+      expect(factory.closeCount).assertEqual(1);
+
+      const second = await discoverTwitchInterestStreams(
+        config, { multilingual: true }, transport, 2000);
+      expect(second.status).assertEqual('success');
+      expect(factory.requests.length).assertEqual(7);
+      expect(factory.createCount).assertEqual(2);
+      expect(factory.closeCount).assertEqual(2);
+    });
+
+    it('closes the reused RCP session when discovery fails', 0, async () => {
+      resetTwitchTokenCacheForTests();
+      const factory = new QueueRcpSessionFactory([], 1);
+      const transport = new DefaultTwitchSearchTransport(factory);
+      const batch = await discoverTwitchInterestStreams(
+        { clientId: 'id', clientSecret: 'secret' }, {}, transport, 1000);
+
+      expect(batch.status).assertEqual('needs_auth');
+      expect(factory.createCount).assertEqual(1);
+      expect(factory.closeCount).assertEqual(1);
     });
   });
 }

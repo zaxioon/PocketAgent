@@ -107,6 +107,29 @@ export interface TwitchHttpResult {
 export interface TwitchSearchTransport {
   get(url: string, headers: Record<string, string>): Promise<TwitchHttpResult>;
   post(url: string, headers: Record<string, string>, body: string): Promise<TwitchHttpResult>;
+  close?(): Promise<void>;
+}
+
+export interface TwitchRcpResponse {
+  statusCode: number;
+  text: string;
+  headers: Object;
+}
+
+export type TwitchRcpHttpMethod = 'GET' | 'POST';
+
+export interface TwitchRcpSession {
+  request(
+    url: string,
+    method: TwitchRcpHttpMethod,
+    headers: Record<string, string>,
+    body: string
+  ): Promise<TwitchRcpResponse>;
+  close(): void;
+}
+
+export interface TwitchRcpSessionFactory {
+  create(): TwitchRcpSession;
 }
 
 let cachedToken: string = '';
@@ -293,7 +316,56 @@ function failedBatch(
   return batch;
 }
 
-class DefaultTwitchSearchTransport implements TwitchSearchTransport {
+class SystemTwitchRcpSession implements TwitchRcpSession {
+  private readonly session: rcp.Session = rcp.createSession();
+
+  async request(
+    url: string,
+    method: TwitchRcpHttpMethod,
+    headers: Record<string, string>,
+    body: string
+  ): Promise<TwitchRcpResponse> {
+    const request = new rcp.Request(url, method, headers);
+    if (body.length > 0) {
+      request.content = body;
+    }
+    request.configuration = {
+      transfer: {
+        timeout: {
+          connectMs: 10000,
+          transferMs: 30000,
+          inactivityMs: 30000
+        }
+      }
+    };
+    const response = await this.session.fetch(request);
+    const responseBody = response.toString();
+    return {
+      statusCode: response.statusCode,
+      text: responseBody === null ? '' : responseBody,
+      headers: response.headers
+    };
+  }
+
+  close(): void {
+    this.session.close();
+  }
+}
+
+class SystemTwitchRcpSessionFactory implements TwitchRcpSessionFactory {
+  create(): TwitchRcpSession {
+    return new SystemTwitchRcpSession();
+  }
+}
+
+export class DefaultTwitchSearchTransport implements TwitchSearchTransport {
+  private readonly sessionFactory: TwitchRcpSessionFactory;
+  private session: TwitchRcpSession | null = null;
+
+  constructor(sessionFactory: TwitchRcpSessionFactory = new SystemTwitchRcpSessionFactory()) {
+    this.sessionFactory = sessionFactory;
+  }
+
   async get(url: string, headers: Record<string, string>): Promise<TwitchHttpResult> {
     return this.request(url, 'GET', headers, '');
   }
@@ -302,13 +374,28 @@ class DefaultTwitchSearchTransport implements TwitchSearchTransport {
     return this.request(url, 'POST', headers, body);
   }
 
+  async close(): Promise<void> {
+    const session = this.session;
+    this.session = null;
+    if (session !== null) {
+      session.close();
+    }
+  }
+
+  private operationSession(): TwitchRcpSession {
+    if (this.session === null) {
+      this.session = this.sessionFactory.create();
+    }
+    return this.session;
+  }
+
   private async request(
     url: string,
-    method: rcp.HttpMethod,
+    method: TwitchRcpHttpMethod,
     headers: Record<string, string>,
     body: string
   ): Promise<TwitchHttpResult> {
-    const session = rcp.createSession();
+    const session = this.operationSession();
     const startedAtMs = Date.now();
     const host = url.indexOf(TWITCH_TOKEN_URL) === 0 ? 'id.twitch.tv' : 'api.twitch.tv';
     let phase = host === 'id.twitch.tv' ? 'oauth-token' : 'helix';
@@ -323,21 +410,7 @@ class DefaultTwitchSearchTransport implements TwitchSearchTransport {
     }
     const methodLabel = method === 'POST' ? 'POST' : 'GET';
     try {
-      const request = new rcp.Request(url, method, headers);
-      if (body.length > 0) {
-        request.content = body;
-      }
-      request.configuration = {
-        transfer: {
-          timeout: {
-            connectMs: 10000,
-            transferMs: 30000,
-            inactivityMs: 30000
-          }
-        }
-      };
-      const response = await session.fetch(request);
-      const responseBody = response.toString();
+      const response = await session.request(url, method, headers, body);
       const httpOk = response.statusCode >= 200 && response.statusCode < 300;
       const httpLog = '[AIPhone][TwitchHttp] ok=' + (httpOk ? 'true' : 'false') +
         ' phase=' + phase + ' host=' + host + ' method=' + methodLabel +
@@ -350,7 +423,7 @@ class DefaultTwitchSearchTransport implements TwitchSearchTransport {
       }
       return {
         code: response.statusCode,
-        text: responseBody === null ? '' : responseBody,
+        text: response.text,
         retryAfterSeconds: retryAfterSeconds(response.headers)
       };
     } catch (error) {
@@ -369,8 +442,6 @@ class DefaultTwitchSearchTransport implements TwitchSearchTransport {
         ' method=' + methodLabel + ' code=' + code +
         ' elapsedMs=' + (Date.now() - startedAtMs).toString() + ' message=' + safeMessage);
       throw new Error(safeMessage);
-    } finally {
-      session.close();
     }
   }
 }
@@ -727,11 +798,11 @@ function commitDiscoveryCaches(result: TwitchDiscoveryOperationResult, nowMs: nu
  * query argument: technology categories and the hottest current game are
  * resolved through Helix and cached inside this provider.
  */
-export async function discoverTwitchInterestStreams(
+async function discoverTwitchInterestStreamsWithoutClosing(
   config: TwitchSearchConfig,
-  options: TwitchInterestDiscoveryOptions = {},
-  transport: TwitchSearchTransport = new DefaultTwitchSearchTransport(),
-  nowMs: number = Date.now()
+  options: TwitchInterestDiscoveryOptions,
+  transport: TwitchSearchTransport,
+  nowMs: number
 ): Promise<TwitchChannelSearchBatch> {
   const clientId = config.clientId.trim();
   const clientSecret = config.clientSecret.trim();
@@ -779,4 +850,28 @@ export async function discoverTwitchInterestStreams(
     commitDiscoveryCaches(result, nowMs);
   }
   return result.batch;
+}
+
+async function closeTwitchSearchTransport(transport: TwitchSearchTransport): Promise<void> {
+  if (transport.close === undefined) {
+    return;
+  }
+  try {
+    await transport.close();
+  } catch (_error) {
+    aiLogError('[AIPhone][TwitchHttp] transport close failed');
+  }
+}
+
+export async function discoverTwitchInterestStreams(
+  config: TwitchSearchConfig,
+  options: TwitchInterestDiscoveryOptions = {},
+  transport: TwitchSearchTransport = new DefaultTwitchSearchTransport(),
+  nowMs: number = Date.now()
+): Promise<TwitchChannelSearchBatch> {
+  try {
+    return await discoverTwitchInterestStreamsWithoutClosing(config, options, transport, nowMs);
+  } finally {
+    await closeTwitchSearchTransport(transport);
+  }
 }
