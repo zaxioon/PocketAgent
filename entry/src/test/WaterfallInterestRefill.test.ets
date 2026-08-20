@@ -7,6 +7,7 @@ import {
   WaterfallRankedCandidate,
   WaterfallSourcePhase,
   WaterfallSourceState,
+  advanceWaterfallFeed,
   applyWaterfallProfile,
   applyWaterfallSourceSelection,
   mergeWaterfallBatch,
@@ -14,6 +15,12 @@ import {
   planWaterfallInterestRecall,
   waterfallInterestRecallLimitForSource
 } from '@loop/agent-core';
+
+interface InterestContinuationFixture {
+  source: string;
+  kind: 'cursor' | 'page';
+  value: string;
+}
 
 function candidate(id: string, source: string): WaterfallRankedCandidate {
   return {
@@ -64,6 +71,11 @@ function emptyProfile(): WaterfallPreferenceSnapshot {
   };
 }
 
+function inventoryCount(state: WaterfallFeedState): number {
+  return state.shown.length + (state.current === null ? 0 : 1) + state.stable.length +
+    state.tail.length + (state.reserve ?? []).length;
+}
+
 export default function waterfallInterestRefillTest() {
   describe('waterfallInterestRefill', () => {
     it('promotes reserve before issuing an interest refill', 0, () => {
@@ -104,6 +116,90 @@ export default function waterfallInterestRefillTest() {
         .map((item: WaterfallSourceState): string => item.source).join(','))
         .assertEqual('youtube,bilibili,x');
       expect(update.expansionRequest === undefined).assertTrue();
+    });
+
+    it('requests each native continuation after interest advance reaches low inventory', 0, () => {
+      const fixtures: InterestContinuationFixture[] = [
+        { source: 'youtube', kind: 'cursor', value: 'next-youtube' },
+        { source: 'x', kind: 'cursor', value: 'next-x' },
+        { source: 'reddit', kind: 'cursor', value: 'next-reddit' },
+        { source: 'bilibili', kind: 'page', value: '4' }
+      ];
+      fixtures.forEach((fixture: InterestContinuationFixture): void => {
+        const sourceState = source(fixture.source, 'success', { kind: fixture.kind, value: fixture.value });
+        sourceState.query = 'AI 科技';
+        sourceState.recallRoute = 'explore';
+        sourceState.loadMode = 'search';
+        const state = interestState([sourceState]);
+        state.enabledSources = [fixture.source];
+        state.current = candidate('consumed-' + fixture.source, fixture.source);
+        state.stable = [candidate('next-' + fixture.source, fixture.source)];
+        const beforeCount = inventoryCount(state);
+
+        const update = advanceWaterfallFeed(state, Date.parse('2026-08-19T01:00:00.000Z'));
+
+        expect(update.loadRequests.length).assertEqual(1);
+        expect(update.loadRequests[0].source).assertEqual(fixture.source);
+        expect(update.loadRequests[0].continuation?.kind ?? '').assertEqual(fixture.kind);
+        expect(update.loadRequests[0].continuation?.value ?? '').assertEqual(fixture.value);
+        expect(update.loadRequests[0].query ?? '').assertEqual('AI 科技');
+        expect(update.loadRequests[0].route ?? '').assertEqual('explore');
+        expect(update.state.sources[0].inFlight).assertTrue();
+        expect(update.state.shown[0].id).assertEqual('consumed-' + fixture.source);
+        expect(update.state.current?.id ?? '').assertEqual('next-' + fixture.source);
+        expect(update.state.stable.length).assertEqual(0);
+        expect(inventoryCount(update.state)).assertEqual(beforeCount);
+      });
+    });
+
+    it('does not refill after interest advance above low water or while a source is in flight', 0, () => {
+      const sufficient = interestState([
+        source('youtube', 'success', { kind: 'cursor', value: 'next-youtube' })
+      ]);
+      sufficient.enabledSources = ['youtube'];
+      sufficient.current = candidate('full-current', 'youtube');
+      sufficient.stable = [candidate('full-1', 'youtube'), candidate('full-2', 'youtube')];
+      sufficient.tail = [candidate('full-3', 'youtube'), candidate('full-4', 'youtube')];
+
+      const inFlight = interestState([
+        source('youtube', 'success', { kind: 'cursor', value: 'next-youtube' }, true)
+      ]);
+      inFlight.enabledSources = ['youtube'];
+      inFlight.current = candidate('flight-current', 'youtube');
+      inFlight.stable = [candidate('flight-next', 'youtube')];
+
+      const sufficientUpdate = advanceWaterfallFeed(sufficient, 1);
+      const inFlightUpdate = advanceWaterfallFeed(inFlight, 1);
+
+      expect(sufficientUpdate.loadRequests.length).assertEqual(0);
+      expect(inFlightUpdate.loadRequests.length).assertEqual(0);
+      expect(inventoryCount(sufficientUpdate.state)).assertEqual(inventoryCount(sufficient));
+      expect(inventoryCount(inFlightUpdate.state)).assertEqual(inventoryCount(inFlight));
+    });
+
+    it('keeps bounded overflow in reserve before planning an interest continuation', 0, () => {
+      const state = interestState([
+        source('youtube', 'success', { kind: 'cursor', value: 'next-youtube' })
+      ]);
+      state.enabledSources = ['youtube'];
+      state.current = candidate('bounded-current', 'youtube');
+      state.stable = [candidate('bounded-1', 'youtube'), candidate('bounded-2', 'youtube')];
+      for (let index = 3; index <= 19; index += 1) {
+        state.tail.push(candidate('bounded-' + index.toString(), 'youtube'));
+      }
+      for (let index = 20; index <= 24; index += 1) {
+        state.reserve?.push(candidate('bounded-' + index.toString(), 'youtube'));
+      }
+      const beforeCount = inventoryCount(state);
+
+      const update = advanceWaterfallFeed(state, 1);
+
+      expect(update.loadRequests.length).assertEqual(0);
+      expect((update.state.current === null ? 0 : 1) + update.state.stable.length + update.state.tail.length)
+        .assertEqual(20);
+      expect(update.state.reserve?.length ?? 0).assertEqual(4);
+      expect(update.state.reserve?.[0].id ?? '').assertEqual('bounded-21');
+      expect(inventoryCount(update.state)).assertEqual(beforeCount);
     });
 
     it('re-enables one discovery source through one continuation request', 0, () => {

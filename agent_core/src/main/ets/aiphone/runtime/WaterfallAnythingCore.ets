@@ -1745,7 +1745,7 @@ export function advanceWaterfallFeed(
     );
     next.reserve = remaining.slice(rankingWindow.length);
     refreshCurrentAndStable(next);
-    return { state: next, loadRequests: [] };
+    return finalizeUpdate(next);
   }
   refreshCurrentAndStable(next);
   return finalizeUpdate(next);
