@@ -11,7 +11,8 @@ import {
   applyWaterfallSourceSelection,
   mergeWaterfallBatch,
   planWaterfallContinuation,
-  planWaterfallInterestRecall
+  planWaterfallInterestRecall,
+  waterfallInterestRecallLimitForSource
 } from '@loop/agent-core';
 
 function candidate(id: string, source: string): WaterfallRankedCandidate {
@@ -137,7 +138,7 @@ export default function waterfallInterestRefillTest() {
       expect(update.state.sources.some((item: WaterfallSourceState): boolean => item.inFlight)).assertFalse();
     });
 
-    it('plans one equal-priority bounded discovery query per source', 0, () => {
+    it('plans bounded shared discovery queries plus Twitch provider discovery', 0, () => {
       const profile = emptyProfile();
       profile.topicWeights = [
         { key: '科幻', weight: 8, updatedAt: 2 },
@@ -148,18 +149,25 @@ export default function waterfallInterestRefillTest() {
       recent[1].topics = ['足球'];
 
       const requests: WaterfallInterestRecallRequest[] = planWaterfallInterestRecall(
-        profile, recent, ['youtube', 'x', 'reddit', 'zhihu', 'bilibili']);
-      const fallbackQueries = requests.filter((request: WaterfallInterestRecallRequest): boolean =>
-        request.route !== 'popular').map((request: WaterfallInterestRecallRequest): string => request.query);
+        profile, recent, ['youtube', 'x', 'reddit', 'zhihu', 'bilibili', 'twitch']);
+      const nonTwitchSources = 'youtube,x,reddit,zhihu,bilibili';
+      const nonTwitchRequests = requests.filter((request: WaterfallInterestRecallRequest): boolean =>
+        request.sources.indexOf('twitch') < 0);
+      const twitchRequests = requests.filter((request: WaterfallInterestRecallRequest): boolean =>
+        request.sources.indexOf('twitch') >= 0);
 
-      expect(requests.length).assertEqual(5);
-      expect(requests.every((request: WaterfallInterestRecallRequest): boolean =>
-        request.sources.length === 1 && request.weight === 1 && request.query.length <= 24)).assertTrue();
-      expect(requests.filter((request: WaterfallInterestRecallRequest): boolean => request.route === 'popular')
-        .map((request: WaterfallInterestRecallRequest): string => request.sources[0]).join(','))
-        .assertEqual('youtube');
-      expect(fallbackQueries.join(',')).assertEqual('AI,足球,科幻,摄影');
-      expect(fallbackQueries.indexOf('AI 科技 电影 体育 游戏')).assertEqual(-1);
+      expect(nonTwitchRequests.length).assertEqual(5);
+      expect(nonTwitchRequests.every((request: WaterfallInterestRecallRequest): boolean =>
+        request.sources.join(',') === nonTwitchSources && request.query.length > 0 && request.query.length <= 24 &&
+        request.sources.every((source: string): boolean =>
+          waterfallInterestRecallLimitForSource(source) === 10))).assertTrue();
+      expect(nonTwitchRequests.map((request: WaterfallInterestRecallRequest): string => request.query).join(','))
+        .assertEqual('AI,足球,科幻,摄影,AI 科技');
+      expect(twitchRequests.length).assertEqual(1);
+      expect(twitchRequests[0].query).assertEqual('');
+      expect(twitchRequests[0].sources.join(',')).assertEqual('twitch');
+      expect(waterfallInterestRecallLimitForSource('twitch')).assertEqual(4);
+      expect(requests[requests.length - 1].sources.join(',')).assertEqual('twitch');
     });
 
     it('waits for every initial discovery source before fixing the visible window', 0, () => {

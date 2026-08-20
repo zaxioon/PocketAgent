@@ -424,8 +424,8 @@ export default function aggregateSearchClientTest() {
         includeMultilingualResults: true
       };
       expect(aggregateSearchSourcesFromArgs(allSources).join(','))
-        .assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
-      configureWaterfallEnabledSourcesForRuntime(['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu']);
+        .assertEqual(aggregateSearchSearchSourceIds().join(','));
+      configureWaterfallEnabledSourcesForRuntime(aggregateSearchRegistrySourceIds());
     });
 
     it('applies the runtime preference profile to initial provider batches', 0, async () => {
