@@ -1,4 +1,5 @@
 export { DEBUG as AGENT_CORE_DEBUG } from './BuildProfile';
+export * from './src/main/ets/memory/Index';
 export { ChatMessage, ConversationContext, ConversationRole } from './src/main/ets/agent/ConversationContext';
 export {
   ApplessCapabilityEnvironment,

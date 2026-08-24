@@ -1,0 +1,403 @@
+import { describe, expect, it } from '@ohos/hypium';
+import {
+  EmbeddingPort,
+  MemoryHit,
+  MemoryRecord,
+  MemoryRememberRequest
+} from '@loop/agent-core';
+import {
+  buildPhoneLocalMemorySearchSql,
+  PHONE_LOCAL_MEMORY_DELETE_SQL,
+  PHONE_LOCAL_MEMORY_HISTORY_SCHEMA_SQL,
+  PHONE_LOCAL_MEMORY_DELETE_HISTORY_SQL,
+  PHONE_LOCAL_MEMORY_MAX_CANDIDATE_LIMIT,
+  PHONE_LOCAL_MEMORY_MIN_CANDIDATE_LIMIT,
+  PHONE_LOCAL_MEMORY_INSERT_SQL,
+  PHONE_LOCAL_MEMORY_SCHEMA_SQL,
+  PHONE_LOCAL_MEMORY_UPDATE_SQL,
+  PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL,
+  phoneLocalMemoryCandidateLimit,
+  PhoneLocalMemorySearchRequest,
+  PhoneLocalMemoryStore
+} from '../main/ets/memory/PhoneLocalMemoryStore';
+import {
+  PhoneLocalMemoryLogContext,
+  PhoneLocalMemoryLogger,
+  PhoneLocalMemoryProvider
+} from '../main/ets/memory/PhoneLocalMemoryProvider';
+
+function copyRecord(record: MemoryRecord): MemoryRecord {
+  return {
+    memoryId: record.memoryId,
+    ownerId: record.ownerId,
+    sceneId: record.sceneId,
+    fact: record.fact,
+    normalizedFact: record.normalizedFact,
+    factHash: record.factHash,
+    embedding: record.embedding.slice(),
+    embeddingProfileId: record.embeddingProfileId,
+    sourceTurnId: record.sourceTurnId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
+}
+
+class FakeEmbeddingPort implements EmbeddingPort {
+  readonly profileId: string = 'bge-small-zh-v1.5:test';
+  readonly dimension: number = 512;
+  calls: string[] = [];
+
+  async embed(text: string): Promise<number[]> {
+    this.calls.push(text);
+    const vector: number[] = new Array<number>(this.dimension).fill(0);
+    if (text.indexOf('无糖') >= 0 || text.indexOf('不要糖') >= 0 || text.indexOf('咖啡') >= 0) {
+      vector[0] = 1;
+    }
+    if (text.indexOf('博物馆') >= 0 || text.indexOf('旅行') >= 0) vector[1] = 1;
+    if (vector[0] === 0 && vector[1] === 0) vector[2] = 1;
+    return vector;
+  }
+}
+
+class FailingEmbeddingPort implements EmbeddingPort {
+  readonly profileId: string = 'bge-small-zh-v1.5:test';
+  readonly dimension: number = 512;
+
+  async embed(text: string): Promise<number[]> {
+    throw new Error('embedding failed for ' + text);
+  }
+}
+
+class CapturingMemoryLogger implements PhoneLocalMemoryLogger {
+  entries: PhoneLocalMemoryLogContext[] = [];
+
+  warn(context: PhoneLocalMemoryLogContext): void {
+    this.entries.push(context);
+  }
+}
+
+class FakeMemoryStore implements PhoneLocalMemoryStore {
+  records: MemoryRecord[] = [];
+  failFact: string = '';
+  searchCalls: PhoneLocalMemorySearchRequest[] = [];
+
+  async initialize(): Promise<void> {}
+
+  async findByFact(ownerId: string, sceneId: string, factHash: string,
+    normalizedFact: string): Promise<MemoryRecord | null> {
+    for (let index = 0; index < this.records.length; index += 1) {
+      const record = this.records[index];
+      if (record.ownerId === ownerId && record.sceneId === sceneId && record.factHash === factHash &&
+        record.normalizedFact === normalizedFact) return copyRecord(record);
+    }
+    return null;
+  }
+
+  async get(ownerId: string, memoryId: string): Promise<MemoryRecord | null> {
+    for (let index = 0; index < this.records.length; index += 1) {
+      if (this.records[index].ownerId === ownerId && this.records[index].memoryId === memoryId) {
+        return copyRecord(this.records[index]);
+      }
+    }
+    return null;
+  }
+
+  async list(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]> {
+    const output: MemoryRecord[] = [];
+    for (let index = 0; index < this.records.length; index += 1) {
+      const record = this.records[index];
+      if (record.ownerId !== ownerId) continue;
+      if (sceneIds.length > 0 && sceneIds.indexOf(record.sceneId) < 0) continue;
+      output.push(copyRecord(record));
+    }
+    return output;
+  }
+
+  async search(request: PhoneLocalMemorySearchRequest): Promise<MemoryHit[]> {
+    this.searchCalls.push({
+      ownerId: request.ownerId,
+      sceneIds: request.sceneIds.slice(),
+      embeddingProfileId: request.embeddingProfileId,
+      queryEmbedding: request.queryEmbedding.slice(),
+      topK: request.topK,
+      minScore: request.minScore
+    });
+    const records = await this.list(request.ownerId, request.sceneIds);
+    const hits: MemoryHit[] = [];
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index];
+      if (record.embeddingProfileId !== request.embeddingProfileId) continue;
+      if (record.embedding.length !== request.queryEmbedding.length) continue;
+      let score = 0;
+      for (let vectorIndex = 0; vectorIndex < record.embedding.length; vectorIndex += 1) {
+        score += record.embedding[vectorIndex] * request.queryEmbedding[vectorIndex];
+      }
+      if (request.minScore !== undefined && score < request.minScore) continue;
+      hits.push({ record, score });
+    }
+    hits.sort((left: MemoryHit, right: MemoryHit): number => right.score - left.score);
+    return hits.slice(0, request.topK);
+  }
+
+  async insert(record: MemoryRecord): Promise<void> {
+    if (record.fact === this.failFact) throw new Error('injected insert failure');
+    // Keep the fake's uniqueness check and commit in one synchronous section. The real RDB
+    // enforces this with a unique index while holding the store write mutex; awaiting the
+    // async lookup here would yield and let two test inserts both observe an empty store.
+    for (let index = 0; index < this.records.length; index += 1) {
+      const existing = this.records[index];
+      if (existing.ownerId === record.ownerId && existing.sceneId === record.sceneId &&
+        existing.factHash === record.factHash && existing.normalizedFact === record.normalizedFact) {
+        throw new Error('injected unique constraint');
+      }
+    }
+    this.records.push(copyRecord(record));
+  }
+
+  async replace(ownerId: string, record: MemoryRecord): Promise<void> {
+    for (let index = 0; index < this.records.length; index += 1) {
+      if (this.records[index].ownerId !== ownerId || this.records[index].memoryId !== record.memoryId) continue;
+      this.records[index] = copyRecord(record);
+      return;
+    }
+    throw new Error('missing record');
+  }
+
+  async remove(ownerId: string, memoryId: string): Promise<MemoryRecord | null> {
+    for (let index = 0; index < this.records.length; index += 1) {
+      if (this.records[index].ownerId !== ownerId || this.records[index].memoryId !== memoryId) continue;
+      const deleted = this.records[index];
+      this.records.splice(index, 1);
+      return copyRecord(deleted);
+    }
+    return null;
+  }
+
+  async removeAll(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]> {
+    const existing = await this.list(ownerId, sceneIds);
+    for (let index = 0; index < existing.length; index += 1) {
+      await this.remove(ownerId, existing[index].memoryId);
+    }
+    return existing;
+  }
+}
+
+function provider(store: FakeMemoryStore, embedder: FakeEmbeddingPort): PhoneLocalMemoryProvider {
+  let nextId = 0;
+  let now = 1000;
+  return new PhoneLocalMemoryProvider(store, embedder, {
+    allowedSceneIds: ['global', 'food_companion', 'travel_companion'],
+    idFactory: (): string => 'memory-' + (++nextId).toString(),
+    clock: (): number => ++now
+  });
+}
+
+export default function phoneLocalMemoryProviderTest() {
+  describe('PhoneLocalMemoryProvider', () => {
+    it('declares only the persistent vector schema and cosine ANN index', 0, () => {
+      expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL).assertContain('FLOATVECTOR(512)');
+      expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL.indexOf('BLOB')).assertEqual(-1);
+      expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL).assertContain('owner_id TEXT NOT NULL');
+      expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL).assertContain('scene_id TEXT NOT NULL');
+      expect(PHONE_LOCAL_MEMORY_HISTORY_SCHEMA_SQL).assertContain('operation TEXT NOT NULL');
+      expect(PHONE_LOCAL_MEMORY_DELETE_HISTORY_SQL).assertContain('owner_id = ? AND memory_id = ?');
+      expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('USING GSDISKANN(embedding COSINE)');
+      expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('queue_size=20');
+      expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('out_degree=60');
+    });
+
+    it('declares execute-compatible scoped DML and database-side cosine topK SQL', 0, () => {
+      expect(PHONE_LOCAL_MEMORY_INSERT_SQL).assertContain('INSERT INTO conversation_memory');
+      expect(PHONE_LOCAL_MEMORY_UPDATE_SQL).assertContain('WHERE owner_id = ? AND memory_id = ?');
+      expect(PHONE_LOCAL_MEMORY_DELETE_SQL).assertContain('WHERE owner_id = ? AND memory_id = ?');
+      const searchSql = buildPhoneLocalMemorySearchSql(100);
+      expect(searchSql).assertContain('ORDER BY embedding <=> ? LIMIT 100');
+      expect(searchSql.indexOf('LIMIT ?')).assertEqual(-1);
+      expect(searchSql.indexOf(' WHERE ')).assertEqual(-1);
+      expect(buildPhoneLocalMemorySearchSql(0)).assertContain('LIMIT 100');
+      expect(buildPhoneLocalMemorySearchSql(5000)).assertContain('LIMIT 1000');
+      expect(PHONE_LOCAL_MEMORY_MIN_CANDIDATE_LIMIT).assertEqual(100);
+      expect(PHONE_LOCAL_MEMORY_MAX_CANDIDATE_LIMIT).assertEqual(1000);
+      expect(phoneLocalMemoryCandidateLimit(2)).assertEqual(100);
+      expect(phoneLocalMemoryCandidateLimit(20)).assertEqual(200);
+      expect(phoneLocalMemoryCandidateLimit(100)).assertEqual(1000);
+    });
+
+    it('keeps successful records when one best-effort insert fails', 0, async () => {
+      const store = new FakeMemoryStore();
+      store.failFact = '这一条故意失败';
+      const result = await provider(store, new FakeEmbeddingPort()).remember({
+        ownerId: 'owner-1',
+        records: [
+          { fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' },
+          { fact: '这一条故意失败', sceneId: 'global', sourceTurnId: 'turn-1' },
+          { fact: '用户旅行时偏好高铁', sceneId: 'travel_companion', sourceTurnId: 'turn-1' }
+        ]
+      });
+
+      expect(result.status).assertEqual('success');
+      expect(result.succeededCount).assertEqual(2);
+      expect(result.failedCount).assertEqual(1);
+      expect(result.warnings.length).assertEqual(1);
+      expect(store.records.length).assertEqual(2);
+    });
+
+    it('deduplicates the same normalized fact inside one owner and scene', 0, async () => {
+      const store = new FakeMemoryStore();
+      const embedder = new FakeEmbeddingPort();
+      const memory = provider(store, embedder);
+      const first = await memory.remember({
+        ownerId: 'owner-1',
+        records: [{ fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' }]
+      });
+      const second = await memory.remember({
+        ownerId: 'owner-1',
+        records: [{ fact: '  用户喝咖啡不要糖  ', sceneId: 'food_companion', sourceTurnId: 'turn-2' }]
+      });
+
+      expect(first.status).assertEqual('success');
+      expect(second.status).assertEqual('success');
+      expect(store.records.length).assertEqual(1);
+      expect(embedder.calls.length).assertEqual(1);
+      expect(second.records[0].record?.memoryId).assertEqual(first.records[0].record?.memoryId);
+    });
+
+    it('keeps valid records when another record fails structural validation', 0, async () => {
+      const store = new FakeMemoryStore();
+      const result = await provider(store, new FakeEmbeddingPort()).remember({
+        ownerId: 'owner-1',
+        records: [
+          { fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' },
+          { fact: '这条记忆属于未知场景', sceneId: 'unknown', sourceTurnId: 'turn-1' },
+          { fact: '用户旅行时偏好高铁', sceneId: 'travel_companion', sourceTurnId: 'turn-1' }
+        ]
+      });
+      expect(result.status).assertEqual('success');
+      expect(result.succeededCount).assertEqual(2);
+      expect(result.failedCount).assertEqual(1);
+      expect(store.records.length).assertEqual(2);
+    });
+
+    it('recovers a concurrent exact duplicate as idempotent success', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      const request: MemoryRememberRequest = {
+        ownerId: 'owner-1',
+        records: [{ fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' }]
+      };
+      const results = await Promise.all([memory.remember(request), memory.remember(request)]);
+      expect(results[0].status).assertEqual('success');
+      expect(results[1].status).assertEqual('success');
+      expect(store.records.length).assertEqual(1);
+    });
+
+    it('hard-filters owner and scene before semantic ranking', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      await memory.remember({ ownerId: 'owner-1', records: [
+        { fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' },
+        { fact: '用户去过咖啡博物馆', sceneId: 'travel_companion', sourceTurnId: 'turn-2' }
+      ] });
+      await memory.remember({ ownerId: 'owner-2', records: [
+        { fact: '其他用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-3' }
+      ] });
+
+      const hits = await memory.search({
+        ownerId: 'owner-1', text: '帮我点一杯无糖咖啡', sceneIds: ['food_companion'], topK: 5
+      });
+      expect(hits.length).assertEqual(1);
+      expect(hits[0].record.ownerId).assertEqual('owner-1');
+      expect(hits[0].record.sceneId).assertEqual('food_companion');
+      expect(hits[0].record.fact).assertEqual('用户喝咖啡不要糖');
+      expect(store.searchCalls.length).assertEqual(1);
+      expect(store.searchCalls[0].embeddingProfileId).assertEqual('bge-small-zh-v1.5:test');
+      expect(store.searchCalls[0].topK).assertEqual(5);
+    });
+
+    it('uses the trimmed owner consistently for storage and ranking', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      await memory.remember({ ownerId: 'owner-1', records: [
+        { fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' }
+      ] });
+      const hits = await memory.search({
+        ownerId: ' owner-1 ', text: '无糖咖啡', sceneIds: ['food_companion'], topK: 3
+      });
+      expect(hits.length).assertEqual(1);
+    });
+
+    it('caps database-side vector search to one hundred results', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      await memory.search({
+        ownerId: 'owner-1', text: '无糖咖啡', sceneIds: [], topK: 1000
+      });
+      expect(store.searchCalls.length).assertEqual(1);
+      expect(store.searchCalls[0].topK).assertEqual(100);
+    });
+
+    it('updates one record and forgets it by exact memory id', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      const added = await memory.remember({ ownerId: 'owner-1', records: [
+        { fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' }
+      ] });
+      const memoryId = added.records[0].record?.memoryId ?? '';
+      const updated = await memory.update({
+        ownerId: 'owner-1', memoryId, fact: '用户喝咖啡时偏好半糖', sourceTurnId: 'turn-2'
+      });
+      expect(updated.status).assertEqual('success');
+      expect(updated.record?.fact).assertEqual('用户喝咖啡时偏好半糖');
+
+      const forgotten = await memory.forget('owner-1', memoryId);
+      expect(forgotten.status).assertEqual('success');
+      expect(await memory.get('owner-1', memoryId)).assertNull();
+    });
+
+    it('prevents another owner from reading updating or forgetting a record by id', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      const added = await memory.remember({ ownerId: 'owner-a', records: [
+        { fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' }
+      ] });
+      const memoryId = added.records[0].record?.memoryId ?? '';
+
+      expect(await memory.get('owner-b', memoryId)).assertNull();
+      const update = await memory.update({
+        ownerId: 'owner-b', memoryId, fact: '攻击者修改的记忆', sourceTurnId: 'turn-2'
+      });
+      expect(update.status).assertEqual('error');
+      const forgotten = await memory.forget('owner-b', memoryId);
+      expect(forgotten.status).assertEqual('error');
+      expect((await memory.get('owner-a', memoryId))?.fact).assertEqual('用户喝咖啡不要糖');
+    });
+
+    it('logs bounded diagnostic context without the memory fact', 0, async () => {
+      const logger = new CapturingMemoryLogger();
+      const memory = new PhoneLocalMemoryProvider(new FakeMemoryStore(), new FailingEmbeddingPort(), {
+        allowedSceneIds: ['food_companion'], logger
+      });
+      const secret = '用户喝咖啡不要糖';
+      const result = await memory.remember({ ownerId: 'owner-1', records: [
+        { fact: secret, sceneId: 'food_companion', sourceTurnId: 'turn-1' }
+      ] });
+      expect(result.status).assertEqual('error');
+      expect(logger.entries.length).assertEqual(1);
+      expect(logger.entries[0].operation).assertEqual('remember');
+      expect(logger.entries[0].inputIndex).assertEqual(0);
+      expect(logger.entries[0].errorMessage.indexOf(secret)).assertEqual(-1);
+      expect(logger.entries[0].errorMessage.length <= 160).assertTrue();
+    });
+
+    it('rejects an invalid scene without writing any record', 0, async () => {
+      const store = new FakeMemoryStore();
+      const result = await provider(store, new FakeEmbeddingPort()).remember({
+        ownerId: 'owner-1',
+        records: [{ fact: '用户喝咖啡不要糖', sceneId: 'unknown', sourceTurnId: 'turn-1' }]
+      });
+      expect(result.status).assertEqual('error');
+      expect(result.succeededCount).assertEqual(0);
+      expect(store.records.length).assertEqual(0);
+    });
+  });
+}

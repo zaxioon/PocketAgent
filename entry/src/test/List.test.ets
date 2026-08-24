@@ -127,6 +127,10 @@ import dailyBriefSchedulerTest from './DailyBriefScheduler.test';
 import travelSearchPreflightTest from './TravelSearchPreflight.test';
 import travelBookingProviderTest from './TravelBookingProvider.test';
 import travelCalendarActionTest from './TravelCalendarAction.test';
+import conversationMemoryCoreTest from './ConversationMemoryCore.test';
+import phoneLocalMemoryProviderTest from './PhoneLocalMemoryProvider.test';
+import bertWordPieceTokenizerTest from './BertWordPieceTokenizer.test';
+import bgeMindSporeEmbeddingPortTest from './BgeMindSporeEmbeddingPort.test';
 
 export default function testsuite() {
   movieDemoContractTest();
@@ -258,4 +262,8 @@ export default function testsuite() {
   travelSearchPreflightTest();
   travelBookingProviderTest();
   travelCalendarActionTest();
+  conversationMemoryCoreTest();
+  phoneLocalMemoryProviderTest();
+  bertWordPieceTokenizerTest();
+  bgeMindSporeEmbeddingPortTest();
 }
