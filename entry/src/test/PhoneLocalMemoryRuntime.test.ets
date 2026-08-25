@@ -7,6 +7,7 @@ import {
   PhoneLocalMemoryRuntimeLogger
 } from '../main/ets/memory/PhoneLocalMemoryRuntime';
 import {
+  PHONE_LOCAL_MEMORY_OPERATION_CANCELED,
   PhoneLocalMemorySearchRequest,
   PhoneLocalMemoryStore
 } from '../main/ets/memory/PhoneLocalMemoryStore';
@@ -65,6 +66,12 @@ class RuntimeCommitGuard implements MemoryCommitGuard {
   }
 }
 
+function requireRuntimeCommit(guard?: MemoryCommitGuard): void {
+  if (guard !== undefined && !guard.isActive()) {
+    throw new Error(PHONE_LOCAL_MEMORY_OPERATION_CANCELED);
+  }
+}
+
 class RuntimeMemoryStore implements PhoneLocalMemoryStore {
   records: MemoryRecord[] = [];
   metadata: Map<string, string> = new Map<string, string>();
@@ -116,7 +123,8 @@ class RuntimeMemoryStore implements PhoneLocalMemoryStore {
     return output;
   }
 
-  async insert(record: MemoryRecord): Promise<void> {
+  async insert(record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
+    requireRuntimeCommit(guard);
     if (!this.failedOnce && record.fact === this.failOnceFact) {
       this.failedOnce = true;
       throw new Error('injected one-time seed failure');
@@ -128,7 +136,8 @@ class RuntimeMemoryStore implements PhoneLocalMemoryStore {
     this.records.push(copyRuntimeRecord(record));
   }
 
-  async replace(ownerId: string, record: MemoryRecord): Promise<void> {
+  async replace(ownerId: string, record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
+    requireRuntimeCommit(guard);
     for (let index = 0; index < this.records.length; index += 1) {
       if (this.records[index].ownerId === ownerId && this.records[index].memoryId === record.memoryId) {
         this.records[index] = copyRuntimeRecord(record);
@@ -138,7 +147,9 @@ class RuntimeMemoryStore implements PhoneLocalMemoryStore {
     throw new Error('not found');
   }
 
-  async remove(ownerId: string, memoryId: string): Promise<MemoryRecord | null> {
+  async remove(ownerId: string, memoryId: string,
+    guard?: MemoryCommitGuard): Promise<MemoryRecord | null> {
+    requireRuntimeCommit(guard);
     for (let index = 0; index < this.records.length; index += 1) {
       if (this.records[index].ownerId === ownerId && this.records[index].memoryId === memoryId) {
         const record = this.records[index];

@@ -4,6 +4,7 @@ import {
   AgentMessageType,
   ConversationTurnMessage,
   CurrentSurfaceSummary,
+  MemorySelectionPayload,
   ObservationDigest,
   RecalledMemoryContext,
   TaskErrorPayload,
@@ -21,6 +22,7 @@ import {
   LeaderDecision,
   LeaderDecisionDataTask,
   LeaderMemoryRememberFact,
+  LeaderMemoryForgetClarification,
   LeaderMemoryMutation,
   LeaderMemoryToolExecutor,
   LeaderMemoryToolExecutionGuard,
@@ -570,6 +572,25 @@ export class LeaderAgent extends MessageDrivenAgent {
       }
       state.pendingMemoryMutation = this.copyMemoryMutation(decision.memoryMutation);
     }
+    if (decision.memoryClarification !== undefined) {
+      const selection: MemorySelectionPayload | null = this.memorySelection(
+        message, state, decision.memoryClarification
+      );
+      if (selection === null) {
+        this.finishTurn(state);
+        this.publishError(message, 'LEADER_MEMORY_CLARIFICATION_INVALID',
+          'Leader memory clarification candidates are unavailable');
+        return;
+      }
+      this.publishTurnResult(
+        message,
+        state,
+        '找到多条相关长期记忆，请选择要忘记的一条。',
+        selection
+      );
+      this.finishTurn(state);
+      return;
+    }
     if (decision.roundAction === 'answer' || decision.roundAction === 'clarify') {
       if (state.dataTaskIds.length > 0) {
         state.pendingAnswer = decision.answer as string;
@@ -1074,8 +1095,11 @@ export class LeaderAgent extends MessageDrivenAgent {
     const hasBimSuggestion: boolean = hasOwnKey(decision, 'bimSuggestion');
     const hasBimContextUpdate: boolean = hasOwnKey(decision, 'bimContextUpdate');
     const hasMemoryMutation: boolean = hasOwnKey(decision, 'memoryMutation');
+    const hasMemoryClarification: boolean = hasOwnKey(decision, 'memoryClarification');
     if ((!hasBimSuggestion && hasKey(decision, 'bimSuggestion')) ||
-      (!hasBimContextUpdate && hasKey(decision, 'bimContextUpdate'))) {
+      (!hasBimContextUpdate && hasKey(decision, 'bimContextUpdate')) ||
+      (!hasMemoryMutation && hasKey(decision, 'memoryMutation')) ||
+      (!hasMemoryClarification && hasKey(decision, 'memoryClarification'))) {
       return false;
     }
     const normalizationDateMatchesAuthority: boolean =
@@ -1099,6 +1123,7 @@ export class LeaderAgent extends MessageDrivenAgent {
       .filter((key: string): boolean => key !== 'bimSuggestion')
       .filter((key: string): boolean => key !== 'bimContextUpdate')
       .filter((key: string): boolean => key !== 'memoryMutation')
+      .filter((key: string): boolean => key !== 'memoryClarification')
       .sort()
       .join(',');
     if (keys !== 'dataTasks,personaId,reasonCode,requestedCapabilityIds,roundAction,skillId,uiIntent' &&
@@ -1117,7 +1142,8 @@ export class LeaderAgent extends MessageDrivenAgent {
       return false;
     }
     if ((decision.roundAction === 'execute' && decision.dataTasks.length === 0 &&
-      decision.actionIntent === undefined && decision.memoryMutation === undefined) ||
+      decision.actionIntent === undefined && decision.memoryMutation === undefined &&
+      decision.memoryClarification === undefined) ||
       (decision.roundAction !== 'execute' && decision.dataTasks.length !== 0)) {
       return false;
     }
@@ -1138,19 +1164,36 @@ export class LeaderAgent extends MessageDrivenAgent {
         this.validBimSuggestion(decision.bimSuggestion))) &&
       (!hasBimContextUpdate || (decision.bimContextUpdate !== undefined &&
         this.validBimContextUpdate(decision.bimContextUpdate))) &&
-      this.validMemoryMutationContract(decision, input, hasMemoryMutation) &&
+      this.validMemoryMutationContract(decision, input, hasMemoryMutation, hasMemoryClarification) &&
       this.requestedCapabilitiesMatchExecution(decision);
   }
 
   private validMemoryMutationContract(
     decision: LeaderDecision,
     input: InputUserPayload,
-    hasMemoryMutation: boolean
+    hasMemoryMutation: boolean,
+    hasMemoryClarification: boolean
   ): boolean {
     const memoryActionIds: string[] = decision.requestedCapabilityIds.filter(
       (id: string): boolean => id === 'memory.remember' || id === 'memory.update' ||
         id === 'memory.forget'
     );
+    if (hasMemoryMutation && hasMemoryClarification) {
+      return false;
+    }
+    if (hasMemoryClarification) {
+      const clarification: LeaderMemoryForgetClarification | undefined = decision.memoryClarification;
+      if (clarification === undefined || decision.roundAction !== 'execute' ||
+        decision.actionIntent !== undefined || decision.answer !== undefined ||
+        decision.dataTasks.length !== 0 || memoryActionIds.length !== 1 ||
+        memoryActionIds[0] !== 'memory.forget' ||
+        Object.keys(clarification).join(',') !== 'operation' ||
+        clarification.operation !== 'forget' || input.recalledMemories === undefined ||
+        input.recalledMemories.length < 1 || input.recalledMemories.length > 5) {
+        return false;
+      }
+      return leaderIsMemoryCapability(this.planningContext, 'memory.forget');
+    }
     if (!hasMemoryMutation) {
       return memoryActionIds.length === 0 && decision.memoryMutation === undefined;
     }
@@ -1187,8 +1230,7 @@ export class LeaderAgent extends MessageDrivenAgent {
         this.validMemoryFact(mutation.fact) &&
         this.recalledMemoryId(input, mutation.memoryId);
     }
-    return mutation.operation === 'forget' && keys === 'memoryId,operation' &&
-      this.recalledMemoryId(input, mutation.memoryId);
+    return false;
   }
 
   private recalledMemoryId(input: InputUserPayload, memoryId: string): boolean {
@@ -1311,6 +1353,9 @@ export class LeaderAgent extends MessageDrivenAgent {
     }
     if (decision.memoryMutation !== undefined) {
       required.add('memory.' + decision.memoryMutation.operation);
+    }
+    if (decision.memoryClarification !== undefined) {
+      required.add('memory.forget');
     }
     const requested: string[] = decision.requestedCapabilityIds;
     if (requested.length !== required.size) {
@@ -1929,7 +1974,8 @@ export class LeaderAgent extends MessageDrivenAgent {
   private publishTurnResult(
     input: AgentMessage,
     state: LeaderTurnState,
-    answer: string
+    answer: string,
+    memorySelection?: MemorySelectionPayload
   ): void {
     const payload: TurnResultPayload = {
       status: state.uiState === 'error' ? 'error' : this.turnResultStatus(state),
@@ -1949,6 +1995,9 @@ export class LeaderAgent extends MessageDrivenAgent {
     if (state.bimContextUpdate !== null) {
       payload.bimContextUpdate = state.bimContextUpdate;
     }
+    if (memorySelection !== undefined) {
+      payload.memorySelection = memorySelection;
+    }
     this.bus.publish({
       type: AgentMessageType.TURN_RESULT,
       conversationId: input.conversationId,
@@ -1956,6 +2005,33 @@ export class LeaderAgent extends MessageDrivenAgent {
       taskId: state.inputTaskId,
       payload
     });
+  }
+
+  private memorySelection(
+    input: AgentMessage,
+    state: LeaderTurnState,
+    _clarification: LeaderMemoryForgetClarification
+  ): MemorySelectionPayload | null {
+    const recalled: RecalledMemoryContext[] = state.input.recalledMemories === undefined ? [] :
+      state.input.recalledMemories;
+    const candidates: RecalledMemoryContext[] = [];
+    for (let memoryIndex = 0; memoryIndex < recalled.length; memoryIndex++) {
+      const matched: RecalledMemoryContext = recalled[memoryIndex];
+      candidates.push({
+        memoryId: matched.memoryId,
+        fact: matched.fact,
+        personaTag: matched.personaTag,
+        authority: matched.authority
+      });
+    }
+    if (candidates.length < 1 || candidates.length > 5) return null;
+    return {
+      operation: 'forget',
+      originTurnId: input.turnId,
+      sourceTaskId: state.inputTaskId,
+      personaId: state.personaId,
+      candidates
+    };
   }
 
   private turnResultStatus(state: LeaderTurnState): 'success' | 'partial' | 'empty' | 'error' {

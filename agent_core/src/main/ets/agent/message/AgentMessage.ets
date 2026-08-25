@@ -64,6 +64,15 @@ export interface RecalledMemoryContext {
   authority: MemoryAuthority;
 }
 
+export interface MemorySelectionPayload {
+  operation: 'forget';
+  originTurnId: string;
+  sourceTaskId: string;
+  personaId: string;
+  /** Every bounded memory recalled for the origin turn, in its original order (1-5 items). */
+  candidates: RecalledMemoryContext[];
+}
+
 export interface UserInputPayload {
   text: string;
   recentMessages?: ConversationTurnMessage[];
@@ -85,6 +94,7 @@ export interface TurnResultPayload {
   skillId?: string;
   bimSuggestion?: LeaderBimSuggestion;
   bimContextUpdate?: LeaderBimContextUpdate;
+  memorySelection?: MemorySelectionPayload;
 }
 
 export interface UiTaskPayload {

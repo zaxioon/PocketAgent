@@ -354,6 +354,20 @@ const coreRegressionCases = [
   { id: 'C23', query: '我想看看现在热映电影、票房和明星动态', expectsTool: true, expectedToolId: 'movie.open' },
   { id: 'C24', query: '我想查看今日日报', expectsTool: true, expectedToolId: 'daily.brief.open' }
 ];
+const memoryForgetSelectionQueryArg = process.argv.slice(2)
+  .find((arg) => arg.startsWith('--memory-forget-query='));
+const memoryForgetSelectionQuery = (
+  memoryForgetSelectionQueryArg === undefined ?
+    process.env.AIPHONE_MEMORY_FORGET_QUERY || '' : memoryForgetSelectionQueryArg.slice('--memory-forget-query='.length)
+).trim();
+const memoryForgetSelectionCase = {
+  id: 'MFS01',
+  query: memoryForgetSelectionQuery,
+  expectsTool: false,
+  expectedToolId: '',
+  verifyMemoryRecall: true,
+  verifyMemoryForgetSelection: true
+};
 
 const retainedFullCases = [
   { id: 'F01', query: '帮我查明天北京到上海的航班', expectsTool: true, expectedToolId: 'flight.search' },
@@ -652,6 +666,7 @@ const dailyBriefTruthfulStateMarkers = [
 ];
 
 const argv = process.argv.slice(2);
+const hdcCommand = (process.env.AIPHONE_HDC_COMMAND || 'hdc').trim() || 'hdc';
 const cleanData = process.env.AIPHONE_SMOKE_CLEAN_DATA === '1' || argv.includes('--clean-data');
 const runDynamicCases = argv.includes('--dynamic-tools');
 const runComposioCases = argv.includes('--composio-tools');
@@ -662,7 +677,19 @@ const runCoreRegression = argv.includes('--core-regression');
 const runGmailSendManual = argv.includes('--gmail-send-manual');
 const runBimSmoke = argv.includes('--bim');
 const runPublicPersona = argv.includes('--public-persona');
+const runMemoryForgetSelection = argv.includes('--memory-forget-selection');
 const listCases = argv.includes('--list-cases');
+const memoryCandidateIndicesArg = argv.find((arg) => arg.startsWith('--memory-candidate-indices='));
+const memoryCandidateIndexArg = argv.find((arg) => arg.startsWith('--memory-candidate-index='));
+const memoryCandidateIndicesRaw = memoryCandidateIndicesArg !== undefined ?
+  memoryCandidateIndicesArg.slice('--memory-candidate-indices='.length) :
+  (process.env.AIPHONE_MEMORY_CANDIDATE_INDICES ||
+    (memoryCandidateIndexArg !== undefined ? memoryCandidateIndexArg.slice('--memory-candidate-index='.length) :
+      process.env.AIPHONE_MEMORY_CANDIDATE_INDEX || '1,2'));
+const memoryCandidateIndices = [...new Set(String(memoryCandidateIndicesRaw).split(',')
+  .map((value) => Number.parseInt(value.trim(), 10)))]
+  .filter((value) => Number.isSafeInteger(value) && value > 0)
+  .sort((left, right) => left - right);
 const queryArgs = argv.filter((arg) => arg !== '--clean-data' &&
   arg !== '--dynamic-tools' &&
   arg !== '--composio-tools' &&
@@ -673,16 +700,35 @@ const queryArgs = argv.filter((arg) => arg !== '--clean-data' &&
   arg !== '--gmail-send-manual' &&
   arg !== '--bim' &&
   arg !== '--public-persona' &&
+  arg !== '--memory-forget-selection' &&
+  !arg.startsWith('--memory-forget-query=') &&
+  !arg.startsWith('--memory-candidate-indices=') &&
+  !arg.startsWith('--memory-candidate-index=') &&
   arg !== '--list-cases');
-const selectedDefaultCases = runComposioCases ? composioCases :
+const selectedDefaultCases = runMemoryForgetSelection ? [memoryForgetSelectionCase] :
+  (runComposioCases ? composioCases :
   (runFullRegression ? fullRegressionCases :
     (runCoreRegression ? defaultCases :
       (runGoogleApps ? defaultCases.concat(googleAppCases) :
-        (runDynamicCases ? defaultCases.concat(dynamicCases) : defaultCases))));
+        (runDynamicCases ? defaultCases.concat(dynamicCases) : defaultCases)))));
 const useDefaultCases = queryArgs.length === 0;
 const queries = useDefaultCases ? selectedDefaultCases.map((testCase) => testCase.query) : queryArgs;
 const queryRetryLimit = Number.parseInt(process.env.AIPHONE_QUERY_RETRY_LIMIT || '2', 10);
 if (listCases) {
+  if (runMemoryForgetSelection) {
+    console.log(JSON.stringify([{
+      id: memoryForgetSelectionCase.id,
+      mode: 'memory-forget-selection',
+      automated: true,
+      defaultCore: false,
+      queryConfigured: memoryForgetSelectionQuery.length > 0,
+      candidateIndices: memoryCandidateIndices,
+      requires: ['AIPHONE_MEMORY_FORGET_QUERY or --memory-forget-query=<query>',
+        'one-to-five recalled memories',
+        'AIPHONE_MEMORY_CANDIDATE_INDICES or --memory-candidate-indices=1,2 (defaults to 1,2)']
+    }], null, 2));
+    process.exit(0);
+  }
   if (runBimSmoke) {
     console.log(JSON.stringify([{
       id: 'BIM',
@@ -1081,7 +1127,7 @@ function expectedCaseForQuery(query) {
 }
 
 function firstTarget() {
-  const result = spawnSync('hdc', ['list', 'targets'], { encoding: 'utf8', timeout: 12000 });
+  const result = spawnSync(hdcCommand, ['list', 'targets'], { encoding: 'utf8', timeout: 12000 });
   const output = `${result.stdout || ''}${result.stderr || ''}`.trim();
   if (result.error !== undefined) {
     throw new Error(`hdc list targets failed before finding a device: ${result.error.message}`);
@@ -1097,12 +1143,15 @@ function firstTarget() {
 }
 
 function hdc(args, options = {}) {
-  const result = spawnSync('hdc', ['-t', target, ...args], {
+  const result = spawnSync(hdcCommand, ['-t', target, ...args], {
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
     ...options
   });
   const output = `${result.stdout || ''}${result.stderr || ''}`;
+  if (result.error !== undefined) {
+    throw new Error(`hdc ${args.join(' ')} failed: ${result.error.message}`);
+  }
   if (result.status !== 0 || /Connect server failed/i.test(output)) {
     throw new Error(`hdc ${args.join(' ')} failed:\n${result.stdout}\n${result.stderr}`);
   }
@@ -1179,7 +1228,7 @@ function publicPersonaSnapshotExists() {
 }
 
 function probeLocalModel() {
-  const result = spawnSync('hdc', ['-t', target, 'shell', 'curl', '-sS', '-m', '3', 'http://127.0.0.1:11434/v1/models'], {
+  const result = spawnSync(hdcCommand, ['-t', target, 'shell', 'curl', '-sS', '-m', '3', 'http://127.0.0.1:11434/v1/models'], {
     encoding: 'utf8',
     maxBuffer: 2 * 1024 * 1024
   });
@@ -1203,7 +1252,7 @@ function probeLocalModel() {
 }
 
 function startModelFoundation() {
-  const result = spawnSync('hdc', ['-t', target, 'shell', 'aa', 'start', '-b', 'com.huawei.hmos.hmmodelfoundation', '-a', 'EntryAbility'], {
+  const result = spawnSync(hdcCommand, ['-t', target, 'shell', 'aa', 'start', '-b', 'com.huawei.hmos.hmmodelfoundation', '-a', 'EntryAbility'], {
     encoding: 'utf8',
     maxBuffer: 2 * 1024 * 1024
   });
@@ -1259,6 +1308,18 @@ function cleanupHilogProcesses() {
     spawnSync('sleep', ['0.3']);
   }
   killMatching('KILL');
+}
+
+if (runMemoryForgetSelection && memoryForgetSelectionQuery.length === 0) {
+  console.error('Memory forget selection smoke requires AIPHONE_MEMORY_FORGET_QUERY or --memory-forget-query=<query>.');
+  process.exit(2);
+}
+if (runMemoryForgetSelection && (memoryCandidateIndices.length === 0 ||
+  memoryCandidateIndices.length > 5 || memoryCandidateIndices.join(',') !==
+    String(memoryCandidateIndicesRaw).split(',').map((value) => Number.parseInt(value.trim(), 10))
+      .sort((left, right) => left - right).join(','))) {
+  console.error('Memory candidate indices must be one-to-five unique positive 1-based integers.');
+  process.exit(2);
 }
 
 function sleep(ms) {
@@ -1782,7 +1843,7 @@ function lineMatchesPid(line, pid) {
 
 async function captureWhile(appPid, runAction, lifecycleOptions = null) {
   const logs = [];
-  const child = spawn('hdc', ['-t', target, 'hilog'], {
+  const child = spawn(hdcCommand, ['-t', target, 'hilog'], {
     stdio: ['ignore', 'pipe', 'pipe']
   });
   child.stdout.setEncoding('utf8');
@@ -1888,7 +1949,7 @@ async function captureWhile(appPid, runAction, lifecycleOptions = null) {
 
 async function captureAppLogsFor(appPid, runAction, durationMs = 2500) {
   const logs = [];
-  const child = spawn('hdc', ['-t', target, 'hilog'], {
+  const child = spawn(hdcCommand, ['-t', target, 'hilog'], {
     stdio: ['ignore', 'pipe', 'pipe']
   });
   child.stdout.setEncoding('utf8');
@@ -3559,6 +3620,205 @@ async function verifyMailExpandedActions(layout, index, appPid, targetMarker = '
   };
 }
 
+function exactVisibleTextMatches(layout, marker) {
+  return findTextMatches(layout, marker).filter((item) =>
+    item.text.split('|').some((value) => value.trim() === marker) &&
+    item.bounds.width > 0 && item.bounds.height > 0 && item.bounds.y >= 0 && item.bounds.y <= 2600);
+}
+
+function exactClickableTextMatches(layout, marker) {
+  const matches = [];
+  walk(layout, (node) => {
+    const attrs = node.attributes || {};
+    const bounds = parseBounds(attrs.bounds);
+    if (bounds === null || !attrIsTrue(attrs.clickable) || attrIsFalse(attrs.enabled) ||
+      bounds.width <= 0 || bounds.height <= 0 || bounds.y < 0 || bounds.y > 2600) return;
+    const exact = ['text', 'content', 'description', 'hint', 'accessibilityText']
+      .some((key) => typeof attrs[key] === 'string' && attrs[key].trim() === marker);
+    if (exact) matches.push({ text: marker, bounds });
+  });
+  matches.sort((left, right) => left.bounds.top - right.bounds.top || left.bounds.left - right.bounds.left);
+  return matches;
+}
+
+function sanitizedMemorySelectionLog(text) {
+  return sanitizeExternalUrlLogs(text)
+    .replace(/"candidateMemoryIds"\s*:\s*\[[^\]]*\]/g, '"candidateMemoryIds":["<redacted>"]')
+    .replace(/"memoryId"\s*:\s*"[^"]*"/g, '"memoryId":"<redacted>"')
+    .replace(/"fact"\s*:\s*"[^"]*"/g, '"fact":"<redacted>"')
+    .replace(/\bmemoryId=\S+/g, 'memoryId=<redacted>')
+    .replace(/\bfact=\S+/g, 'fact=<redacted>');
+}
+
+function memorySelectionShownEvidence(text, lifecycle) {
+  const matches = String(text || '').split('\n')
+    .filter((line) => /\[AIPhone\]\[MemorySelection\]/.test(line))
+    .map((line) => ({ line, fields: lineEvidenceFields(line) }))
+    .filter((item) => item.fields.operation === 'forget' && item.fields.status === 'shown');
+  const unique = new Map();
+  matches.forEach((item) => {
+    const key = [item.fields.conversation, item.fields.turn, item.fields.task, item.fields.count].join('|');
+    unique.set(key, item);
+  });
+  const selected = [...unique.values()].at(-1);
+  const count = selected !== undefined && /^\d+$/.test(selected.fields.count || '') ?
+    Number.parseInt(selected.fields.count, 10) : -1;
+  return {
+    ok: unique.size === 1 && count >= 1 && count <= 5 && lifecycle.complete === true,
+    count
+  };
+}
+
+async function finalMemoryCandidateCardEvidence(layout, index, maxSwipes = 6) {
+  let currentLayout = layout;
+  for (let reset = 0; reset < 3; reset += 1) {
+    swipeResultsDown();
+    await sleep(350);
+  }
+  const labels = new Set();
+  let cardVisible = false;
+  for (let attempt = 0; attempt <= maxSwipes; attempt += 1) {
+    if (attempt > 0 || currentLayout === layout) {
+      currentLayout = dumpLayout(`query-${index + 1}-memory-final-count-${attempt + 1}.json`);
+    }
+    const values = collectLayoutText(currentLayout);
+    cardVisible = cardVisible || values.includes('选择要忘记的长期记忆');
+    values.filter((value) => /^候选\s+\d+$/.test(value)).forEach((value) => labels.add(value));
+    if (!cardVisible) break;
+    swipeResultsUp();
+    await sleep(450);
+  }
+  return { cardVisible, count: labels.size };
+}
+
+async function verifyMemoryForgetSelectionAction(layout, index, appPid, lifecycle, initialLogText) {
+  let currentLayout = layout;
+  const candidateLabels = collectLayoutText(currentLayout)
+    .filter((value) => /^候选\s+\d+$/.test(value));
+  const uniqueCandidateLabels = [...new Set(candidateLabels)];
+  const allCandidateLabels = uniqueCandidateLabels;
+  const selectionShown = memorySelectionShownEvidence(initialLogText, lifecycle);
+  const recallEvidence = leaderMemoryRecallEvidence(initialLogText);
+  const authoritativeCandidateCount = selectionShown.ok ? selectionShown.count :
+    (recallEvidence.ok ? recallEvidence.count : -1);
+  const cardVisible = collectLayoutText(layout).includes('选择要忘记的长期记忆');
+  const initialValid = cardVisible && selectionShown.ok && uniqueCandidateLabels.length >= 1 &&
+    memoryCandidateIndices.every((candidateIndex) => candidateIndex <= authoritativeCandidateCount);
+  if (!initialValid) {
+    return {
+      ok: false,
+      cardVisible,
+      candidateCount: authoritativeCandidateCount,
+      visibleCandidateCount: allCandidateLabels.length,
+      clickedCandidateIndices: memoryCandidateIndices,
+      clicked: false,
+      toolOk: false,
+      confirmationVisible: false,
+      noActionAgent: false,
+      reason: 'Memory management card, one-to-five candidates, or the selected row action was not visible.'
+    };
+  }
+
+  for (let selectedIndex = 0; selectedIndex < memoryCandidateIndices.length; selectedIndex += 1) {
+    const requestedLabel = `候选 ${memoryCandidateIndices[selectedIndex]}`;
+    let selectedLabel = exactVisibleTextMatches(currentLayout, requestedLabel)[0];
+    for (let attempt = 0; selectedLabel === undefined && attempt < 4; attempt += 1) {
+      swipeResultsUp();
+      await sleep(800);
+      currentLayout = dumpLayout(
+        `query-${index + 1}-memory-selection-${selectedIndex + 1}-scroll-${attempt + 1}.json`
+      );
+      selectedLabel = exactVisibleTextMatches(currentLayout, requestedLabel)[0];
+    }
+    const toggleButtons = exactClickableTextMatches(currentLayout, '选择');
+    const toggleButton = selectedLabel === undefined ? undefined : toggleButtons
+      .filter((item) => item.bounds.x > selectedLabel.bounds.x)
+      .sort((left, right) =>
+        Math.abs(left.bounds.y - selectedLabel.bounds.y) - Math.abs(right.bounds.y - selectedLabel.bounds.y))[0];
+    if (toggleButton === undefined) {
+      return {
+        ok: false, cardVisible, candidateCount: authoritativeCandidateCount,
+        visibleCandidateCount: allCandidateLabels.length,
+        clickedCandidateIndices: memoryCandidateIndices.slice(0, selectedIndex), clicked: false,
+        toolOk: false, confirmationVisible: false, noActionAgent: false,
+        reason: `Could not toggle candidate index ${memoryCandidateIndices[selectedIndex]}.`
+      };
+    }
+    hdc(['shell', 'uitest', 'uiInput', 'click', String(toggleButton.bounds.x), String(toggleButton.bounds.y)]);
+    await sleep(800);
+    currentLayout = dumpLayout(
+      `query-${index + 1}-memory-selection-selected-${selectedIndex + 1}-layout.json`
+    );
+  }
+
+  const expectedDeleteLabel = `删除已选（${memoryCandidateIndices.length}）`;
+  let deleteButton = exactClickableTextMatches(currentLayout, expectedDeleteLabel)[0];
+  for (let attempt = 0; deleteButton === undefined && attempt < 4; attempt += 1) {
+    swipeResultsUp();
+    await sleep(800);
+    currentLayout = dumpLayout(`query-${index + 1}-memory-delete-scroll-${attempt + 1}.json`);
+    deleteButton = exactClickableTextMatches(currentLayout, expectedDeleteLabel)[0];
+  }
+  if (deleteButton === undefined) {
+    return {
+      ok: false, cardVisible, candidateCount: authoritativeCandidateCount,
+      visibleCandidateCount: allCandidateLabels.length,
+      clickedCandidateIndices: memoryCandidateIndices, clicked: false, toolOk: false,
+      confirmationVisible: false, noActionAgent: false,
+      reason: `Selected state did not expose ${expectedDeleteLabel}.`
+    };
+  }
+
+  clearHilog();
+  const actionLogs = await captureWhile(appPid, async () => {
+    hdc(['shell', 'uitest', 'uiInput', 'click', String(deleteButton.bounds.x), String(deleteButton.bounds.y)]);
+  }, {
+    completionEvidence: (text) => {
+      const evidence = leaderMemoryToolEvidence(text, 'memory.forget', lifecycle);
+      return {
+        complete: evidence.ok && evidence.succeeded === memoryCandidateIndices.length && evidence.failed === 0
+      };
+    },
+    idleActionTimeoutMs: 5000,
+    postCompletionWaitMs: 1200
+  });
+  const actionLogText = actionLogs.join('\n');
+  writeFileSync(
+    join(outDir, `query-${index + 1}-memory-selection-action.log`),
+    sanitizedMemorySelectionLog(actionLogText) + '\n'
+  );
+  await sleep(500);
+  const confirmationLayout = dumpLayout(`query-${index + 1}-memory-selection-confirmation-layout.json`);
+  const confirmationText = collectLayoutText(confirmationLayout).join('\n');
+  writeFileSync(
+    join(outDir, `query-${index + 1}-memory-selection-confirmation-text.txt`),
+    confirmationText + '\n'
+  );
+  const tool = leaderMemoryToolEvidence(actionLogText, 'memory.forget', lifecycle);
+  const exactToolCount = tool.ok && tool.succeeded === memoryCandidateIndices.length && tool.failed === 0;
+  const combinedLogs = `${initialLogText}\n${actionLogText}`;
+  const noActionAgent = !/\[AIPhone\]\[(?:MultiAgentActionPlan|MultiAgentActionRun|PersonaMemoryUpdate)\]/.test(combinedLogs) &&
+    !/ActionAgent/.test(combinedLogs);
+  const finalCard = await finalMemoryCandidateCardEvidence(confirmationLayout, index);
+  const remainingCandidateCount = finalCard.count;
+  const expectedRemainingCount = authoritativeCandidateCount - memoryCandidateIndices.length;
+  const confirmationVisible = expectedRemainingCount === 0 ?
+    new RegExp(`已删除\\s*${memoryCandidateIndices.length}\\s*条长期记忆`).test(confirmationText) :
+    finalCard.cardVisible && remainingCandidateCount === expectedRemainingCount;
+  return {
+    ok: initialValid && exactToolCount && confirmationVisible && noActionAgent,
+    cardVisible,
+    candidateCount: authoritativeCandidateCount,
+    visibleCandidateCount: allCandidateLabels.length,
+    clickedCandidateIndices: memoryCandidateIndices,
+    clicked: true,
+    toolOk: exactToolCount,
+    confirmationVisible,
+    noActionAgent,
+    reason: ''
+  };
+}
+
 async function runQuery(query, index, expectedTool, expectedCaseOverride = null, preserveAppSession = false) {
   const expectedCase = expectedCaseOverride || (useDefaultCases ? selectedDefaultCases[index] : expectedCaseForQuery(query));
   const expectsDirectText = expectedTool === false;
@@ -3619,7 +3879,8 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
     expectedParallelDataToolIds,
     postCompletionWaitMs: multiAgentPostCompletionWaitMs(expectedCase.id)
   });
-  const safeLogText = sanitizeExternalUrlLogs(logs.join('\n'));
+  const safeLogText = expectedCase.verifyMemoryForgetSelection === true ?
+    sanitizedMemorySelectionLog(logs.join('\n')) : sanitizeExternalUrlLogs(logs.join('\n'));
   const safeLogs = safeLogText.split('\n');
   const logPath = join(outDir, `query-${index + 1}.log`);
   writeFileSync(logPath, safeLogText + '\n');
@@ -3650,6 +3911,20 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
   const layoutText = layoutTextValues.join('\n');
   const layoutTextPath = join(outDir, `query-${index + 1}-final-layout-text.txt`);
   writeFileSync(layoutTextPath, layoutText + '\n');
+  if (expectedCase.verifyMemoryForgetSelection === true) {
+    const memorySelection = await verifyMemoryForgetSelectionAction(
+      layout, index, appPid, summary.multiAgentLifecycle, safeLogText
+    );
+    summary.memoryForgetSelection = memorySelection;
+    summary.layoutPath = join(outDir, `query-${index + 1}-final-layout.json`);
+    summary.layoutTextPath = layoutTextPath;
+    summary.layoutTextExposed = memorySelection.ok;
+    summary.layoutBlockingHits = [];
+    summary.layoutOk = memorySelection.ok;
+    summary.screenPath = captureScreen(`query-${index + 1}-memory-forget-selection-final-screen.png`);
+    summary.ok = summary.ok && memorySelection.ok;
+    return summary;
+  }
   const directTextEvidence = expectsDirectText && directTextBaselineLayout !== null ? directTextVisibleEvidence(
     safeLogText,
     directTextBaselineLayout,
@@ -5555,6 +5830,7 @@ const finalMemoryReplyPattern = finalMemoryCapability === 'memory.remember' ?
   (finalMemoryCapability === 'memory.update' ? /已更新长期记忆/ :
     (finalMemoryCapability === 'memory.forget' ? /已忘记这条长期记忆/ : null));
 const finalMemoryReplyVisible = finalMemoryReplyPattern !== null && finalMemoryReplyPattern.test(finalLayoutText);
+const finalMemorySelectionVisibleOutput = finalSummary?.memoryForgetSelection?.ok === true;
 if (finalAllowsLeaderMemoryText && finalMemoryReplyVisible) {
   finalDirectTextVisible = {
     ok: true,
@@ -5565,7 +5841,7 @@ if (finalAllowsLeaderMemoryText && finalMemoryReplyVisible) {
     skipped: false
   };
 }
-const finalOutputPresent = finalExpectsDirectText ? finalDirectTextVisible.ok :
+const finalOutputPresent = finalMemorySelectionVisibleOutput ? true : finalExpectsDirectText ? finalDirectTextVisible.ok :
   (finalAllowsCorrelatedDynamicAuth || finalAllowsSocialHubTruthfulState ||
     finalAllowsExternalGmailWeb || finalAllowsLeaderMemoryText || finalDailyBriefVisibleOutput ||
     finalLayoutDomainHits.length > 0 ||

@@ -2166,6 +2166,134 @@ export default function leaderAgentTest() {
       observer.close();
     });
 
+    it('publishes a host-trusted forget selection without executing memory', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const executor = new ScriptedMemoryToolExecutor({ status: 'success', message: 'must not run' });
+      const decision: LeaderDecision = semanticDecision([]);
+      decision.requestedCapabilityIds = ['memory.forget'];
+      decision.memoryClarification = { operation: 'forget' };
+      const leader = new LeaderAgent(
+        bus, new RoundScriptedPlanner([decision]), memoryPlanningContext(),
+        30000, undefined, undefined, undefined, executor
+      );
+      const observer = bus.openReader();
+      leader.start();
+      const input = inputMessage();
+      (input.payload as InputUserPayload).recalledMemories = [{
+        memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion', authority: 'leader'
+      }, {
+        memoryId: 'memory-coffee-2', fact: '用户喝咖啡时优先选择燕麦奶。',
+        personaTag: 'food_companion', authority: 'seed'
+      }];
+      bus.publish(input);
+      await receive(observer);
+      const terminal = await receive(observer);
+      const result = terminal.payload as TurnResultPayload;
+
+      expect(terminal.type).assertEqual(AgentMessageType.TURN_RESULT);
+      expect(result.status).assertEqual('success');
+      expect(result.memorySelection?.operation).assertEqual('forget');
+      expect(result.memorySelection?.originTurnId).assertEqual(input.turnId);
+      expect(result.memorySelection?.sourceTaskId).assertEqual(input.taskId);
+      expect(result.memorySelection?.candidates.length).assertEqual(2);
+      expect(result.memorySelection?.candidates[0].memoryId).assertEqual('memory-coffee-1');
+      expect(result.memorySelection?.candidates[1].memoryId).assertEqual('memory-coffee-2');
+      expect(result.memorySelection?.candidates[1].authority).assertEqual('seed');
+      expect(executor.requests.length).assertEqual(0);
+      leader.stop();
+      observer.close();
+    });
+
+    it('rejects exact forget with multiple recalls without invoking the executor', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const executor = new ScriptedMemoryToolExecutor({ status: 'success', message: 'must not run' });
+      const decision: LeaderDecision = semanticDecision([]);
+      decision.requestedCapabilityIds = ['memory.forget'];
+      decision.memoryMutation = { operation: 'forget', memoryId: 'memory-coffee-1' };
+      const leader = new LeaderAgent(
+        bus, new RoundScriptedPlanner([decision]), memoryPlanningContext(),
+        30000, undefined, undefined, undefined, executor
+      );
+      const observer = bus.openReader();
+      leader.start();
+      const input = inputMessage();
+      (input.payload as InputUserPayload).recalledMemories = [{
+        memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion', authority: 'leader'
+      }, {
+        memoryId: 'memory-coffee-2', fact: '用户喝咖啡时优先选择燕麦奶。',
+        personaTag: 'food_companion', authority: 'leader'
+      }];
+      bus.publish(input);
+      await receive(observer);
+      const error = await receive(observer);
+
+      expect(error.type).assertEqual(AgentMessageType.TASK_ERROR);
+      expect((error.payload as TaskErrorPayload).code).assertEqual('LEADER_PLAN_INVALID');
+      expect(executor.requests.length).assertEqual(0);
+      leader.stop();
+      observer.close();
+    });
+
+    it('rejects exact forget even when exactly one memory was recalled', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const executor = new ScriptedMemoryToolExecutor({ status: 'success', message: '已忘记。' });
+      const decision: LeaderDecision = semanticDecision([]);
+      decision.requestedCapabilityIds = ['memory.forget'];
+      decision.memoryMutation = { operation: 'forget', memoryId: 'memory-coffee-1' };
+      const leader = new LeaderAgent(
+        bus, new RoundScriptedPlanner([decision]), memoryPlanningContext(),
+        30000, undefined, undefined, undefined, executor
+      );
+      const observer = bus.openReader();
+      leader.start();
+      const input = inputMessage();
+      (input.payload as InputUserPayload).recalledMemories = [{
+        memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion', authority: 'leader'
+      }];
+      bus.publish(input);
+      await receive(observer);
+      const error = await receive(observer);
+
+      expect(error.type).assertEqual(AgentMessageType.TASK_ERROR);
+      expect((error.payload as TaskErrorPayload).code).assertEqual('LEADER_PLAN_INVALID');
+      expect(executor.requests.length).assertEqual(0);
+      leader.stop();
+      observer.close();
+    });
+
+    it('publishes a selection for one recalled memory without invoking the executor', 0, async () => {
+      const bus = new LinkedMessageBus();
+      const executor = new ScriptedMemoryToolExecutor({ status: 'success', message: 'must not run' });
+      const decision: LeaderDecision = semanticDecision([]);
+      decision.requestedCapabilityIds = ['memory.forget'];
+      decision.memoryClarification = { operation: 'forget' };
+      const leader = new LeaderAgent(
+        bus, new RoundScriptedPlanner([decision]), memoryPlanningContext(),
+        30000, undefined, undefined, undefined, executor
+      );
+      const observer = bus.openReader();
+      leader.start();
+      const input = inputMessage();
+      (input.payload as InputUserPayload).recalledMemories = [{
+        memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion', authority: 'leader'
+      }];
+      bus.publish(input);
+      await receive(observer);
+      const terminal = await receive(observer);
+      const result = terminal.payload as TurnResultPayload;
+
+      expect(terminal.type).assertEqual(AgentMessageType.TURN_RESULT);
+      expect(result.memorySelection?.candidates.length).assertEqual(1);
+      expect(result.memorySelection?.candidates[0].memoryId).assertEqual('memory-coffee-1');
+      expect(executor.requests.length).assertEqual(0);
+      leader.stop();
+      observer.close();
+    });
+
     it('merges mixed Data and memory partial status while preserving the business surface', 0, async () => {
       const bus = new LinkedMessageBus();
       const executor = new ScriptedMemoryToolExecutor({

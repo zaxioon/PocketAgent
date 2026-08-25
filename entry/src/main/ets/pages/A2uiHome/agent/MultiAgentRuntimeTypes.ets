@@ -11,6 +11,7 @@ import {
   LeaderBimSuggestion,
   LeaderCurrentLocalDateProvider,
   LeaderMemoryToolExecutor,
+  MemorySelectionPayload,
   LeaderPlanner,
   LeaderDataTaskInputNormalizer,
   LeaderPlanningContext,
@@ -39,6 +40,7 @@ export interface MultiAgentSettledOutcome {
   skillId: string;
   bimSuggestion?: LeaderBimSuggestion;
   bimContextUpdate?: LeaderBimContextUpdate;
+  memorySelection?: MemorySelectionPayload;
 }
 
 export type RuntimeOwner = CoreRuntimeOwner;

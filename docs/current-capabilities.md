@@ -18,7 +18,7 @@ UI Lab 的 GitHub 用户看板是 `dynamic.search` 的宿主受信 profile，不
 
 ## multi-Agent smoke 证据边界
 
-自动 smoke 以同一 `conversation`、`turn`、`task` 下的 `MultiAgentInput`、Data/UI task 与 terminal、`MultiAgentTurnResult` 为主证据；并行任务必须全部 terminal，依赖任务必须出现递增的 `round-*`。`success`、`partial`、`empty`、`error`、`canceled` 保留原状态，不把旧 `LoopBackend`/页面 ready/HTTP 200 单独当成成功。当前 surface 动作还要求 `MultiAgentActionRun` 与同一 surface/run 的 `MultiAgentActionResult`；virtual action 使用精确 `MultiAgentActionPlan` request 与 terminal result 关联。Leader-owned 记忆不产生 Data/Action/UI task：C11 另外要求当轮 `LeaderMemoryRecall` 与同一 `conversation/turn/task` 的 `LeaderMemoryTool` terminal，并确认无 `MultiAgentActionPlan`、无 A2UI 记忆卡。这些日志只包含操作、状态和计数，不记录 fact 或 memoryId。
+自动 smoke 以同一 `conversation`、`turn`、`task` 下的 `MultiAgentInput`、Data/UI task 与 terminal、`MultiAgentTurnResult` 为主证据；并行任务必须全部 terminal，依赖任务必须出现递增的 `round-*`。`success`、`partial`、`empty`、`error`、`canceled` 保留原状态，不把旧 `LoopBackend`/页面 ready/HTTP 200 单独当成成功。当前 surface 动作还要求 `MultiAgentActionRun` 与同一 surface/run 的 `MultiAgentActionResult`；virtual action 使用精确 `MultiAgentActionPlan` request 与 terminal result 关联。Leader-owned 记忆不产生 Data/Action/UI task：增补和更新要求当轮 `LeaderMemoryRecall` 与同一 `conversation/turn/task` 的 `LeaderMemoryTool` terminal，并确认无 `MultiAgentActionPlan`；遗忘统一进入宿主记忆管理卡，用户可多选后直接写本地 memory runtime，不产生 Action Agent 计划。逐条写入只汇总一次，日志只包含操作、状态和计数，不记录 fact 或 memoryId。
 
 `node scripts/aiphone-device-smoke.mjs --list-cases` 只列 C01-C23，`--full-regression --list-cases` 再列 F01-F16，均不运行设备或 provider。`gmail.message.send` 不进入自动列表；只有同时配置 `AIPHONE_GMAIL_SAFE_THREAD_ID` 与 `AIPHONE_GMAIL_SAFE_RECIPIENT` 时，`--gmail-send-manual --list-cases` 才显示 manual-only M01，且脚本不会自动发送。X02“不确认直接发送”继续 excluded。
 
@@ -78,7 +78,7 @@ UI Lab 的 GitHub 用户看板是 `dynamic.search` 的宿主受信 profile，不
 | `ride.driver.location` | Data Agent | manual-only | 需要真实 orderId |
 | `memory.remember` | Leader（phone-local） | core | Leader 整理 1–5 条原子事实后直接写入；无 Action Agent / A2UI |
 | `memory.update` | Leader（phone-local） | core | 只允许更新当轮预召回中的精确 memoryId；无 Action Agent / A2UI |
-| `memory.forget` | Leader（phone-local） | core | 只允许删除当轮预召回中的精确 memoryId；C11 负责可逆清理 |
+| `memory.forget` | Leader（phone-local） | core | Leader 只触发宿主记忆管理卡；卡片默认零选、支持多选，用户点击“删除已选”后 Host 才按隐藏的精确 memoryId 逐条删除；不经过 Action Agent |
 | `dynamic.search` | Data Agent（virtual） | core | 只读 operation；create/update/delete/send/write 一律拒绝 |
 
 | 领域 | toolId | 核心 query | 预期结果 | 风险 | 授权/配置 | VPN/网络 | 走 Composio | 覆盖 |
@@ -139,7 +139,7 @@ UI Lab 的 GitHub 用户看板是 `dynamic.search` 的宿主受信 profile，不
 | 打车 | `ride.order.create` | 从真实估价卡确认叫车 | 只在显式确认后创建真实订单；自动回归不执行 | `write` | `DIDI_MCP_KEY` + 真实路线/车型/乘客上下文 | 取决于滴滴网络 | 否 | manual-only |
 | 打车 | `ride.order.cancel` | 取消已创建的真实订单 | 必须保留真实 orderId；无测试订单不执行 | `write` | `DIDI_MCP_KEY` + 真实 orderId | 取决于滴滴网络 | 否 | manual-only |
 | 打车 | `ride.driver.location` | 查询已创建订单的司机位置 | 必须保留真实 orderId；无测试订单不执行 | `read` | `DIDI_MCP_KEY` + 真实 orderId | 取决于滴滴网络 | 否 | manual-only |
-| 长期记忆 | `memory.remember` / `memory.update` / `memory.forget` | `请长期记住：我点咖啡时只选燕麦奶` | 非 DeepSearch 主链先在手机本地全局预召回，Leader 自行决定原子化写入/精确更新/精确遗忘；无 Action Agent、无 A2UI 记忆卡 | `draft` | 本地 BGE + Vector RDB | 不需要 | 否 | core C11 可逆生命周期 |
+| 长期记忆 | `memory.remember` / `memory.update` / `memory.forget` | `请长期记住：我点咖啡时只选燕麦奶` | 非 DeepSearch 主链先在手机本地全局预召回；遗忘时把本轮 1–5 条召回交给宿主管理卡，默认零选中，用户可多选后按隐藏精确 ID 删除；部分失败保留失败项重试，不经过 Action Agent | `draft` | 本地 BGE + Vector RDB | 不需要 | 否 | core C11 可逆生命周期；管理卡需专项真机验证 |
 | 动态工具/本地 | `dynamic.search` | `帮我查明天深圳天气` | 本地 catalog 命中 `weather.query`；找不到就 `no_tool_found` | `read` | 本地 catalog 凭据；天气通常走高德 key | 高德天气通常不需要 VPN | 否 | `--dynamic-tools` |
 | Composio/GitHub | `dynamic.search` | `帮我在 GitHub 里找 Appless-Phone 最近的 pr` | Composio GitHub 结果；优先 `GITHUB_FIND_PULL_REQUESTS`，展示 Appless-Phone PR | `read` | `COMPOSIO_API_KEY` + `COMPOSIO_USER_ID` + GitHub connected account | 通常需要外网/VPN | 是 | `--composio-tools` |
 | Composio/GitHub UI Lab | `dynamic.search` + host-only `operationTarget` | `为 GitHub 用户 sindresorhus 生成资料、仓库和近期动态看板` | 一次 `github.user.dashboard` 任务聚合真实公开资料、当前页仓库统计和近期事件；分区失败显式标注来源，不生成贡献日历 | `read` | `COMPOSIO_API_KEY` + `COMPOSIO_USER_ID` + GitHub connected account；仅 UI Lab trusted profile | 通常需要外网/VPN | 是 | Hypium；UI Lab 真机 `manual-only` |

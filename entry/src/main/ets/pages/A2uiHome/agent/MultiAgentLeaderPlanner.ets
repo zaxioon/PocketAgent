@@ -12,6 +12,7 @@ import {
   LeaderDataTaskInputNormalizer,
   LeaderDecision,
   LeaderDecisionDataTask,
+  LeaderMemoryForgetClarification,
   LeaderMemoryRememberFact,
   LeaderMemoryMutation,
   LeaderPersonaMetadata,
@@ -32,6 +33,7 @@ import {
   leaderInputHasEntityAuthority,
   leaderIsActionCapability,
   leaderIsDataCapability,
+  leaderIsMemoryCapability,
   leaderSameRoundDependencyConsumerTaskToolIds,
   leaderSameRoundDependencyProducerTaskToolIds,
   leaderTasksHaveSameRoundDependency
@@ -119,7 +121,13 @@ const EXECUTION_READINESS_CONTRACT: string =
 const MEMORY_MUTATION_CONTRACT: string =
   'Long-term memory is global user context, not a recommendation-page preference projection. ' +
   'Use memory.remember only for one to five stable, reusable, normalized atomic single-sentence user facts. ' +
-  'Use memory.update or memory.forget only with one exact memoryId present in Recalled long-term user memories. ' +
+  'Use memory.update only with one exact memoryId present in Recalled long-term user memories. ' +
+  'Never emit an exact memoryMutation forget. Every user forget request with one to five recalled memories must emit ' +
+  'memoryClarification exactly as {"operation":"forget"}; the host presents every recalled memory in original order ' +
+  'for explicit user selection. With no recalled memories, answer that no matching memory was found and do not emit ' +
+  'memoryClarification. This is a deterministic host gate regardless of apparent relevance. ' +
+  'memoryClarification is memory-only: use requestedCapabilityIds=["memory.forget"], roundAction="execute", ' +
+  'dataTasks=[], and omit memoryMutation, actionIntent, and answer. ' +
   'Never store raw conversation transcripts, temporary session state, tool results, credentials, instructions, ' +
   'or action authorization. memoryMutation must exactly match one selected memory capability ID. ' +
   'Memory is executed directly by Leader; never put a memory capability in actionIntent and never combine ' +
@@ -1757,8 +1765,8 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
         '"purpose":"string","preferredDensity":"string","requiredSections":["string"]},' +
         '"actionIntent":{"goal":"string","allowedActionIds":["string"]} optional,' +
         '"memoryMutation":{"operation":"remember","facts":["atomic sentence"]} or ' +
-        '{"operation":"update","memoryId":"recalled ID","fact":"atomic sentence"} or ' +
-        '{"operation":"forget","memoryId":"recalled ID"} optional,' +
+        '{"operation":"update","memoryId":"recalled ID","fact":"atomic sentence"} optional,' +
+        '"memoryClarification":{"operation":"forget"} optional,' +
         '"answer":"required non-empty string for answer|clarify; omit for execute",' +
         '"bimSuggestion":{"title":"string","summary":"string","reason":"string",' +
         '"keywords":["string"]} optional,"bimContextUpdate":{"summary":"string",' +
@@ -1917,6 +1925,7 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       .filter((key: string): boolean => key !== 'bimSuggestion')
       .filter((key: string): boolean => key !== 'bimContextUpdate')
       .filter((key: string): boolean => key !== 'memoryMutation')
+      .filter((key: string): boolean => key !== 'memoryClarification')
       .sort()
       .join(',');
     if (DECISION_KEYS.indexOf(decisionKeys) < 0) {
@@ -1936,6 +1945,8 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
     const rawBimSuggestion = values['bimSuggestion'] === null ? undefined : values['bimSuggestion'];
     const rawBimContextUpdate = values['bimContextUpdate'] === null ? undefined : values['bimContextUpdate'];
     const rawMemoryMutation = values['memoryMutation'] === null ? undefined : values['memoryMutation'];
+    const rawMemoryClarification = values['memoryClarification'] === null ?
+      undefined : values['memoryClarification'];
     if (typeof personaId !== 'string' || personaId.trim().length === 0 ||
       typeof skillId !== 'string' ||
       !this.validRoundAction(roundAction) ||
@@ -1982,7 +1993,7 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       }
     }
     if ((selectedAction === 'execute' && tasks.length === 0 && actionIntent === null &&
-      rawMemoryMutation === undefined) ||
+      rawMemoryMutation === undefined && rawMemoryClarification === undefined) ||
       (selectedAction !== 'execute' && tasks.length !== 0)) {
       throw new Error('Leader round action does not match its Data tasks.');
     }
@@ -2023,11 +2034,17 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
     }
     const memoryMutation: LeaderMemoryMutation | null = rawMemoryMutation === undefined ? null :
       this.memoryMutation(rawMemoryMutation, input);
+    const memoryClarification: LeaderMemoryForgetClarification | null = rawMemoryClarification === undefined ?
+      null : this.memoryClarification(rawMemoryClarification, input);
     this.validateMemoryMutationAction(
-      memoryMutation, requestedCapabilityIds, actionIntent, context, selectedAction
+      memoryMutation, memoryClarification, requestedCapabilityIds, actionIntent, context,
+      selectedAction, tasks, answerValue
     );
     if (memoryMutation !== null) {
       decision.memoryMutation = memoryMutation;
+    }
+    if (memoryClarification !== null) {
+      decision.memoryClarification = memoryClarification;
     }
     const hasBimContext: boolean = input.text.indexOf('[BIM_CONTEXT]') >= 0;
     const snapshotOnlyBim: boolean = input.text.indexOf('[BIM_SNAPSHOTS]\n') === 0;
@@ -2609,9 +2626,14 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       }
       return { operation: 'remember', facts };
     }
+    if (operation === 'forget' && keys === 'memoryId,operation') {
+      throw new Error(
+        'Leader memory.forget must use memoryClarification; exact forget mutations are forbidden.'
+      );
+    }
     const memoryId = values['memoryId'];
     if (typeof memoryId !== 'string' || !this.recalledMemoryId(input, memoryId)) {
-      throw new Error('Leader memory update or forget requires one recalled memoryId.');
+      throw new Error('Leader memory update requires one recalled memoryId.');
     }
     if (operation === 'update') {
       const fact = values['fact'];
@@ -2621,18 +2643,34 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       }
       return { operation: 'update', memoryId, fact };
     }
-    if (operation === 'forget' && keys === 'memoryId,operation') {
-      return { operation: 'forget', memoryId };
-    }
     throw new Error('Leader memory mutation operation is unsupported.');
+  }
+
+  private memoryClarification(
+    raw: Object | string | number | boolean | null | undefined,
+    input: InputUserPayload
+  ): LeaderMemoryForgetClarification {
+    if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Leader memory clarification fields are malformed.');
+    }
+    const values = raw as Record<string, Object | string | number | boolean | null | undefined>;
+    const recallCount: number = input.recalledMemories === undefined ? 0 : input.recalledMemories.length;
+    if (Object.keys(values).join(',') !== 'operation' || values['operation'] !== 'forget' ||
+      recallCount < 1 || recallCount > 5) {
+      throw new Error('Leader forget clarification requires one to five recalled memories.');
+    }
+    return { operation: 'forget' };
   }
 
   private validateMemoryMutationAction(
     mutation: LeaderMemoryMutation | null,
+    clarification: LeaderMemoryForgetClarification | null,
     requestedCapabilityIds: string[],
     actionIntent: LeaderActionIntent | null,
     context: LeaderPlanningContext,
-    roundAction: LeaderRoundAction
+    roundAction: LeaderRoundAction,
+    tasks: LeaderDecisionDataTask[],
+    answer: Object | string | number | boolean | null | undefined
   ): void {
     const memoryActionIds: string[] = requestedCapabilityIds.filter(
       (id: string): boolean => id === 'memory.remember' || id === 'memory.update' ||
@@ -2645,6 +2683,19 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       );
     if (actionMemoryIds.length > 0) {
       throw new Error('Leader memory capability must not use actionIntent.');
+    }
+    if (mutation !== null && clarification !== null) {
+      throw new Error('Leader memoryMutation cannot be combined with memoryClarification.');
+    }
+    if (clarification !== null) {
+      if (actionIntent !== null || tasks.length !== 0 || answer !== undefined) {
+        throw new Error('Leader memoryClarification must be a memory-only decision.');
+      }
+      if (memoryActionIds.length !== 1 || memoryActionIds[0] !== 'memory.forget' ||
+        roundAction !== 'execute' || !leaderIsMemoryCapability(context, 'memory.forget')) {
+        throw new Error('Leader memoryClarification must exactly match memory.forget.');
+      }
+      return;
     }
     if (mutation === null) {
       if (memoryActionIds.length > 0) {

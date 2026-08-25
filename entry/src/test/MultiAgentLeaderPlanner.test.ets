@@ -976,6 +976,22 @@ function memoryUpdateDecision(memoryId: string): string {
     '"fact":"用户喝咖啡时选择半糖。"}}';
 }
 
+function memoryForgetClarificationDecision(): string {
+  return '{"personaId":"travel_companion","skillId":"",' +
+    '"requestedCapabilityIds":["memory.forget"],"roundAction":"execute",' +
+    '"continuationMode":"complete","dataTasks":[],"uiIntent":{"purpose":"choose memory to forget",' +
+    '"preferredDensity":"comfortable","requiredSections":[]},' +
+    '"memoryClarification":{"operation":"forget"}}';
+}
+
+function memoryForgetDecision(memoryId: string): string {
+  return '{"personaId":"travel_companion","skillId":"",' +
+    '"requestedCapabilityIds":["memory.forget"],"roundAction":"execute",' +
+    '"continuationMode":"complete","dataTasks":[],"uiIntent":{"purpose":"forget memory",' +
+    '"preferredDensity":"comfortable","requiredSections":[]},' +
+    '"memoryMutation":{"operation":"forget","memoryId":"' + memoryId + '"}}';
+}
+
 function c10C11Context(): LeaderPlanningContext {
   const context = memoryContractContext();
   context.tools.push({
@@ -1249,13 +1265,83 @@ export default function multiAgentLeaderPlannerTest() {
       }
 
       expect(accepted.memoryMutation!.operation).assertEqual('update');
-      expect(rejected).assertEqual('Leader memory update or forget requires one recalled memoryId.');
+      expect(rejected).assertEqual('Leader memory update requires one recalled memoryId.');
     });
 
-    it('rejects a memory mutation whose operation does not match the selected capability', 0, async () => {
+    it('accepts forget clarification for one-to-five recalls and rejects it without recall', 0, async () => {
+      const input: InputUserPayload = {
+        text: '忘掉咖啡偏好',
+        recalledMemories: [{
+          memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+          personaTag: 'food_companion', authority: 'leader'
+        }, {
+          memoryId: 'memory-coffee-2', fact: '用户喝咖啡时优先选择燕麦奶。',
+          personaTag: 'food_companion', authority: 'leader'
+        }]
+      };
+      const model = new QueueLocalModel([
+        memoryForgetClarificationDecision()
+      ]);
+      const accepted = await new MultiAgentLeaderPlanner(model).plan(
+        inputMessage(), input, memoryContractContext(), 1
+      );
+      let rejected: string = '';
+      try {
+        await new MultiAgentLeaderPlanner(new QueueLocalModel([
+          memoryForgetClarificationDecision()
+        ])).plan(inputMessage(), { text: '忘掉咖啡偏好', recalledMemories: [] }, memoryContractContext(), 1);
+      } catch (error) {
+        rejected = error instanceof Error ? error.message : 'unknown';
+      }
+
+      expect(accepted.memoryClarification?.operation).assertEqual('forget');
+      expect(accepted.memoryMutation).assertUndefined();
+      expect(model.prompts[0].indexOf('deterministic host gate')).assertLarger(-1);
+      expect(rejected).assertEqual(
+        'Leader forget clarification requires one to five recalled memories.'
+      );
+    });
+
+    it('rejects exact forget mutations for both one and multiple recalls', 0, async () => {
+      const oneRecall: InputUserPayload = {
+        text: '忘掉咖啡偏好',
+        recalledMemories: [{
+          memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+          personaTag: 'food_companion', authority: 'leader'
+        }]
+      };
+      let oneRejected: string = '';
+      try {
+        await new MultiAgentLeaderPlanner(new QueueLocalModel([
+          memoryForgetDecision('memory-coffee-1')
+        ])).plan(inputMessage(), oneRecall, memoryContractContext(), 1);
+      } catch (error) {
+        oneRejected = error instanceof Error ? error.message : 'unknown';
+      }
+      let multipleRejected: string = '';
+      try {
+        await new MultiAgentLeaderPlanner(new QueueLocalModel([
+          memoryForgetDecision('memory-coffee-1')
+        ])).plan(inputMessage(), {
+          text: '忘掉咖啡偏好',
+          recalledMemories: oneRecall.recalledMemories!.concat([{
+            memoryId: 'memory-coffee-2', fact: '用户喝咖啡时优先选择燕麦奶。',
+            personaTag: 'food_companion', authority: 'leader'
+          }])
+        }, memoryContractContext(), 1);
+      } catch (error) {
+        multipleRejected = error instanceof Error ? error.message : 'unknown';
+      }
+
+      const forbidden = 'Leader memory.forget must use memoryClarification; exact forget mutations are forbidden.';
+      expect(oneRejected).assertEqual(forbidden);
+      expect(multipleRejected).assertEqual(forbidden);
+    });
+
+    it('rejects an exact forget mutation before capability matching', 0, async () => {
       const mismatched: string = memoryRememberDecision()
         .replace('"operation":"remember"', '"operation":"forget","memoryId":"memory-coffee"')
-        .replace(',"facts":[{"fact":"用户喝咖啡时选择半糖。"},{"fact":"用户购买饮品时优先选择可自取门店。"}]', '');
+        .replace(',"facts":["用户喝咖啡时选择半糖。","用户购买饮品时优先选择可自取门店。"]', '');
       let errorCode: string = '';
       try {
         await new MultiAgentLeaderPlanner(new QueueLocalModel([mismatched])).plan(
@@ -1271,7 +1357,7 @@ export default function multiAgentLeaderPlannerTest() {
         errorCode = error instanceof Error ? error.message : 'unknown';
       }
       expect(errorCode).assertEqual(
-        'Leader memoryMutation must exactly match its Leader-owned memory capability.'
+        'Leader memory.forget must use memoryClarification; exact forget mutations are forbidden.'
       );
     });
 

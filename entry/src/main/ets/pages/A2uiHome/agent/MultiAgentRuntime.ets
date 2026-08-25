@@ -20,6 +20,7 @@ import {
   DataResult,
   LeaderBimContextUpdate,
   LeaderBimSuggestion,
+  MemorySelectionPayload,
   validLeaderBimDashboardItems,
   LeaderAgent,
   LeaderPlanningContext,
@@ -121,7 +122,8 @@ function settled(
   personaId: string = '',
   skillId: string = '',
   bimSuggestion?: LeaderBimSuggestion,
-  bimContextUpdate?: LeaderBimContextUpdate
+  bimContextUpdate?: LeaderBimContextUpdate,
+  memorySelection?: MemorySelectionPayload
 ): MultiAgentSettledOutcome {
   const outcome: MultiAgentSettledOutcome = {
     kind: 'settled',
@@ -137,6 +139,9 @@ function settled(
   }
   if (bimContextUpdate !== undefined) {
     outcome.bimContextUpdate = bimContextUpdate;
+  }
+  if (memorySelection !== undefined) {
+    outcome.memorySelection = memorySelection;
   }
   return outcome;
 }
@@ -1000,6 +1005,12 @@ export class MultiAgentRuntime {
     if (!this.validTurnResult(result)) {
       return;
     }
+    if (result.memorySelection !== undefined &&
+      (result.memorySelection.originTurnId !== message.turnId ||
+        result.memorySelection.sourceTaskId !== message.taskId ||
+        result.memorySelection.personaId !== result.personaId)) {
+      return;
+    }
     if (pending.personaId.length > 0 &&
       (result.personaId !== pending.personaId || result.skillId !== pending.skillId)) {
       return;
@@ -1048,7 +1059,8 @@ export class MultiAgentRuntime {
         pending.personaId,
         pending.skillId,
         hasOwnKey(result, 'bimSuggestion') ? result.bimSuggestion : undefined,
-        hasOwnKey(result, 'bimContextUpdate') ? result.bimContextUpdate : undefined
+        hasOwnKey(result, 'bimContextUpdate') ? result.bimContextUpdate : undefined,
+        hasOwnKey(result, 'memorySelection') ? result.memorySelection : undefined
       ));
       return;
     }
@@ -1060,7 +1072,8 @@ export class MultiAgentRuntime {
       pending.personaId,
       pending.skillId,
       hasOwnKey(result, 'bimSuggestion') ? result.bimSuggestion : undefined,
-      hasOwnKey(result, 'bimContextUpdate') ? result.bimContextUpdate : undefined
+      hasOwnKey(result, 'bimContextUpdate') ? result.bimContextUpdate : undefined,
+      hasOwnKey(result, 'memorySelection') ? result.memorySelection : undefined
     ));
   }
 
@@ -1331,13 +1344,16 @@ export class MultiAgentRuntime {
     const rawKeys: string[] = Object.keys(result);
     const hasBimSuggestion: boolean = hasOwnKey(result, 'bimSuggestion');
     const hasBimContextUpdate: boolean = hasOwnKey(result, 'bimContextUpdate');
+    const hasMemorySelection: boolean = hasOwnKey(result, 'memorySelection');
     if ((!hasBimSuggestion && hasKey(result, 'bimSuggestion')) ||
-      (!hasBimContextUpdate && hasKey(result, 'bimContextUpdate'))) {
+      (!hasBimContextUpdate && hasKey(result, 'bimContextUpdate')) ||
+      (!hasMemorySelection && hasKey(result, 'memorySelection'))) {
       return false;
     }
     const keys: string = rawKeys
       .filter((key: string): boolean => key !== 'bimSuggestion')
       .filter((key: string): boolean => key !== 'bimContextUpdate')
+      .filter((key: string): boolean => key !== 'memorySelection')
       .sort()
       .join(',');
     return (keys === 'message,roundCount,status' ||
@@ -1357,7 +1373,35 @@ export class MultiAgentRuntime {
       (!hasBimSuggestion || (result.bimSuggestion !== undefined &&
         this.validBimSuggestion(result.bimSuggestion))) &&
       (!hasBimContextUpdate || (result.bimContextUpdate !== undefined &&
-        this.validBimContextUpdate(result.bimContextUpdate)));
+        this.validBimContextUpdate(result.bimContextUpdate))) &&
+      (!hasMemorySelection || (result.memorySelection !== undefined &&
+        result.status === 'success' && this.validMemorySelection(result.memorySelection)));
+  }
+
+  private validMemorySelection(value: MemorySelectionPayload): boolean {
+    if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join(',') !==
+        'candidates,operation,originTurnId,personaId,sourceTaskId' ||
+      value.operation !== 'forget' || !this.validBoundedText(value.originTurnId, 128) ||
+      !this.validBoundedText(value.sourceTaskId, 256) ||
+      !this.validBoundedText(value.personaId, 128) || !Array.isArray(value.candidates) ||
+      value.candidates.length < 1 || value.candidates.length > 5) {
+      return false;
+    }
+    const ids: Set<string> = new Set<string>();
+    for (let index = 0; index < value.candidates.length; index++) {
+      const candidate = value.candidates[index];
+      if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate) ||
+        Object.keys(candidate).sort().join(',') !== 'authority,fact,memoryId,personaTag' ||
+        !this.validBoundedText(candidate.memoryId, 128) || ids.has(candidate.memoryId) ||
+        !this.validBoundedText(candidate.fact, 240) ||
+        !this.validBoundedText(candidate.personaTag, 128) ||
+        (candidate.authority !== 'leader' && candidate.authority !== 'seed')) {
+        return false;
+      }
+      ids.add(candidate.memoryId);
+    }
+    return true;
   }
 
   private validBimSuggestion(value: LeaderBimSuggestion): boolean {

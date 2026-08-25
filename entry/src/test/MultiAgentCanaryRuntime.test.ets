@@ -69,6 +69,10 @@ import {
 import { createHtmlHomeDocument } from '../main/ets/pages/A2uiHome/html/HtmlHomeSnapshot';
 import { HtmlHomeAction, HtmlHomeDocument } from '../main/ets/pages/A2uiHome/html/HtmlHomeTypes';
 import {
+  MemoryCandidateSelectionData,
+  MemoryCandidatesForgetActionArgs
+} from '../main/ets/model/MemoryCandidateSelectionSurface';
+import {
   RegisteredPageSnapshot,
   registeredPageSourceToolId,
   resolveVirtualRegisteredPageAction
@@ -105,6 +109,11 @@ const MEMORY_DECISION: string = '{"personaId":"food_companion","skillId":"",' +
   '"preferredDensity":"comfortable","requiredSections":[]},' +
   '"memoryMutation":{"operation":"remember","facts":[{"fact":"用户喝咖啡时只选择瑞幸。"}]},' +
   '"reasonCode":"stable_preference"}';
+const MEMORY_FORGET_SELECTION_DECISION: string = '{"personaId":"food_companion","skillId":"",' +
+  '"requestedCapabilityIds":["memory.forget"],"roundAction":"execute",' +
+  '"continuationMode":"complete","dataTasks":[],"uiIntent":{"purpose":"choose memory to forget",' +
+  '"preferredDensity":"comfortable","requiredSections":[]},' +
+  '"memoryClarification":{"operation":"forget"}}';
 const HOTEL_DECISION: string = '{"personaId":"travel_companion","skillId":"",' +
   '"requestedCapabilityIds":["hotel.search"],"roundAction":"execute","continuationMode":"complete",' +
   '"dataTasks":[{"localId":"hotel-search",' +
@@ -621,7 +630,10 @@ class RecordingPhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   readonly recalled: PhoneLocalRecalledMemory[];
   readonly rememberCalls: RememberCall[] = [];
   recallQueries: string[] = [];
+  forgetCalls: string[] = [];
   failRemember: boolean = false;
+  failForget: boolean = false;
+  failForgetMemoryIds: string[] = [];
   persistRememberedFacts: boolean = false;
 
   constructor(recalled: PhoneLocalRecalledMemory[] = []) {
@@ -670,7 +682,22 @@ class RecordingPhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     return { inputIndex: 0, status: 'success' };
   }
 
-  async forget(_memoryId: string, _guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
+  async forget(memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
+    this.forgetCalls.push(memoryId);
+    if (guard !== undefined && !guard.isActive()) {
+      return {
+        inputIndex: 0,
+        status: 'error',
+        error: { code: 'memory_operation_canceled', message: 'Memory operation canceled.', retryable: false }
+      };
+    }
+    if (this.failForget || this.failForgetMemoryIds.indexOf(memoryId) >= 0) {
+      return {
+        inputIndex: 0,
+        status: 'error',
+        error: { code: 'memory_delete_failed', message: 'Memory delete failed.', retryable: true }
+      };
+    }
     return { inputIndex: 0, status: 'success' };
   }
 }
@@ -706,6 +733,24 @@ class GatedCommitMemoryRuntime extends RecordingPhoneLocalMemoryRuntime {
     }
     this.committed++;
     return super.remember(facts, sourceTurnId, personaTag, guard);
+  }
+}
+
+class GatedForgetMemoryRuntime extends RecordingPhoneLocalMemoryRuntime {
+  readonly forgetStarted: TestGate = new TestGate();
+  readonly forgetRelease: TestGate = new TestGate();
+
+  async forget(memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
+    if (guard === undefined || !guard.isActive()) {
+      return {
+        inputIndex: 0, status: 'error',
+        error: { code: 'memory_operation_canceled', message: 'Memory operation canceled.', retryable: false }
+      };
+    }
+    this.forgetCalls.push(memoryId);
+    this.forgetStarted.open();
+    await this.forgetRelease.promise;
+    return { inputIndex: 0, status: 'success' };
   }
 }
 
@@ -1292,6 +1337,35 @@ function renderedAction(surface: A2uiSurfaceState, actionId: string): A2uiAction
     }
   }
   return null;
+}
+
+interface MemoryCandidateSelectionTestModel {
+  memoryCandidateSelection: MemoryCandidateSelectionData;
+}
+
+function finalMemoryForgetAction(surface: A2uiSurfaceState, candidateIndexes: number[]): A2uiAction | null {
+  const template = renderedAction(surface, 'memory_candidates_forget');
+  if (template === null) return null;
+  const model = JSON.parse(surface.dataModelJson) as MemoryCandidateSelectionTestModel;
+  const candidateKeys: string[] = [];
+  for (let index = 0; index < candidateIndexes.length; index++) {
+    const candidateIndex: number = candidateIndexes[index];
+    if (candidateIndex < 0 || candidateIndex >= model.memoryCandidateSelection.candidates.length) return null;
+    candidateKeys.push(model.memoryCandidateSelection.candidates[candidateIndex].candidateKey);
+  }
+  const args: MemoryCandidatesForgetActionArgs = {
+    selectionId: model.memoryCandidateSelection.selectionId,
+    revision: model.memoryCandidateSelection.revision,
+    candidateKeys
+  };
+  return {
+    id: template.id,
+    label: '删除已选（' + candidateKeys.length.toString() + '）',
+    prompt: template.prompt,
+    variant: template.variant,
+    kind: template.kind,
+    args
+  };
 }
 
 function promptMarksPersonaPrevious(prompt: string, personaId: string): boolean {
@@ -3330,6 +3404,208 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(outcome.status).assertEqual('error');
       expect(outcome.message).assertEqual('Memory write failed.');
       expect(bus.count(AgentMessageType.ACTION_PLAN_REQUEST)).assertEqual(0);
+      runtime.dispose();
+    });
+
+    it('deletes one exact opaque multi-selection and rejects forged empty duplicate stale or replayed actions', 0,
+      async () => {
+      const surfaces: A2uiSurfaceState[] = [];
+      const memory = new RecordingPhoneLocalMemoryRuntime([{
+        memoryId: 'memory-coffee-1',
+        fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion',
+        authority: 'leader'
+      }, {
+        memoryId: 'memory-coffee-2',
+        fact: '用户喝咖啡时优先选择燕麦奶。',
+        personaTag: 'food_companion',
+        authority: 'leader'
+      }]);
+      const options = canaryOptions(
+        new QueueModel([MEMORY_FORGET_SELECTION_DECISION]),
+        new CanaryHotelExecutor(), new RecordingOpener(), surfaces, []
+      );
+      options.memoryRuntime = memory;
+      options.currentHostGeneration = (): number => 7;
+      options.currentHostSurface = (): A2uiSurfaceState | null =>
+        surfaces.length === 0 ? null : surfaces[surfaces.length - 1];
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('忘掉咖啡偏好', { text: '忘掉咖啡偏好' }, 7) as MultiAgentSettledOutcome;
+      const selectionSurface = surfaces[surfaces.length - 1];
+      const document = createHtmlHomeDocument({
+        surface: selectionSurface, messages: [], isBusy: false, isAwaitingFirstSurface: false
+      });
+      const template = renderedAction(selectionSurface, 'memory_candidates_forget');
+      const selected = finalMemoryForgetAction(selectionSurface, [0, 1]);
+      expect(outcome.memorySelection?.candidates.length).assertEqual(2);
+      expect(selectionSurface.intent).assertEqual('memory.forget.selection');
+      expect(document.actions.length).assertEqual(0);
+      expect(template === null).assertFalse();
+      expect(selected === null).assertFalse();
+      if (selected === null || selected.args === undefined) {
+        runtime.dispose();
+        return;
+      }
+      const selectedArgs = selected.args as MemoryCandidatesForgetActionArgs;
+      const forgedArgs: MemoryCandidatesForgetActionArgs = {
+        selectionId: selectedArgs.selectionId,
+        revision: selectedArgs.revision,
+        candidateKeys: ['forged-candidate']
+      };
+      const forged: A2uiAction = {
+        id: selected.id, label: selected.label, prompt: selected.prompt,
+        variant: selected.variant, kind: selected.kind, args: forgedArgs
+      };
+      const emptyArgs: MemoryCandidatesForgetActionArgs = {
+        selectionId: selectedArgs.selectionId, revision: selectedArgs.revision, candidateKeys: []
+      };
+      const empty: A2uiAction = {
+        id: selected.id, label: selected.label, prompt: selected.prompt,
+        variant: selected.variant, kind: selected.kind, args: emptyArgs
+      };
+      const duplicateArgs: MemoryCandidatesForgetActionArgs = {
+        selectionId: selectedArgs.selectionId, revision: selectedArgs.revision,
+        candidateKeys: [selectedArgs.candidateKeys[0], selectedArgs.candidateKeys[0]]
+      };
+      const duplicate: A2uiAction = {
+        id: selected.id, label: selected.label, prompt: selected.prompt,
+        variant: selected.variant, kind: selected.kind, args: duplicateArgs
+      };
+      const staleArgs: MemoryCandidatesForgetActionArgs = {
+        selectionId: selectedArgs.selectionId, revision: selectedArgs.revision + 1,
+        candidateKeys: selectedArgs.candidateKeys.slice()
+      };
+      const stale: A2uiAction = {
+        id: selected.id, label: selected.label, prompt: selected.prompt,
+        variant: selected.variant, kind: selected.kind, args: staleArgs
+      };
+      const rejected = await runtime.handleMemoryCandidateAction(forged);
+      const emptyRejected = await runtime.handleMemoryCandidateAction(empty);
+      const duplicateRejected = await runtime.handleMemoryCandidateAction(duplicate);
+      const staleRejected = await runtime.handleMemoryCandidateAction(stale);
+      const deleted = await runtime.handleMemoryCandidateAction(selected);
+      const replayed = await runtime.handleMemoryCandidateAction(selected);
+
+      expect(rejected.status).assertEqual('rejected');
+      expect(emptyRejected.status).assertEqual('rejected');
+      expect(duplicateRejected.status).assertEqual('rejected');
+      expect(staleRejected.status).assertEqual('rejected');
+      expect(deleted.status).assertEqual('success');
+      expect(replayed.status).assertEqual('rejected');
+      expect(JSON.stringify(selected.args).indexOf('memoryId')).assertEqual(-1);
+      expect(JSON.stringify(selected.args).indexOf('fact')).assertEqual(-1);
+      expect(memory.forgetCalls.join(',')).assertEqual('memory-coffee-1,memory-coffee-2');
+      expect(surfaces[surfaces.length - 1].intent).assertEqual('memory.forget.confirmation');
+      runtime.dispose();
+    });
+
+    it('keeps the forget selection surface when its local delete fails', 0, async () => {
+      const surfaces: A2uiSurfaceState[] = [];
+      const memory = new RecordingPhoneLocalMemoryRuntime([{
+        memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion', authority: 'leader'
+      }, {
+        memoryId: 'memory-coffee-2', fact: '用户喝咖啡时优先选择燕麦奶。',
+        personaTag: 'food_companion', authority: 'leader'
+      }]);
+      memory.failForget = true;
+      const options = canaryOptions(
+        new QueueModel([MEMORY_FORGET_SELECTION_DECISION]),
+        new CanaryHotelExecutor(), new RecordingOpener(), surfaces, []
+      );
+      options.memoryRuntime = memory;
+      options.currentHostGeneration = (): number => 8;
+      options.currentHostSurface = (): A2uiSurfaceState | null =>
+        surfaces.length === 0 ? null : surfaces[surfaces.length - 1];
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      await runtime.submit('忘掉咖啡偏好', { text: '忘掉咖啡偏好' }, 8);
+      const selectionSurface = surfaces[surfaces.length - 1];
+      const deleteAction = finalMemoryForgetAction(selectionSurface, [0]);
+      expect(deleteAction === null).assertFalse();
+      if (deleteAction !== null) {
+        const result = await runtime.handleMemoryCandidateAction(deleteAction);
+        expect(result.status).assertEqual('error');
+      }
+      expect(surfaces[surfaces.length - 1].surfaceId).assertEqual(selectionSurface.surfaceId);
+      expect(renderedAction(surfaces[surfaces.length - 1], 'memory_candidates_forget') === null).assertFalse();
+      runtime.dispose();
+    });
+
+    it('removes successful candidates once and keeps failed selected candidates retryable', 0, async () => {
+      const surfaces: A2uiSurfaceState[] = [];
+      const memory = new RecordingPhoneLocalMemoryRuntime([{
+        memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion', authority: 'leader'
+      }, {
+        memoryId: 'memory-coffee-2', fact: '用户喝咖啡时优先选择燕麦奶。',
+        personaTag: 'food_companion', authority: 'leader'
+      }]);
+      memory.failForgetMemoryIds = ['memory-coffee-2'];
+      const options = canaryOptions(
+        new QueueModel([MEMORY_FORGET_SELECTION_DECISION]),
+        new CanaryHotelExecutor(), new RecordingOpener(), surfaces, []
+      );
+      options.memoryRuntime = memory;
+      options.currentHostGeneration = (): number => 10;
+      options.currentHostSurface = (): A2uiSurfaceState | null =>
+        surfaces.length === 0 ? null : surfaces[surfaces.length - 1];
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      await runtime.submit('忘掉咖啡偏好', { text: '忘掉咖啡偏好' }, 10);
+      const deleteAction = finalMemoryForgetAction(surfaces[surfaces.length - 1], [0, 1]);
+      expect(deleteAction === null).assertFalse();
+      const result = deleteAction === null ? null : await runtime.handleMemoryCandidateAction(deleteAction);
+
+      expect(result?.status).assertEqual('partial');
+      expect(result?.message).assertEqual('已删除 1 条，1 条失败，可重试。');
+      expect(memory.forgetCalls.join(',')).assertEqual('memory-coffee-1,memory-coffee-2');
+      expect(surfaces[surfaces.length - 1].components[1].actions?.length).assertEqual(1);
+      expect(renderedAction(surfaces[surfaces.length - 1], 'memory_candidates_forget') === null).assertFalse();
+      runtime.dispose();
+    });
+
+    it('does not overwrite or present a completed delete after the current surface changes', 0, async () => {
+      const surfaces: A2uiSurfaceState[] = [];
+      const memory = new GatedForgetMemoryRuntime([{
+        memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+        personaTag: 'food_companion', authority: 'leader'
+      }, {
+        memoryId: 'memory-coffee-2', fact: '用户喝咖啡时优先选择燕麦奶。',
+        personaTag: 'food_companion', authority: 'leader'
+      }]);
+      const options = canaryOptions(
+        new QueueModel([MEMORY_FORGET_SELECTION_DECISION]),
+        new CanaryHotelExecutor(), new RecordingOpener(), surfaces, []
+      );
+      options.memoryRuntime = memory;
+      options.currentHostGeneration = (): number => 9;
+      options.currentHostSurface = (): A2uiSurfaceState | null =>
+        surfaces.length === 0 ? null : surfaces[surfaces.length - 1];
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      await runtime.submit('忘掉咖啡偏好', { text: '忘掉咖啡偏好' }, 9);
+      const deleteAction = finalMemoryForgetAction(surfaces[surfaces.length - 1], [0]);
+      expect(deleteAction === null).assertFalse();
+      if (deleteAction === null) {
+        runtime.dispose();
+        return;
+      }
+      const pending = runtime.handleMemoryCandidateAction(deleteAction);
+      await memory.forgetStarted.promise;
+      const replacement = createSeedA2uiSurface();
+      replacement.surfaceId = 'newer-surface';
+      replacement.runtimeOwner = 'multi_agent';
+      replacement.runtimeGeneration = 9;
+      surfaces.push(replacement);
+      memory.forgetRelease.open();
+      const result = await pending;
+
+      expect(result.status).assertEqual('success');
+      expect(result.presented).assertFalse();
+      expect(surfaces[surfaces.length - 1].surfaceId).assertEqual('newer-surface');
+      expect(memory.forgetCalls.join(',')).assertEqual('memory-coffee-1');
       runtime.dispose();
     });
 

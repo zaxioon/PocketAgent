@@ -18,7 +18,11 @@ import {
   normalizedMemoryFactHash,
   validateMemoryDraftBatch
 } from '@loop/agent-core';
-import { PhoneLocalMemoryStore, PHONE_LOCAL_MEMORY_VECTOR_DIMENSION } from './PhoneLocalMemoryStore';
+import {
+  phoneLocalMemoryOperationCanceled,
+  PhoneLocalMemoryStore,
+  PHONE_LOCAL_MEMORY_VECTOR_DIMENSION
+} from './PhoneLocalMemoryStore';
 
 const DEFAULT_MEMORY_MAX_FACT_LENGTH: number = 240;
 
@@ -196,9 +200,14 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
         createdAt: now,
         updatedAt: now
       };
-      await this.store.insert(record);
+      await this.store.insert(record, guard);
       return successfulWrite(inputIndex, record);
     } catch (error) {
+      if (phoneLocalMemoryOperationCanceled(error)) {
+        this.log('memory_operation_canceled', 'remember', inputIndex,
+          'Memory operation was canceled before local commit.');
+        return canceledWrite(inputIndex);
+      }
       try {
         const duplicate = await this.store.findByFact(
           ownerId, this.embedder.profileId, factHash, normalizedFact
@@ -292,9 +301,14 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
         createdAt: existing.createdAt,
         updatedAt: this.clock()
       };
-      await this.store.replace(ownerId, updated);
+      await this.store.replace(ownerId, updated, guard);
       return successfulWrite(0, updated);
     } catch (error) {
+      if (phoneLocalMemoryOperationCanceled(error)) {
+        this.log('memory_operation_canceled', 'update', 0,
+          'Memory operation was canceled before local commit.');
+        return canceledWrite(0);
+      }
       this.log('memory_update_failed', 'update', 0, boundedErrorMessage(error, request.fact));
       return failedWrite(0, memoryError('memory_update_failed', 'Memory record could not be updated.', true));
     }
@@ -306,12 +320,17 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     }
     try {
       if (!commitIsActive(guard)) return canceledWrite(0);
-      const deleted = await this.store.remove(ownerId.trim(), memoryId.trim());
+      const deleted = await this.store.remove(ownerId.trim(), memoryId.trim(), guard);
       if (deleted === null) {
         return failedWrite(0, memoryError('memory_not_found', 'Memory record was not found.'));
       }
       return successfulWrite(0, deleted);
     } catch (error) {
+      if (phoneLocalMemoryOperationCanceled(error)) {
+        this.log('memory_operation_canceled', 'forget', 0,
+          'Memory operation was canceled before local commit.');
+        return canceledWrite(0);
+      }
       this.log('memory_delete_failed', 'forget', 0, boundedErrorMessage(error));
       return failedWrite(0, memoryError('memory_delete_failed', 'Memory record could not be deleted.', true));
     }

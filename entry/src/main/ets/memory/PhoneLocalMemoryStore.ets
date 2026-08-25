@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { relationalStore } from '@kit.ArkData';
 import util from '@ohos.util';
-import { MemoryAuthority, MemoryHit, MemoryRecord } from '@loop/agent-core';
+import { MemoryAuthority, MemoryCommitGuard, MemoryHit, MemoryRecord } from '@loop/agent-core';
 
 export const PHONE_LOCAL_MEMORY_VECTOR_DB_NAME: string = 'pocketagent_conversation_memory_vector_v2.db';
 export const PHONE_LOCAL_MEMORY_TABLE: string = 'conversation_memory';
@@ -12,6 +12,7 @@ export const PHONE_LOCAL_MEMORY_SCHEMA_VERSION: string = '2';
 export const PHONE_LOCAL_MEMORY_VECTOR_DIMENSION: number = 512;
 export const PHONE_LOCAL_MEMORY_MIN_CANDIDATE_LIMIT: number = 100;
 export const PHONE_LOCAL_MEMORY_MAX_CANDIDATE_LIMIT: number = 1000;
+export const PHONE_LOCAL_MEMORY_OPERATION_CANCELED: string = 'memory_operation_canceled';
 
 export const PHONE_LOCAL_MEMORY_SCHEMA_SQL: string =
   'CREATE TABLE IF NOT EXISTS conversation_memory (' +
@@ -102,12 +103,27 @@ export interface PhoneLocalMemoryStore {
   get(ownerId: string, memoryId: string): Promise<MemoryRecord | null>;
   list(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]>;
   search(request: PhoneLocalMemorySearchRequest): Promise<MemoryHit[]>;
-  insert(record: MemoryRecord): Promise<void>;
-  replace(ownerId: string, record: MemoryRecord): Promise<void>;
-  remove(ownerId: string, memoryId: string): Promise<MemoryRecord | null>;
+  insert(record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void>;
+  replace(ownerId: string, record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void>;
+  remove(ownerId: string, memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryRecord | null>;
   removeAll(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]>;
   getMetadata(key: string): Promise<string | null>;
   setMetadata(key: string, value: string): Promise<void>;
+}
+
+export function phoneLocalMemoryOperationCanceled(error: Object): boolean {
+  return error instanceof Error && error.message === PHONE_LOCAL_MEMORY_OPERATION_CANCELED;
+}
+
+function requireActiveCommit(guard?: MemoryCommitGuard): void {
+  if (guard === undefined) return;
+  let active: boolean = false;
+  try {
+    active = guard.isActive();
+  } catch (_error) {
+    active = false;
+  }
+  if (!active) throw new Error(PHONE_LOCAL_MEMORY_OPERATION_CANCELED);
 }
 
 interface WriteWaiter {
@@ -393,10 +409,11 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
     }
   }
 
-  async insert(record: MemoryRecord): Promise<void> {
+  async insert(record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
     const store = await this.readyStore();
     await this.writeMutex.acquire();
     try {
+      requireActiveCommit(guard);
       const txId = await store.beginTrans();
       try {
         await store.execute(PHONE_LOCAL_MEMORY_INSERT_SQL, txId, recordValues(record));
@@ -412,13 +429,14 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
     }
   }
 
-  async replace(ownerId: string, record: MemoryRecord): Promise<void> {
+  async replace(ownerId: string, record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
     if (record.ownerId !== ownerId) throw new Error('Memory record owner does not match update scope.');
     const store = await this.readyStore();
     await this.writeMutex.acquire();
     try {
       const existing = await this.get(ownerId, record.memoryId);
       if (existing === null) throw new Error('Memory record does not exist in owner scope.');
+      requireActiveCommit(guard);
       const txId = await store.beginTrans();
       try {
         await store.execute(PHONE_LOCAL_MEMORY_UPDATE_SQL, txId, updateValues(ownerId, record));
@@ -434,12 +452,14 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
     }
   }
 
-  async remove(ownerId: string, memoryId: string): Promise<MemoryRecord | null> {
+  async remove(ownerId: string, memoryId: string,
+    guard?: MemoryCommitGuard): Promise<MemoryRecord | null> {
     const store = await this.readyStore();
     await this.writeMutex.acquire();
     try {
       const existing = await this.get(ownerId, memoryId);
       if (existing === null) return null;
+      requireActiveCommit(guard);
       const txId = await store.beginTrans();
       try {
         await store.execute(PHONE_LOCAL_MEMORY_DELETE_SQL, txId, [ownerId, memoryId]);

@@ -110,6 +110,30 @@ class AnswerPlanner implements LeaderPlanner {
   }
 }
 
+class MemoryClarificationPlanner implements LeaderPlanner {
+  async plan(
+    _message: AgentMessage,
+    _input: InputUserPayload,
+    _context: LeaderPlanningContext,
+    _round: number = 1
+  ): Promise<LeaderDecision> {
+    return {
+      personaId: 'travel_companion',
+      skillId: '',
+      requestedCapabilityIds: ['memory.forget'],
+      roundAction: 'execute',
+      dataTasks: [],
+      uiIntent: {
+        purpose: 'choose memory to forget', preferredDensity: 'comfortable', requiredSections: []
+      },
+      memoryClarification: {
+        operation: 'forget'
+      },
+      reasonCode: 'memory_forget_clarification'
+    };
+  }
+}
+
 class HotelRoundPlanner implements LeaderPlanner {
   async plan(
     _message: AgentMessage,
@@ -1921,6 +1945,30 @@ export default function multiAgentRuntimeTest() {
       expect(result.bimSuggestion?.keywords.length).assertEqual(4);
       expect(result.bimContextUpdate?.summary).assertEqual('东京旅行，机票待确认');
       expect(result.bimContextUpdate?.facts[0]).assertEqual('八月出发');
+      runtime.dispose();
+    });
+
+    it('settles and preserves a validated Leader forget selection payload', 0, async () => {
+      const bus = new CountingBus();
+      const options = runtimeOptions(bus, new MemoryClarificationPlanner(), new ControlledWriter());
+      options.planningContext.tools.push({
+        toolId: 'memory.forget', domain: 'memory', intent: 'memory.forget', riskLevel: 'draft',
+        registeredBackends: ['local_adapter'], inputSchema: 'memoryForgetRequest',
+        outputSchema: 'memoryMutationResult', actions: []
+      });
+      const runtime = new MultiAgentRuntime(options);
+      const result = await runtime.submit('忘掉咖啡偏好', {
+        text: '忘掉咖啡偏好',
+        recalledMemories: [{
+          memoryId: 'memory-coffee-1', fact: '用户喝咖啡时选择半糖。',
+          personaTag: 'food_companion', authority: 'leader'
+        }]
+      }) as MultiAgentSettledOutcome;
+
+      expect(result.status).assertEqual('success');
+      expect(result.memorySelection?.operation).assertEqual('forget');
+      expect(result.memorySelection?.candidates.length).assertEqual(1);
+      expect(result.memorySelection?.candidates[0].memoryId).assertEqual('memory-coffee-1');
       runtime.dispose();
     });
 

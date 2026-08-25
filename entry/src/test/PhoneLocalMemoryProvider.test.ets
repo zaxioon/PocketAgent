@@ -14,6 +14,7 @@ import {
   PHONE_LOCAL_MEMORY_MAX_CANDIDATE_LIMIT,
   PHONE_LOCAL_MEMORY_MIN_CANDIDATE_LIMIT,
   PHONE_LOCAL_MEMORY_INSERT_SQL,
+  PHONE_LOCAL_MEMORY_OPERATION_CANCELED,
   PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL,
   PHONE_LOCAL_MEMORY_METADATA_SCHEMA_SQL,
   PHONE_LOCAL_MEMORY_SCHEMA_SQL,
@@ -78,6 +79,29 @@ class MutableMemoryCommitGuard implements MemoryCommitGuard {
 
   isActive(): boolean {
     return this.active;
+  }
+}
+
+function requireFakeCommit(guard?: MemoryCommitGuard): void {
+  if (guard !== undefined && !guard.isActive()) {
+    throw new Error(PHONE_LOCAL_MEMORY_OPERATION_CANCELED);
+  }
+}
+
+class MemoryTestGate {
+  readonly promise: Promise<void>;
+  private releasePromise: (() => void) | null = null;
+
+  constructor() {
+    this.promise = new Promise<void>((resolve: () => void): void => {
+      this.releasePromise = resolve;
+    });
+  }
+
+  open(): void {
+    const release = this.releasePromise;
+    this.releasePromise = null;
+    if (release !== null) release();
   }
 }
 
@@ -176,7 +200,8 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
     return hits.slice(0, request.topK);
   }
 
-  async insert(record: MemoryRecord): Promise<void> {
+  async insert(record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
+    requireFakeCommit(guard);
     if (record.fact === this.failFact) throw new Error('injected insert failure');
     // Keep the fake's uniqueness check and commit in one synchronous section. The real RDB
     // enforces this with a unique index while holding the store write mutex; awaiting the
@@ -192,7 +217,8 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
     this.records.push(copyRecord(record));
   }
 
-  async replace(ownerId: string, record: MemoryRecord): Promise<void> {
+  async replace(ownerId: string, record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
+    requireFakeCommit(guard);
     for (let index = 0; index < this.records.length; index += 1) {
       if (this.records[index].ownerId !== ownerId || this.records[index].memoryId !== record.memoryId) continue;
       this.records[index] = copyRecord(record);
@@ -201,7 +227,9 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
     throw new Error('missing record');
   }
 
-  async remove(ownerId: string, memoryId: string): Promise<MemoryRecord | null> {
+  async remove(ownerId: string, memoryId: string,
+    guard?: MemoryCommitGuard): Promise<MemoryRecord | null> {
+    requireFakeCommit(guard);
     for (let index = 0; index < this.records.length; index += 1) {
       if (this.records[index].ownerId !== ownerId || this.records[index].memoryId !== memoryId) continue;
       const deleted = this.records[index];
@@ -225,6 +253,26 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
 
   async setMetadata(key: string, value: string): Promise<void> {
     this.metadata.set(key, value);
+  }
+}
+
+class LockWaitingMemoryStore extends FakeMemoryStore {
+  readonly firstCommitStarted: MemoryTestGate = new MemoryTestGate();
+  readonly secondCommitWaiting: MemoryTestGate = new MemoryTestGate();
+  readonly releaseFirstCommit: MemoryTestGate = new MemoryTestGate();
+  private insertCount: number = 0;
+
+  async insert(record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
+    this.insertCount++;
+    if (this.insertCount === 1) {
+      this.firstCommitStarted.open();
+      await this.releaseFirstCommit.promise;
+    } else {
+      this.secondCommitWaiting.open();
+      await this.releaseFirstCommit.promise;
+    }
+    requireFakeCommit(guard);
+    await super.insert(record, guard);
   }
 }
 
@@ -363,6 +411,32 @@ export default function phoneLocalMemoryProviderTest() {
       expect(result.records[2].error?.code ?? '').assertEqual('memory_operation_canceled');
       expect(store.records.length).assertEqual(1);
       expect(embedder.calls).assertEqual(2);
+    });
+
+    it('maps a guard canceled while waiting for the store lock without a second commit', 0,
+      async () => {
+      const store = new LockWaitingMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      const firstGuard = new MutableMemoryCommitGuard();
+      const waitingGuard = new MutableMemoryCommitGuard();
+      const first = memory.remember({ ownerId: 'owner-1', records: [{
+        fact: '用户喝咖啡时选择无糖。', sceneId: 'global', sourceTurnId: 'turn-lock-1'
+      }] }, firstGuard);
+      await store.firstCommitStarted.promise;
+      const waiting = memory.remember({ ownerId: 'owner-1', records: [{
+        fact: '用户旅行时偏好参观博物馆。', sceneId: 'global', sourceTurnId: 'turn-lock-2'
+      }] }, waitingGuard);
+      await store.secondCommitWaiting.promise;
+
+      waitingGuard.active = false;
+      store.releaseFirstCommit.open();
+      const results = await Promise.all([first, waiting]);
+
+      expect(results[0].status).assertEqual('success');
+      expect(results[1].status).assertEqual('error');
+      expect(results[1].records[0].error?.code ?? '').assertEqual('memory_operation_canceled');
+      expect(store.records.length).assertEqual(1);
+      expect(store.records[0].fact).assertEqual('用户喝咖啡时选择无糖。');
     });
 
     it('does not interrupt a write after the store transaction boundary is entered', 0, async () => {

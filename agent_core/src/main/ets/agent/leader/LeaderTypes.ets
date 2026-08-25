@@ -46,6 +46,10 @@ export interface LeaderMemoryForgetMutation {
   memoryId: string;
 }
 
+export interface LeaderMemoryForgetClarification {
+  operation: 'forget';
+}
+
 export type LeaderMemoryMutation = LeaderMemoryRememberMutation |
   LeaderMemoryUpdateMutation | LeaderMemoryForgetMutation;
 
@@ -164,6 +168,7 @@ export interface LeaderDecision {
   normalizedActionInputText?: string;
   actionIntent?: LeaderActionIntent;
   memoryMutation?: LeaderMemoryMutation;
+  memoryClarification?: LeaderMemoryForgetClarification;
   answer?: string;
   bimSuggestion?: LeaderBimSuggestion;
   bimContextUpdate?: LeaderBimContextUpdate;

@@ -271,9 +271,13 @@ import {
 import {
   MailDetailInPlaceEvent,
   MailDetailWriteLease,
+  MemoryCandidateManagerActionResult,
   MultiAgentCanaryOptions,
   MultiAgentCanaryRuntime
 } from './agent/MultiAgentCanaryRuntime';
+import {
+  MEMORY_CANDIDATES_FORGET_ACTION_ID
+} from '../../model/MemoryCandidateSelectionSurface';
 import {
   MailDetailSuggestionGuard,
   MailDetailUiEvent,
@@ -4662,6 +4666,15 @@ struct Index {
     });
   }
 
+  private showMemoryCandidateActionToast(message: string): void {
+    if (message.trim().length === 0) return;
+    this.getUIContext().getPromptAction().showToast({
+      message,
+      duration: 2500,
+      alignment: Alignment.Top
+    });
+  }
+
   private currentDynamicToolConnect(): A2uiDynamicToolConnectData | null {
     const model = this.parsedDataModel();
     if (model === null || model.dynamicToolConnect === undefined || model.dynamicToolConnect === null) {
@@ -7417,6 +7430,32 @@ struct Index {
     }));
   }
 
+  private async handleMemoryCandidateClientAction(action: A2uiAction): Promise<void> {
+    const runtime = this.multiAgentRuntime;
+    if (runtime === null) {
+      this.showMemoryCandidateActionToast('这张记忆选择卡已失效，请重新发起请求。');
+      return;
+    }
+    this.isBusy = true;
+    try {
+      const result: MemoryCandidateManagerActionResult = await runtime.handleMemoryCandidateAction(action);
+      if (!result.handled || !result.presented || !result.notify) return;
+      this.showMemoryCandidateActionToast(result.message);
+      const completed = result.status === 'success' || result.status === 'partial';
+      this.applyPanelState(updateConnectionPanelState(this.currentPanelState(), {
+        ok: completed,
+        status: completed ? 'ready' : 'error',
+        message: result.message,
+        requestDebug: 'memory-candidate-client-action',
+        assistantDebug: result.message,
+        error: completed ? '' : result.message
+      }));
+      if (completed) this.appendMessage('assistant', result.message);
+    } finally {
+      this.isBusy = false;
+    }
+  }
+
   private async handleClientAction(action: A2uiAction): Promise<void> {
     aiLogInfo('[AIPhone][A2uiHomeClientAction] id=' + action.id);
     if (await this.handleStoredFoodFavoriteAction(action)) {
@@ -8631,6 +8670,10 @@ struct Index {
         this.logLuckinPaymentAction(action, 'blocked_not_allowed');
       }
       this.logHtmlHomeActionError(action, 'not_allowed');
+      return;
+    }
+    if (action.id === MEMORY_CANDIDATES_FORGET_ACTION_ID && action.kind === 'client') {
+      await this.handleMemoryCandidateClientAction(action);
       return;
     }
     if (this.isLuckinPaymentActionId(action.id)) {
