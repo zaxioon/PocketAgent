@@ -25,6 +25,7 @@ import {
   LeaderPlanningContext,
   LinkedMessageBus,
   ObservationDigest,
+  RecalledMemoryContext,
   TaskErrorPayload,
   TurnResultPayload,
   TurnResultStatus,
@@ -53,6 +54,9 @@ const DEFAULT_ACTION_TIMEOUT_MS: number = 15000;
 const MAX_TIMEOUT_MS: number = 120000;
 const CONTEXT_MESSAGE_LIMIT: number = 8;
 const CONTEXT_OBSERVATION_LIMIT: number = 8;
+const CONTEXT_MEMORY_LIMIT: number = 5;
+const CONTEXT_MEMORY_FACT_LIMIT: number = 240;
+const CONTEXT_MEMORY_TOTAL_LIMIT: number = 1200;
 
 interface PendingTurn {
   conversationId: string;
@@ -519,7 +523,8 @@ export class MultiAgentRuntime {
       ): void => this.recordDecisionPersona(
         conversationId, turnId, taskId, requestedCapabilityIds, personaId, skillId
       ),
-      options.currentLocalDateProvider
+      options.currentLocalDateProvider,
+      options.memoryToolExecutor
     );
     this.planningContextProvider = options.planningContextProvider === undefined ?
       null : options.planningContextProvider;
@@ -981,7 +986,7 @@ export class MultiAgentRuntime {
     const messageText: string = result.status === 'success' ?
       'Action completed.' : nonempty(result.message) ? result.message as string : 'Action failed.';
     const surfaceId: string = this.actionOutputSurfaceId(pending, result);
-    if (status !== 'success') {
+    if (status === 'error' || status === 'canceled') {
       this.publishCancel(pending.turnId, 'virtual_action_' + status);
     }
     this.publishRuntimeTurnResult(pending, status, messageText, surfaceId);
@@ -1427,9 +1432,6 @@ export class MultiAgentRuntime {
       return pending.virtualAllowedActionIds.indexOf('calendar.event.create') >= 0 ||
         pending.virtualAllowedActionIds.indexOf('calendar.event.update') >= 0;
     }
-    if (/^memory-update:[1-9]\d*$/.test(surfaceId)) {
-      return pending.virtualAllowedActionIds.indexOf('memory.update') >= 0;
-    }
     return false;
   }
 
@@ -1437,11 +1439,44 @@ export class MultiAgentRuntime {
     const result: UserInputPayload = {
       text,
       recentMessages: this.boundedMessages(context.recentMessages),
+      recalledMemories: this.boundedRecalledMemories(context.recalledMemories),
       previousPersonaId: context.previousPersonaId === undefined ? '' : context.previousPersonaId,
       currentSurfaceSummary: this.copySurface(context.currentSurfaceSummary),
       recentObservations: this.boundedObservations(context.recentObservations)
     };
     return result;
+  }
+
+  private boundedRecalledMemories(values: RecalledMemoryContext[] | undefined): RecalledMemoryContext[] {
+    if (values === undefined) return [];
+    const memories: RecalledMemoryContext[] = [];
+    const seen: Set<string> = new Set<string>();
+    let remaining: number = CONTEXT_MEMORY_TOTAL_LIMIT;
+    for (let index = 0; index < values.length && memories.length < CONTEXT_MEMORY_LIMIT && remaining > 0;
+      index += 1) {
+      const value = values[index];
+      if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+        typeof value.memoryId !== 'string' || value.memoryId.trim().length === 0 ||
+        value.memoryId.length > 128 || seen.has(value.memoryId) ||
+        typeof value.fact !== 'string' || value.fact.trim().length === 0 ||
+        typeof value.personaTag !== 'string' || value.personaTag.length > 64 ||
+        (value.authority !== 'leader' && value.authority !== 'seed')) {
+        continue;
+      }
+      const fact = value.fact.trim().substring(
+        0, Math.min(CONTEXT_MEMORY_FACT_LIMIT, remaining)
+      );
+      if (fact.length === 0) continue;
+      seen.add(value.memoryId);
+      memories.push({
+        memoryId: value.memoryId,
+        fact,
+        personaTag: value.personaTag,
+        authority: value.authority
+      });
+      remaining -= fact.length;
+    }
+    return memories;
   }
 
   private boundedMessages(values: ConversationTurnMessage[] | undefined): ConversationTurnMessage[] {

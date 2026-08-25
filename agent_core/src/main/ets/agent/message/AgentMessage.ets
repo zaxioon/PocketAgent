@@ -1,4 +1,5 @@
 import { LeaderBimContextUpdate, LeaderBimSuggestion } from '../leader/LeaderTypes';
+import { MemoryAuthority } from '../../memory/MemoryTypes';
 
 export enum AgentMessageType {
   INPUT_USER = 'INPUT.USER',
@@ -52,9 +53,21 @@ export interface ObservationDigest {
   entityRefs: string[];
 }
 
+/**
+ * A bounded projection of one phone-local long-term memory for Leader planning.
+ * It intentionally excludes embeddings, hashes, source turns, and storage fields.
+ */
+export interface RecalledMemoryContext {
+  memoryId: string;
+  fact: string;
+  personaTag: string;
+  authority: MemoryAuthority;
+}
+
 export interface UserInputPayload {
   text: string;
   recentMessages?: ConversationTurnMessage[];
+  recalledMemories?: RecalledMemoryContext[];
   previousPersonaId?: string;
   currentSurfaceSummary?: CurrentSurfaceSummary;
   recentObservations?: ObservationDigest[];

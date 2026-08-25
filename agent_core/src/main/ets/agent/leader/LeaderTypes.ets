@@ -26,6 +26,53 @@ export interface LeaderActionIntent {
   allowedActionIds: string[];
 }
 
+export interface LeaderMemoryRememberFact {
+  fact: string;
+}
+
+export interface LeaderMemoryRememberMutation {
+  operation: 'remember';
+  facts: LeaderMemoryRememberFact[];
+}
+
+export interface LeaderMemoryUpdateMutation {
+  operation: 'update';
+  memoryId: string;
+  fact: string;
+}
+
+export interface LeaderMemoryForgetMutation {
+  operation: 'forget';
+  memoryId: string;
+}
+
+export type LeaderMemoryMutation = LeaderMemoryRememberMutation |
+  LeaderMemoryUpdateMutation | LeaderMemoryForgetMutation;
+
+export interface LeaderMemoryToolRequest {
+  conversationId: string;
+  turnId: string;
+  sourceTaskId: string;
+  personaId: string;
+  mutation: LeaderMemoryMutation;
+}
+
+export interface LeaderMemoryToolResult {
+  status: 'success' | 'partial' | 'error';
+  message: string;
+}
+
+export interface LeaderMemoryToolExecutionGuard {
+  isActive(): boolean;
+}
+
+export interface LeaderMemoryToolExecutor {
+  execute(
+    request: LeaderMemoryToolRequest,
+    guard: LeaderMemoryToolExecutionGuard
+  ): Promise<LeaderMemoryToolResult>;
+}
+
 export interface LeaderDecisionDataTask {
   localId: string;
   goal: string;
@@ -116,6 +163,7 @@ export interface LeaderDecision {
   normalizationCurrentLocalDate?: string;
   normalizedActionInputText?: string;
   actionIntent?: LeaderActionIntent;
+  memoryMutation?: LeaderMemoryMutation;
   answer?: string;
   bimSuggestion?: LeaderBimSuggestion;
   bimContextUpdate?: LeaderBimContextUpdate;
@@ -156,8 +204,7 @@ export interface LeaderSkillMetadata {
 export interface LeaderPersonaMetadata {
   personaId: string;
   name: string;
-  soul: string;
-  memory: string;
+  domains: string[];
   previous: boolean;
   activeSkills: LeaderSkillMetadata[];
 }

@@ -1,9 +1,18 @@
 export type MemoryOperationStatus = 'success' | 'error';
+export type MemoryAuthority = 'leader' | 'seed';
 
 export interface MemoryError {
   code: string;
   message: string;
   retryable: boolean;
+}
+
+/**
+ * Host-owned turn/generation guard checked immediately before an irreversible local commit.
+ * Once a store transaction has started, cancellation does not attempt to interrupt it.
+ */
+export interface MemoryCommitGuard {
+  isActive(): boolean;
 }
 
 /**
@@ -13,6 +22,8 @@ export interface MemoryError {
 export interface MemoryDraft {
   fact: string;
   sceneId: string;
+  personaTag?: string;
+  authority?: MemoryAuthority;
   sourceTurnId: string;
 }
 
@@ -20,6 +31,8 @@ export interface MemoryRecord {
   memoryId: string;
   ownerId: string;
   sceneId: string;
+  personaTag: string;
+  authority: MemoryAuthority;
   fact: string;
   normalizedFact: string;
   factHash: string;
@@ -39,6 +52,8 @@ export interface MemoryUpdateRequest {
   ownerId: string;
   memoryId: string;
   fact: string;
+  personaTag?: string;
+  authority?: MemoryAuthority;
   sourceTurnId: string;
 }
 
@@ -80,7 +95,7 @@ export interface MemoryBatchResult {
 
 export interface MemoryValidationIssue {
   inputIndex: number;
-  field: 'batch' | 'fact' | 'sceneId' | 'sourceTurnId';
+  field: 'batch' | 'fact' | 'sceneId' | 'personaTag' | 'authority' | 'sourceTurnId';
   code: string;
   message: string;
 }

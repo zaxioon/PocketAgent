@@ -361,7 +361,7 @@ class ControlledWriter implements UiSurfaceWriter {
 
 class TestLookup implements ToolDefinitionLookup {
   find(toolId: string): ToolDefinition | null {
-    if (toolId === 'memory.update') {
+    if (toolId === 'memory.remember' || toolId === 'memory.update' || toolId === 'memory.forget') {
       return {
         toolId,
         domain: 'memory',
@@ -372,7 +372,7 @@ class TestLookup implements ToolDefinitionLookup {
         inputSchema: 'memoryUpdateRequest',
         outputSchema: 'memoryUpdateResult',
         a2uiComponent: 'MemoryUpdate',
-        actions: ['memory.update']
+        actions: [toolId]
       };
     }
     if (toolId === 'calendar.event.create' || toolId === 'calendar.event.update' ||
@@ -491,17 +491,17 @@ class VirtualMemoryPlanner implements LeaderPlanner {
     return {
       personaId: 'travel_companion',
       skillId: '',
-      requestedCapabilityIds: ['memory.update'],
+      requestedCapabilityIds: ['calendar.event.create'],
       roundAction: 'execute',
       dataTasks: [],
       uiIntent: {
-        purpose: 'memory.update',
+        purpose: 'calendar.event.create',
         preferredDensity: 'comfortable',
         requiredSections: []
       },
       actionIntent: {
         goal: 'Remember an explicit preference',
-        allowedActionIds: ['memory.update']
+        allowedActionIds: ['calendar.event.create']
       },
       reasonCode: 'stable_preference'
     };
@@ -511,10 +511,10 @@ class VirtualMemoryPlanner implements LeaderPlanner {
 class StaticVirtualResolver implements VirtualActionIntentResolver {
   async resolve(_request: ActionPlanRequestPayload): Promise<VirtualActionIntent | null> {
     return {
-      sourceToolId: 'memory.update',
+      sourceToolId: 'calendar.event.create',
       offer: {
         offerId: 'memory-offer',
-        actionId: 'memory.update',
+        actionId: 'calendar.event.create',
         label: 'Remember',
         variant: 'primary',
         args: JSON.parse('{"value":"remember me"}') as Object
@@ -658,14 +658,14 @@ function planningContext(): LeaderPlanningContext {
         actions: []
       },
       {
-        toolId: 'memory.update',
-        domain: 'persona',
-        intent: 'memory.update',
+        toolId: 'calendar.event.create',
+        domain: 'calendar',
+        intent: 'calendar.event.create',
         riskLevel: 'draft',
         registeredBackends: ['local_adapter'],
-        inputSchema: 'memoryUpdateRequest',
-        outputSchema: 'memoryUpdateResult',
-        actions: ['memory.update']
+        inputSchema: 'calendarEventRequest',
+        outputSchema: 'calendarEventResult',
+        actions: []
       },
       {
         toolId: 'dynamic.search',
@@ -691,8 +691,7 @@ function planningContext(): LeaderPlanningContext {
     personas: [{
       personaId: 'travel_companion',
       name: 'Travel Companion',
-      soul: 'Use real data.',
-      memory: '常用出发地：北京。',
+      domains: ['travel'],
       previous: true,
       activeSkills: []
     }]
@@ -1775,7 +1774,7 @@ export default function multiAgentRuntimeTest() {
           completedStepIds: ['step-1'],
           outputs: [{
             stepId: 'step-1',
-            output: JSON.parse('{"surfaceId":"calendar-review:999"}') as Object
+            output: JSON.parse('{"surfaceId":"memory-update:999"}') as Object
           }]
         } as ActionResultPayload
       });

@@ -22,6 +22,8 @@ function record(
     memoryId,
     ownerId,
     sceneId,
+    personaTag: sceneId,
+    authority: 'leader',
     fact,
     normalizedFact: normalizeMemoryFact(fact),
     factHash: normalizedMemoryFactHash(fact),

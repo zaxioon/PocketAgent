@@ -129,6 +129,7 @@ import travelBookingProviderTest from './TravelBookingProvider.test';
 import travelCalendarActionTest from './TravelCalendarAction.test';
 import conversationMemoryCoreTest from './ConversationMemoryCore.test';
 import phoneLocalMemoryProviderTest from './PhoneLocalMemoryProvider.test';
+import phoneLocalMemoryRuntimeTest from './PhoneLocalMemoryRuntime.test';
 import bertWordPieceTokenizerTest from './BertWordPieceTokenizer.test';
 import bgeMindSporeEmbeddingPortTest from './BgeMindSporeEmbeddingPort.test';
 
@@ -264,6 +265,7 @@ export default function testsuite() {
   travelCalendarActionTest();
   conversationMemoryCoreTest();
   phoneLocalMemoryProviderTest();
+  phoneLocalMemoryRuntimeTest();
   bertWordPieceTokenizerTest();
   bgeMindSporeEmbeddingPortTest();
 }

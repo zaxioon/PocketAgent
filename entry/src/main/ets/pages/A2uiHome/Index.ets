@@ -201,7 +201,6 @@ import { DEEP_SEARCH_ROUTE_URL, DeepSearchRouteParams } from './deepsearch/DeepS
 import {
   isStableWaterfallContentPreference,
   mergePersonaStablePreference,
-  waterfallExplicitPreferencesFromMemory,
   waterfallExplicitPreferencesFromStatement,
   PersonaMemoryUpdateRequest
 } from '../../model/PersonaMemoryUpdate';
@@ -251,6 +250,7 @@ import {
 import { ConfigPage } from './components/ConfigPage';
 import { PublicPersonaPage } from './components/PublicPersonaPage';
 import { PublicPersonaClient } from '../../publicpersona/PublicPersonaClient';
+import { PhoneLocalMemoryRuntime } from '../../memory/PhoneLocalMemoryRuntime';
 import {
   PublicPersonaCandidate,
   PublicPersonaPhase,
@@ -1138,6 +1138,7 @@ struct Index {
   private luckinReturnSurface: A2uiSurfaceState | null = null;
   private hotelReturnSurface: A2uiSurfaceState | null = null;
   private multiAgentRuntime: MultiAgentCanaryRuntime | null = null;
+  private phoneLocalMemoryRuntime: PhoneLocalMemoryRuntime | null = null;
   private bimStoreInstance: BimStore | null = null;
   private bimCuratorTail: Promise<void> = Promise.resolve();
   private pendingBimEvidence: BimTurnEvidence | null = null;
@@ -3410,12 +3411,6 @@ struct Index {
     } catch (_error) {
       this.waterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
     }
-    try {
-      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().replaceExplicitPreferences(
-        waterfallExplicitPreferencesFromMemory(personaPackForId('entertainment_companion').memory));
-    } catch (_error) {
-      aiLogError('[AIPhone][WaterfallPreferenceProjection] ok=false source=startup');
-    }
     configureWaterfallEnabledSourcesForRuntime(
       this.waterfallPreferenceProfile.discoveryEnabledSources as AggregateSearchSource[]);
     configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile(false));
@@ -3712,14 +3707,6 @@ struct Index {
         }
         return accepted;
       },
-      onMemoryUpdate: (update: PersonaMemoryUpdateRequest, generation: number): boolean => {
-        if (runtimeCallbackIsCurrent(
-          this.activeRuntimeOwner, this.runtimeGeneration, 'multi_agent', generation
-        )) {
-          return this.applyPersonaMemoryUpdate(update);
-        }
-        return false;
-      },
       onMailDetail: async (
         result: MailDetailInPlaceEvent,
         generation: number,
@@ -3776,12 +3763,21 @@ struct Index {
       settingsFingerprint: fingerprint,
       focusedRelease: true
     };
+    options.memoryRuntime = this.localMemoryRuntime();
     if (ENABLE_MULTI_AGENT_UI_LAYOUT_LLM && provider.isConfigured()) {
       options.uiLayoutPlanner = new A2uiAgentRunner(new OpenAiA2uiModel(provider));
     }
     this.multiAgentRuntime = new MultiAgentCanaryRuntime(options);
     this.hotelAgentRuntimeFingerprint = fingerprint;
     return this.multiAgentRuntime;
+  }
+
+  private localMemoryRuntime(): PhoneLocalMemoryRuntime {
+    if (this.phoneLocalMemoryRuntime === null) {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      this.phoneLocalMemoryRuntime = new PhoneLocalMemoryRuntime(context);
+    }
+    return this.phoneLocalMemoryRuntime;
   }
 
   private disposeHotelRuntime(): void {
@@ -4655,6 +4651,17 @@ struct Index {
     this.messages = next;
   }
 
+  private showMemoryResultToast(message: string): void {
+    if (!/^已记住\s*\d+\s*条|^已更新长期记忆|^已忘记这条长期记忆/.test(message)) {
+      return;
+    }
+    this.getUIContext().getPromptAction().showToast({
+      message,
+      duration: 2500,
+      alignment: Alignment.Top
+    });
+  }
+
   private currentDynamicToolConnect(): A2uiDynamicToolConnectData | null {
     const model = this.parsedDataModel();
     if (model === null || model.dynamicToolConnect === undefined || model.dynamicToolConnect === null) {
@@ -5245,6 +5252,7 @@ struct Index {
       }
       const readyMessage: string = result.message.length > 0 ?
         result.message : this.currentSurface.title;
+      this.showMemoryResultToast(readyMessage);
       this.applyPanelState(updateConnectionPanelState(this.currentPanelState(), {
         ok: true,
         status: 'ready',

@@ -5,6 +5,7 @@ import {
   ConversationMemoryPort,
   EmbeddingPort,
   MemoryBatchResult,
+  MemoryCommitGuard,
   MemoryDraft,
   MemoryError,
   MemoryHit,
@@ -54,6 +55,21 @@ function failedWrite(inputIndex: number, error: MemoryError): MemoryWriteResult 
 
 function successfulWrite(inputIndex: number, record: MemoryRecord): MemoryWriteResult {
   return { inputIndex, status: 'success', record };
+}
+
+function commitIsActive(guard?: MemoryCommitGuard): boolean {
+  if (guard === undefined) return true;
+  try {
+    return guard.isActive();
+  } catch (_error) {
+    return false;
+  }
+}
+
+function canceledWrite(inputIndex: number): MemoryWriteResult {
+  return failedWrite(inputIndex, memoryError(
+    'memory_operation_canceled', 'Memory operation was canceled before local commit.'
+  ));
 }
 
 class HilogPhoneLocalMemoryLogger implements PhoneLocalMemoryLogger {
@@ -120,7 +136,7 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     this.logger = options.logger ?? new HilogPhoneLocalMemoryLogger();
   }
 
-  async remember(request: MemoryRememberRequest): Promise<MemoryBatchResult> {
+  async remember(request: MemoryRememberRequest, guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
     const ownerId = request.ownerId.trim();
     if (ownerId.length === 0) {
       return invalidBatchResult(request, 'Memory ownerId must not be empty.');
@@ -130,6 +146,10 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     }
     const results: MemoryWriteResult[] = [];
     for (let index = 0; index < request.records.length; index += 1) {
+      if (!commitIsActive(guard)) {
+        results.push(canceledWrite(index));
+        continue;
+      }
       const validation = validateMemoryDraftBatch([request.records[index]], {
         allowedSceneIds: this.allowedSceneIds,
         maxFactLength: this.maxFactLength
@@ -140,23 +160,33 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
         )));
         continue;
       }
-      results.push(await this.rememberOne(ownerId, validation.records[0], index));
+      results.push(await this.rememberOne(ownerId, validation.records[0], index, guard));
     }
     return buildBestEffortMemoryBatchResult(results);
   }
 
-  private async rememberOne(ownerId: string, draft: MemoryDraft, inputIndex: number): Promise<MemoryWriteResult> {
+  private async rememberOne(ownerId: string, draft: MemoryDraft, inputIndex: number,
+    guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
     const normalizedFact = normalizeMemoryFact(draft.fact);
     const factHash = normalizedMemoryFactHash(draft.fact);
     try {
-      const duplicate = await this.store.findByFact(ownerId, draft.sceneId, factHash, normalizedFact);
+      const duplicate = await this.store.findByFact(
+        ownerId, this.embedder.profileId, factHash, normalizedFact
+      );
       if (duplicate !== null) return successfulWrite(inputIndex, duplicate);
       const embedding = normalizedVector(await this.embedder.embed(draft.fact), this.embedder.dimension);
+      if (!commitIsActive(guard)) return canceledWrite(inputIndex);
       const now = this.clock();
+      const memoryId = this.idFactory().trim();
+      if (memoryId.length === 0 || memoryId.length > 128) {
+        throw new Error('Memory id factory returned an invalid identifier');
+      }
       const record: MemoryRecord = {
-        memoryId: this.idFactory(),
+        memoryId,
         ownerId,
         sceneId: draft.sceneId,
+        personaTag: draft.personaTag ?? draft.sceneId,
+        authority: draft.authority ?? 'leader',
         fact: draft.fact,
         normalizedFact,
         factHash,
@@ -170,7 +200,9 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
       return successfulWrite(inputIndex, record);
     } catch (error) {
       try {
-        const duplicate = await this.store.findByFact(ownerId, draft.sceneId, factHash, normalizedFact);
+        const duplicate = await this.store.findByFact(
+          ownerId, this.embedder.profileId, factHash, normalizedFact
+        );
         if (duplicate !== null) return successfulWrite(inputIndex, duplicate);
       } catch (lookupError) {
         this.log('memory_dedupe_read_failed', 'remember', inputIndex,
@@ -222,7 +254,7 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     }
   }
 
-  async update(request: MemoryUpdateRequest): Promise<MemoryWriteResult> {
+  async update(request: MemoryUpdateRequest, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
     const ownerId = request.ownerId.trim();
     const existing = await this.get(ownerId, request.memoryId);
     if (existing === null) {
@@ -231,6 +263,8 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     const validation = validateMemoryDraftBatch([{
       fact: request.fact,
       sceneId: existing.sceneId,
+      personaTag: request.personaTag ?? existing.personaTag,
+      authority: request.authority ?? existing.authority,
       sourceTurnId: request.sourceTurnId
     }], {
       allowedSceneIds: this.allowedSceneIds,
@@ -242,10 +276,13 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     try {
       const fact = validation.records[0].fact;
       const embedding = normalizedVector(await this.embedder.embed(fact), this.embedder.dimension);
+      if (!commitIsActive(guard)) return canceledWrite(0);
       const updated: MemoryRecord = {
         memoryId: existing.memoryId,
         ownerId: existing.ownerId,
         sceneId: existing.sceneId,
+        personaTag: validation.records[0].personaTag ?? existing.personaTag,
+        authority: validation.records[0].authority ?? existing.authority,
         fact,
         normalizedFact: normalizeMemoryFact(fact),
         factHash: normalizedMemoryFactHash(fact),
@@ -263,11 +300,12 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     }
   }
 
-  async forget(ownerId: string, memoryId: string): Promise<MemoryWriteResult> {
+  async forget(ownerId: string, memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
     if (ownerId.trim().length === 0 || memoryId.trim().length === 0) {
       return failedWrite(0, memoryError('memory_request_invalid', 'Memory owner and id must not be empty.'));
     }
     try {
+      if (!commitIsActive(guard)) return canceledWrite(0);
       const deleted = await this.store.remove(ownerId.trim(), memoryId.trim());
       if (deleted === null) {
         return failedWrite(0, memoryError('memory_not_found', 'Memory record was not found.'));
@@ -279,7 +317,8 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     }
   }
 
-  async forgetAll(ownerId: string, sceneIds: string[] = []): Promise<MemoryBatchResult> {
+  async forgetAll(ownerId: string, sceneIds: string[] = [],
+    guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
     if (ownerId.trim().length === 0) {
       return invalidBatchResult({ ownerId, records: [] }, 'Memory ownerId must not be empty.');
     }
@@ -297,7 +336,7 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     }
     const results: MemoryWriteResult[] = [];
     for (let index = 0; index < existing.length; index += 1) {
-      const result = await this.forget(ownerId.trim(), existing[index].memoryId);
+      const result = await this.forget(ownerId.trim(), existing[index].memoryId, guard);
       result.inputIndex = index;
       results.push(result);
     }

@@ -282,9 +282,26 @@ const coreRegressionCases = [
   { id: 'C08', query: '我想看看有关 OpenAI Codex 的相关新闻和讨论', expectsTool: true, expectedToolId: 'media.aggregate.search' },
   { id: 'C09', query: '帮我查看我今天 X 和 Slack 上的消息', expectsTool: true, expectedToolId: 'social.feed.search', verifySocialDraft: true },
   { id: 'C10', query: '帮我查看 X 上 OpenAI 最近的公开 post', expectsTool: true, expectedToolId: 'x.post.search' },
-  { id: 'C11a', query: '点一杯咖啡', expectsTool: true, expectedToolId: 'food.search' },
-  { id: 'C11b', query: '我只喝瑞幸咖啡', expectsTool: false, expectedToolId: '', expectedToolIds: ['memory.update'] },
-  { id: 'C11c', query: '点一杯咖啡', expectsTool: true, expectedToolId: 'food.search', expectedPersonaMemory: 'luckin_only' },
+  {
+    id: 'C11a', query: '帮我搜索附近的咖啡店', expectsTool: true,
+    expectedToolId: 'food.search', verifyMemoryRecall: true
+  },
+  {
+    id: 'C11b', query: '请长期记住这一条偏好：我点咖啡时只选燕麦奶。', expectsTool: false,
+    expectedToolId: '', expectedLeaderMemoryCapability: 'memory.remember', verifyMemoryRecall: true
+  },
+  {
+    id: 'C11c', query: '按我的长期偏好帮我搜索附近的咖啡店', expectsTool: true,
+    expectedToolId: 'food.search', verifyMemoryRecall: true, expectedMemoryPreference: 'oat_milk'
+  },
+  {
+    id: 'C11d', query: '忘掉“我点咖啡时只选燕麦奶”这一条长期偏好。', expectsTool: false,
+    expectedToolId: '', expectedLeaderMemoryCapability: 'memory.forget', verifyMemoryRecall: true
+  },
+  {
+    id: 'C11e', query: '再按我现在的长期偏好帮我搜索附近的咖啡店', expectsTool: true,
+    expectedToolId: 'food.search', verifyMemoryRecall: true, expectMemoryPreferenceAbsent: 'oat_milk'
+  },
   { id: 'C12', query: '我想看世界杯下一场比赛和赛程', expectsTool: true, expectedToolId: 'worldcup.open' },
   { id: 'C13', query: '帮我查明天深圳天气', expectsTool: true, expectedToolId: 'dynamic.search', expectedDiscoveredToolId: 'weather.query' },
   { id: 'C14', query: '帮我看从深圳湾万象城到深圳北站打车多少钱', expectsTool: true, expectedToolId: 'ride.estimate' },
@@ -395,7 +412,8 @@ const coreScenarioManifest = [
   ['C05', ['mail.search']],
   ['C06', ['gmail.mail.search']], ['C07', ['media.video.search']],
   ['C08', ['media.aggregate.search']], ['C09', ['social.feed.search']],
-  ['C10', ['x.post.search']], ['C11', ['food.search', 'memory.update']],
+  ['C10', ['x.post.search']],
+  ['C11', ['food.search', 'memory.remember', 'memory.forget']],
   ['C12', ['worldcup.open']], ['C13', ['dynamic.search']],
   ['C14', ['ride.estimate']], ['C15', ['luckin.order.preview']],
   ['C17', ['payment.send']],
@@ -817,10 +835,13 @@ function expectedCaseForQuery(query) {
   if (configuredCase !== undefined) {
     return configuredCase;
   }
-  if (isPersonaMemoryUpdateQuery(query)) {
+  const memoryCapability = expectedLeaderMemoryCapabilityForQuery(query);
+  if (memoryCapability.length > 0) {
     return {
       expectsTool: false,
-      expectedToolId: ''
+      expectedToolId: '',
+      expectedLeaderMemoryCapability: memoryCapability,
+      verifyMemoryRecall: true
     };
   }
   if (/^你好$|问候|打招呼/.test(query)) {
@@ -1145,8 +1166,6 @@ function cleanBundleData() {
   }
 }
 
-const personaStorePath = '/data/app/el2/100/base/com.jiuwen.appless/haps/entry/preferences/aiphone_persona_store';
-const personaBackupPath = `/data/local/tmp/aiphone-persona-store-${smokeRunId}`;
 const publicPersonaStorePath = '/data/app/el2/100/base/com.jiuwen.appless/haps/entry/preferences/aiphone_public_persona';
 
 function publicPersonaSnapshotExists() {
@@ -1157,36 +1176,6 @@ function publicPersonaSnapshotExists() {
     throw new Error(`Could not determine public persona snapshot state: ${output}`);
   }
   return output === 'PRESENT';
-}
-
-function backupPersonaMemoryStore() {
-  hdc(['shell', 'aa', 'force-stop', 'com.jiuwen.appless']);
-  const output = hdc(['shell',
-    `if [ -f ${personaStorePath} ]; then cp ${personaStorePath} ${personaBackupPath} && echo PRESENT; else echo ABSENT; fi`
-  ]).trim();
-  if (output !== 'PRESENT' && output !== 'ABSENT') {
-    throw new Error(`Could not determine persona store state before C11: ${output}`);
-  }
-  return {
-    existed: output === 'PRESENT',
-    backupPath: personaBackupPath
-  };
-}
-
-function restorePersonaMemoryStore(backup) {
-  hdc(['shell', 'aa', 'force-stop', 'com.jiuwen.appless']);
-  const restoreCommand = backup.existed
-    ? `cp ${backup.backupPath} ${personaStorePath} && cmp -s ${backup.backupPath} ${personaStorePath} && echo RESTORED`
-    : `rm -f ${personaStorePath} && [ ! -f ${personaStorePath} ] && echo RESTORED`;
-  const output = hdc(['shell', restoreCommand]).trim();
-  hdc(['shell', `rm -f ${backup.backupPath}`]);
-  if (output !== 'RESTORED') {
-    throw new Error(`Persona store restoration could not be verified: ${output}`);
-  }
-  return {
-    ok: true,
-    existedBeforeRun: backup.existed
-  };
 }
 
 function probeLocalModel() {
@@ -1253,12 +1242,22 @@ function cleanupHilogProcesses() {
       }
       const match = /^(\d+)\s+/.exec(line);
       if (match !== null) {
-        spawnSync('kill', [`-${signal}`, match[1]], { encoding: 'utf8' });
+        if (process.platform === 'win32') {
+          const args = ['/PID', match[1], '/T'];
+          if (signal === 'KILL') args.push('/F');
+          spawnSync('taskkill', args, { encoding: 'utf8' });
+        } else {
+          spawnSync('kill', [`-${signal}`, match[1]], { encoding: 'utf8' });
+        }
       }
     }
   };
   killMatching('TERM');
-  spawnSync('sleep', ['0.3']);
+  if (process.platform === 'win32') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+  } else {
+    spawnSync('sleep', ['0.3']);
+  }
   killMatching('KILL');
 }
 
@@ -1827,8 +1826,7 @@ async function captureWhile(appPid, runAction, lifecycleOptions = null) {
         multiAgentTurnEvidence(text, lifecycleOptions);
       const hasTerminalOutcome =
         /\[AIPhone\]\[(ToolResult|A2uiHomeToolResult)\] ok=/.test(text) ||
-        /\[AIPhone\]\[(ToolRequest|A2uiHomeToolRequest)\] none/.test(text) ||
-        /\[AIPhone\]\[PersonaMemoryUpdate\]/.test(text);
+        /\[AIPhone\]\[(ToolRequest|A2uiHomeToolRequest)\] none/.test(text);
       const done = customCompletion !== null ? customCompletion.complete :
         lifecycleOptions === null ?
         (hotelActionEvidencePopulated || hotelToolLifecycleComplete || hasTerminalOutcome) :
@@ -1947,8 +1945,14 @@ function waitForProcessExit(child, timeoutMs) {
 }
 
 function activeHilogProcesses() {
-  const result = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
-  return result.stdout
+  const result = process.platform === 'win32' ?
+    spawnSync('C:\\Program Files\\PowerShell\\7\\pwsh.exe', [
+      '-NoProfile', '-Command',
+      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'hdc.*hilog' } | " +
+        'ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.CommandLine }'
+    ], { encoding: 'utf8' }) :
+    spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+  return String(result.stdout || '')
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.includes('hdc') && line.includes('hilog'));
@@ -2012,7 +2016,9 @@ function analyze(
   minimumDataRounds = 0,
   expectedDependencies = [],
   expectedDataRounds = [],
-  expectedParallelDataToolIds = []
+  expectedParallelDataToolIds = [],
+  expectedLeaderMemoryCapability = '',
+  verifyMemoryRecall = false
 ) {
   const text = logs.join('\n');
   const dailyBriefDirect = expectedToolId === 'daily.brief.open' ?
@@ -2052,8 +2058,11 @@ function analyze(
     executionEvidence.exactMultiAgentLifecycle ||
     (!executionEvidence.hasMultiAgentInput && rawModelSelectedExpectedToolId);
   const personaCoffeeProof = !isPersonaCoffeeQuery(query) || /饮食搭子上线|饮食搭子/.test(text);
-  const personaMemoryUpdateProof = !isPersonaMemoryUpdateQuery(query) ||
-    /\[AIPhone\]\[PersonaMemoryUpdate\][^\n]*ok=true[^\n]*personaId=food_companion/.test(text);
+  const memoryRecall = leaderMemoryRecallEvidence(text);
+  const leaderMemoryTool = expectedLeaderMemoryCapability.length === 0 ?
+    { observed: false, ok: true, capability: '', operation: '', status: '', succeeded: 0, failed: 0,
+      identityMatches: true, noActionAgent: true } :
+    leaderMemoryToolEvidence(text, expectedLeaderMemoryCapability, multiAgentLifecycle);
   const result = {
     query,
     expectedTool,
@@ -2073,7 +2082,8 @@ function analyze(
     exactMultiAgentToolLifecycle: executionEvidence.exactMultiAgentLifecycle,
     toolExecutionObserved: executionEvidence.observed,
     personaCoffeeProof,
-    personaMemoryUpdateProof,
+    memoryRecall,
+    leaderMemoryTool,
     directIntent: /\[AIPhone\]\[(ToolRequestByIntent|A2uiHomeToolRequestByIntent)\] toolId=/.test(text),
     localToolRequest: /\[AIPhone\]\[LocalToolRequest\] endpoint=local:\/\/aiphone-tools toolId=/.test(text),
     model200: modelTransportEvidence(text, {
@@ -2103,7 +2113,7 @@ function analyze(
     syntheticFallback: forbiddenSyntheticMarkers.some((marker) => text.includes(marker))
   };
   const modelPassed = multiAgentLifecycle.ok;
-  const expectsDirectText = expectedTool === false && !isPersonaMemoryUpdateQuery(query);
+  const expectsDirectText = expectedTool === false;
   const directTextLifecycle = expectsDirectText && multiAgentLifecycle.complete &&
     multiAgentLifecycle.ok && multiAgentLifecycle.status === 'success' &&
     multiAgentLifecycle.textResult && multiAgentLifecycle.surfaceId === 'none' &&
@@ -2130,13 +2140,12 @@ function analyze(
   const basePassed = result.transportPassed && baseWithoutTransport;
   if (dailyBriefDirect !== null) {
     Object.assign(result, dailyBriefDirectAnalysis(result, dailyBriefDirect));
-  } else if (isPersonaMemoryUpdateQuery(query)) {
-    result.modelPassed = result.personaMemoryUpdateProof === true;
+  } else if (expectedLeaderMemoryCapability.length > 0) {
+    result.modelPassed = multiAgentLifecycle.ok && leaderMemoryTool.ok;
     result.transportPassed = true;
-    result.basePassedWithoutTransport = true;
-    result.ok = result.personaMemoryUpdateProof === true && multiAgentLifecycle.ok &&
-      multiAgentLifecycle.toolIds.length === 1 &&
-      multiAgentLifecycle.toolIds[0] === 'memory.update';
+    result.basePassedWithoutTransport = directTextLifecycle;
+    result.ok = result.modelPassed && directTextLifecycle &&
+      (!verifyMemoryRecall || memoryRecall.ok);
   } else if (expectedTool === true) {
     result.ok = basePassed && modelPassed && result.toolRequested && result.toolOk &&
       result.hasExpectedToolId && result.hasExpectedDiscoveredToolId && result.personaCoffeeProof;
@@ -2145,6 +2154,9 @@ function analyze(
   } else {
     result.ok = basePassed && modelPassed &&
       (result.toolRequested ? result.toolOk : result.toolNone);
+  }
+  if (verifyMemoryRecall && !memoryRecall.ok) {
+    result.ok = false;
   }
   return result;
 }
@@ -2157,12 +2169,80 @@ function isPersonaCoffeeQuery(query) {
   return /点一杯咖啡|来一杯咖啡|买杯咖啡/.test(query);
 }
 
-function isPersonaMemoryUpdateQuery(query) {
-  return /瑞幸/.test(query) && /只喝|只买|只点/.test(query);
+function expectedLeaderMemoryCapabilityForQuery(query) {
+  if (/忘掉|忘记|删除.+记忆/.test(query) && /长期偏好|长期记忆/.test(query)) {
+    return 'memory.forget';
+  }
+  if (/长期记住|请记住|帮我记住/.test(query)) {
+    return 'memory.remember';
+  }
+  return '';
 }
 
-function hasLuckinMemoryEvidence(text) {
-  return /只展示瑞幸|只喝瑞幸|瑞幸相关真实结果|瑞幸优先/.test(text);
+function memoryPreferenceVisible(text, preference) {
+  if (preference === 'oat_milk') {
+    return /燕麦奶|燕麦咖啡|燕麦拿铁/.test(text);
+  }
+  return false;
+}
+
+function lineEvidenceFields(line) {
+  const fields = {};
+  for (const match of String(line || '').matchAll(/\b([A-Za-z][A-Za-z0-9]*)=([^\s]+)/g)) {
+    fields[match[1]] = match[2];
+  }
+  return fields;
+}
+
+function leaderMemoryRecallEvidence(text) {
+  const lines = String(text || '').split('\n')
+    .filter((line) => /\[AIPhone\]\[LeaderMemoryRecall\]/.test(line));
+  const line = lines.at(-1) || '';
+  const fields = lineEvidenceFields(line);
+  const count = /^\d+$/.test(fields.count || '') ? Number.parseInt(fields.count, 10) : -1;
+  const durationMs = /^\d+$/.test(fields.durationMs || '') ? Number.parseInt(fields.durationMs, 10) : -1;
+  const status = fields.status || '';
+  const validCount = status === 'hit' ? count > 0 : status === 'miss' ? count === 0 : false;
+  return {
+    observed: line.length > 0,
+    ok: line.length > 0 && validCount && durationMs >= 0,
+    status,
+    count,
+    durationMs
+  };
+}
+
+function leaderMemoryToolEvidence(text, expectedCapability, lifecycle) {
+  const expectedOperation = String(expectedCapability || '').replace(/^memory\./, '');
+  const lines = [...new Set(String(text || '').split('\n')
+    .filter((line) => /\[AIPhone\]\[LeaderMemoryTool\]/.test(line))
+    .map((line) => line.slice(line.indexOf('[AIPhone][LeaderMemoryTool]'))))];
+  const matching = lines.map((line) => ({ line, fields: lineEvidenceFields(line) }))
+    .filter((item) => item.fields.operation === expectedOperation);
+  const selected = matching.at(-1) || { line: '', fields: {} };
+  const fields = selected.fields;
+  const succeeded = /^\d+$/.test(fields.succeeded || '') ? Number.parseInt(fields.succeeded, 10) : -1;
+  const failed = /^\d+$/.test(fields.failed || '') ? Number.parseInt(fields.failed, 10) : -1;
+  const hasIdentity = typeof fields.conversation === 'string' && fields.conversation.length > 0 &&
+    typeof fields.turn === 'string' && fields.turn.length > 0 &&
+    typeof fields.task === 'string' && fields.task.length > 0;
+  const identityMatches = lifecycle !== null && lifecycle !== undefined &&
+    lifecycle.conversationId.length > 0 && lifecycle.turnId.length > 0 && hasIdentity &&
+    matching.length === 1;
+  const successfulTerminal = fields.status === 'success' && succeeded > 0 && failed === 0;
+  const noActionAgent = !/\[AIPhone\]\[MultiAgentActionPlan\]/.test(text) &&
+    !/\[AIPhone\]\[PersonaMemoryUpdate\]/.test(text);
+  return {
+    observed: selected.line.length > 0,
+    ok: selected.line.length > 0 && identityMatches && successfulTerminal && noActionAgent,
+    capability: expectedCapability,
+    operation: fields.operation || '',
+    status: fields.status || '',
+    succeeded,
+    failed,
+    identityMatches,
+    noActionAgent
+  };
 }
 
 function isGmailEccvQuery(query) {
@@ -2270,7 +2350,7 @@ function isComposioCardQuery(query) {
 }
 
 function layoutExpectationsForQuery(query) {
-  if (isPersonaMemoryUpdateQuery(query)) {
+  if (expectedLeaderMemoryCapabilityForQuery(query).length > 0) {
     return [];
   }
   if (isSocialFeedQuery(query) && !isWhatsAppSendQuery(query)) {
@@ -3481,7 +3561,7 @@ async function verifyMailExpandedActions(layout, index, appPid, targetMarker = '
 
 async function runQuery(query, index, expectedTool, expectedCaseOverride = null, preserveAppSession = false) {
   const expectedCase = expectedCaseOverride || (useDefaultCases ? selectedDefaultCases[index] : expectedCaseForQuery(query));
-  const expectsDirectText = expectedTool === false && !isPersonaMemoryUpdateQuery(query);
+  const expectsDirectText = expectedTool === false;
   const expectedToolId = expectedCase.expectedToolId || '';
   const lifecycle = lifecycleOptions(expectedCase);
   const expectedToolIds = lifecycle.expectedToolIds;
@@ -3545,7 +3625,7 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
   writeFileSync(logPath, safeLogText + '\n');
   const expectedDiscoveredToolId = expectedCase.expectedDiscoveredToolId || '';
   const expectedDynamicQualifiedName = expectedCase.expectedDynamicQualifiedName || '';
-  const expectedPersonaMemory = expectedCase.expectedPersonaMemory || '';
+  const expectedLeaderMemoryCapability = expectedCase.expectedLeaderMemoryCapability || '';
   const summary = analyze(
     query,
     safeLogs,
@@ -3557,10 +3637,12 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
     minimumDataRounds,
     expectedDependencies,
     expectedDataRounds,
-    expectedParallelDataToolIds
+    expectedParallelDataToolIds,
+    expectedLeaderMemoryCapability,
+    expectedCase.verifyMemoryRecall === true
   );
   summary.caseId = expectedCase.id || '';
-  summary.expectedPersonaMemory = expectedPersonaMemory;
+  summary.expectedLeaderMemoryCapability = expectedLeaderMemoryCapability;
   summary.hotelCapabilities = expectedCase.hotelCapabilities || [];
   summary.logPath = logPath;
   const layout = dumpLayout(`query-${index + 1}-final-layout.json`);
@@ -3585,14 +3667,20 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
       failures: ['missing_direct_text_baseline'], skipped: false } :
     { ok: true, replyChars: 0, baselineMessageCount: 0, finalMessageCount: 0,
       failures: [], skipped: true });
+  const memoryReplyPattern = expectedLeaderMemoryCapability === 'memory.remember' ?
+    /已记住\s*\d+\s*条长期记忆/ :
+    (expectedLeaderMemoryCapability === 'memory.update' ? /已更新长期记忆/ :
+      (expectedLeaderMemoryCapability === 'memory.forget' ? /已忘记这条长期记忆/ : null));
+  const visibleMemoryReply = memoryReplyPattern === null ? '' :
+    layoutTextValues.find((value) => memoryReplyPattern.test(value)) || '';
   summary.directTextBaselineLayoutPath = expectsDirectText ?
     join(outDir, directTextBaselineName) : '';
   summary.directTextVisible = {
-    ok: directTextEvidence.ok,
-    replyChars: directTextEvidence.replyChars,
+    ok: directTextEvidence.ok || visibleMemoryReply.length > 0,
+    replyChars: visibleMemoryReply.length > 0 ? visibleMemoryReply.length : directTextEvidence.replyChars,
     baselineMessageCount: directTextEvidence.baselineMessageCount,
     finalMessageCount: directTextEvidence.finalMessageCount,
-    failures: directTextEvidence.failures,
+    failures: visibleMemoryReply.length > 0 ? [] : directTextEvidence.failures,
     skipped: directTextEvidence.skipped === true
   };
   const expectedMarkers = layoutExpectationsForQuery(query);
@@ -3611,7 +3699,6 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
   const evidenceLayout = scrollEvidence.currentLayout;
   if (isPersonaCoffeeQuery(query) && /饮食搭子上线|饮食搭子/.test(evidenceText)) {
     summary.personaCoffeeProof = true;
-    summary.personaExpectedMemoryProof = expectedPersonaMemory !== 'luckin_only' || hasLuckinMemoryEvidence(evidenceText);
     if (expectedTool === true &&
       summary.basePassedWithoutTransport === true &&
       summary.modelPassed === true &&
@@ -3619,8 +3706,7 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
       summary.toolExecutionObserved &&
       summary.toolOk &&
       summary.hasExpectedToolId &&
-      summary.hasExpectedDiscoveredToolId &&
-      summary.personaExpectedMemoryProof) {
+      summary.hasExpectedDiscoveredToolId) {
       summary.ok = true;
     }
   }
@@ -3720,10 +3806,12 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
         composioCardMarkersOk &&
         aggregateMediaMarkersOk &&
         summary.gmailEccvKeywordVisible));
-  if (expectedPersonaMemory === 'luckin_only') {
-    summary.personaExpectedMemoryProof = hasLuckinMemoryEvidence(evidenceText);
-    summary.layoutTextExposed = summary.layoutTextExposed && summary.personaExpectedMemoryProof;
-  }
+  summary.memoryPreferenceApplied = expectedCase.expectedMemoryPreference === undefined ?
+    true : memoryPreferenceVisible(evidenceText, expectedCase.expectedMemoryPreference);
+  summary.memoryPreferenceAbsent = expectedCase.expectMemoryPreferenceAbsent === undefined ?
+    true : !memoryPreferenceVisible(evidenceText, expectedCase.expectMemoryPreferenceAbsent);
+  summary.layoutTextExposed = summary.layoutTextExposed && summary.memoryPreferenceApplied &&
+    summary.memoryPreferenceAbsent;
   summary.mailAggregateVisible = expectedToolId !== 'mail.search' ||
     (isMailAggregationQuery(query) ? (/Gmail/.test(evidenceText) && /QQ Mail/.test(evidenceText) && /Outlook/.test(evidenceText)) :
       (isQqMailQuery(query) ? /QQ Mail/.test(evidenceText) : (/Gmail/.test(evidenceText) && /QQ Mail/.test(evidenceText) && /Outlook/.test(evidenceText))));
@@ -3776,9 +3864,9 @@ async function runQuery(query, index, expectedTool, expectedCaseOverride = null,
       date: qaDateIso
     });
   summary.absenceVerified = summary.absenceEvidence.ok;
-  if (isPersonaMemoryUpdateQuery(query)) {
+  if (expectedLeaderMemoryCapability.length > 0) {
     summary.mailAggregateVisible = true;
-    summary.layoutTextExposed = summary.personaMemoryUpdateProof === true;
+    summary.layoutTextExposed = summary.directTextVisible.ok && summary.leaderMemoryTool.ok;
     summary.layoutOk = layoutBlockingHits.length === 0 &&
       forbiddenSocialHubLegacyHits.length === 0 &&
       summary.layoutTextExposed;
@@ -5151,40 +5239,13 @@ let c19CreateSucceeded = true;
 let c19UpdateSucceeded = true;
 let c19CleanupRequired = false;
 const c19Requested = useDefaultCases && selectedDefaultCases.some((testCase) => /^C19/.test(testCase.id || ''));
-let personaMemoryBackup = null;
-let personaMemoryRestore = { ok: true, skipped: true };
-if (useDefaultCases && selectedDefaultCases.some((testCase) => /^C11/.test(testCase.id || ''))) {
-  try {
-    personaMemoryBackup = backupPersonaMemoryStore();
-    personaMemoryRestore = { ok: false, skipped: false, pending: true };
-  } catch (error) {
-    personaMemoryRestore = {
-      ok: false,
-      skipped: false,
-      reason: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
+let c11CleanupRequired = false;
+const c11Requested = useDefaultCases && selectedDefaultCases.some((testCase) => /^C11/.test(testCase.id || ''));
 try {
 for (let index = 0; index < queries.length; index += 1) {
   const query = queries[index];
   console.log(`\n[${index + 1}/${queries.length}] ${query}`);
   const inferredCase = useDefaultCases ? selectedDefaultCases[index] : expectedCaseForQuery(query);
-  if (/^C11/.test(inferredCase.id || '') && personaMemoryBackup === null) {
-    const blockedSummary = {
-      caseId: inferredCase.id || '',
-      query,
-      expectedTool: inferredCase.expectsTool,
-      expectedToolId: inferredCase.expectedToolId || '',
-      status: 'BLOCKED',
-      ok: false,
-      reason: `Persona memory could not be backed up safely: ${personaMemoryRestore.reason || 'unknown backup failure'}`
-    };
-    summaries.push(blockedSummary);
-    captureBlockedCase(inferredCase.id || `query-${index + 1}`, 1, blockedSummary);
-    console.log(JSON.stringify(blockedSummary, null, 2));
-    continue;
-  }
   if (inferredCase.blockedWithoutWhatsAppTestTo === true && whatsappTestTo.length === 0) {
     const blockedSummary = {
       caseId: inferredCase.id || '',
@@ -5253,7 +5314,9 @@ for (let index = 0; index < queries.length; index += 1) {
   const expectedTool = inferredCase.expectsTool;
   const previousCase = index > 0 ?
     (useDefaultCases ? selectedDefaultCases[index - 1] : expectedCaseForQuery(queries[index - 1])) : null;
-  const preserveAppSession = shouldPreserveSmokeAppSession(
+  const preserveC11Session = /^C11[b-e]$/.test(inferredCase.id || '') &&
+    /^C11[a-d]$/.test(previousCase?.id || '');
+  const preserveAppSession = preserveC11Session || shouldPreserveSmokeAppSession(
     inferredCase,
     previousCase,
     summaries.at(-1) || null
@@ -5296,9 +5359,11 @@ for (let index = 0; index < queries.length; index += 1) {
   if (inferredCase.id === 'C19e' && summary.calendarDeleteAction?.ok === true) {
     c19CleanupRequired = false;
   }
-  if (inferredCase.id === 'C11c' && personaMemoryBackup !== null) {
-    personaMemoryRestore = restorePersonaMemoryStore(personaMemoryBackup);
-    personaMemoryBackup = null;
+  if (inferredCase.id === 'C11b' && summary.leaderMemoryTool?.ok === true) {
+    c11CleanupRequired = true;
+  }
+  if (inferredCase.id === 'C11d' && summary.leaderMemoryTool?.ok === true) {
+    c11CleanupRequired = false;
   }
 }
 } finally {
@@ -5334,9 +5399,28 @@ for (let index = 0; index < queries.length; index += 1) {
       console.log(JSON.stringify(finalizer.absence, null, 2));
     }
   }
-  if (personaMemoryBackup !== null) {
-    personaMemoryRestore = restorePersonaMemoryStore(personaMemoryBackup);
-    personaMemoryBackup = null;
+  if (c11Requested && c11CleanupRequired) {
+    const cleanupCase = coreRegressionCases.find((testCase) => testCase.id === 'C11d');
+    if (cleanupCase !== undefined) {
+      try {
+        const cleanup = await runQuery(
+          cleanupCase.query, queries.length + 2, cleanupCase.expectsTool, cleanupCase, true
+        );
+        cleanup.caseId = 'C11d-cleanup';
+        cleanup.status = cleanup.ok ? 'PASS' : 'FAIL';
+        summaries.push(cleanup);
+        snapshotCaseArtifacts(cleanup.caseId, 1, [`query-${queries.length + 3}`], cleanup);
+        c11CleanupRequired = cleanup.leaderMemoryTool?.ok !== true;
+        console.log(JSON.stringify(cleanup, null, 2));
+      } catch (error) {
+        const cleanup = {
+          caseId: 'C11d-cleanup', status: 'FAIL', ok: false,
+          reason: error instanceof Error ? error.message : String(error)
+        };
+        summaries.push(cleanup);
+        console.log(JSON.stringify(cleanup, null, 2));
+      }
+    }
   }
 }
 
@@ -5352,7 +5436,7 @@ const finalLayoutForbiddenActionHits = forbiddenLayoutActionMarkers.filter((mark
 const finalQuery = queries.length > 0 ? queries[queries.length - 1] : '';
 const finalAllowsPartialTravel = /出行方案|搜索出行|怎么去|比较出行|出行选项|整理可查|可查的出行/.test(finalQuery);
 const finalSummary = summaries.length > 0 ? summaries[summaries.length - 1] : null;
-const finalAllowsPersonaMemoryUpdate = finalSummary !== null && finalSummary.personaMemoryUpdateProof === true;
+const finalAllowsLeaderMemoryText = finalSummary !== null && finalSummary.leaderMemoryTool?.ok === true;
 const finalAllowsExternalGmailWeb = isGmailWebQuery(finalQuery) &&
   finalSummary !== null &&
   finalSummary.gmailWebOpened === true;
@@ -5431,8 +5515,7 @@ if (finalSummary !== null && finalSummary.expectedToolId === 'gmail.draft.create
 }
 const finalLayoutRouteHits = finalLayoutRouteMarkers.filter((marker) => finalLayoutText.includes(marker));
 const hilogProcesses = activeHilogProcesses();
-const finalExpectsDirectText = finalSummary !== null && finalSummary.expectedTool === false &&
-  !isPersonaMemoryUpdateQuery(finalQuery);
+const finalExpectsDirectText = finalSummary !== null && finalSummary.expectedTool === false;
 let finalDirectTextVisible = {
   ok: false, replyChars: 0, baselineMessageCount: 0, finalMessageCount: 0,
   failures: ['not_direct_text'], skipped: true
@@ -5466,9 +5549,25 @@ if (finalExpectsDirectText && typeof finalSummary.logPath === 'string' &&
     };
   }
 }
+const finalMemoryCapability = finalSummary?.expectedLeaderMemoryCapability || '';
+const finalMemoryReplyPattern = finalMemoryCapability === 'memory.remember' ?
+  /已记住\s*\d+\s*条长期记忆/ :
+  (finalMemoryCapability === 'memory.update' ? /已更新长期记忆/ :
+    (finalMemoryCapability === 'memory.forget' ? /已忘记这条长期记忆/ : null));
+const finalMemoryReplyVisible = finalMemoryReplyPattern !== null && finalMemoryReplyPattern.test(finalLayoutText);
+if (finalAllowsLeaderMemoryText && finalMemoryReplyVisible) {
+  finalDirectTextVisible = {
+    ok: true,
+    replyChars: 1,
+    baselineMessageCount: finalDirectTextVisible.baselineMessageCount,
+    finalMessageCount: finalDirectTextVisible.finalMessageCount,
+    failures: [],
+    skipped: false
+  };
+}
 const finalOutputPresent = finalExpectsDirectText ? finalDirectTextVisible.ok :
   (finalAllowsCorrelatedDynamicAuth || finalAllowsSocialHubTruthfulState ||
-    finalAllowsExternalGmailWeb || finalAllowsPersonaMemoryUpdate || finalDailyBriefVisibleOutput ||
+    finalAllowsExternalGmailWeb || finalAllowsLeaderMemoryText || finalDailyBriefVisibleOutput ||
     finalLayoutDomainHits.length > 0 ||
     (finalSummary !== null &&
       !isSocialHubExpectedToolId(finalSummary.expectedToolId) &&
@@ -5502,15 +5601,15 @@ writeFileSync(summaryPath, JSON.stringify({
   timeoutMs,
   cleanData,
   modelHealth,
-  personaMemoryRestore,
+  memoryCleanup: { required: c11CleanupRequired, ok: !c11CleanupRequired },
   summaries,
   visibleOutput,
   processCleanup
 }, null, 2));
 console.log(`\nsummary: ${summaryPath}`);
 console.log(`screenshots: ${screenshotIndexPath}`);
-console.log(`personaMemoryRestore: ${JSON.stringify(personaMemoryRestore, null, 2)}`);
+console.log(`memoryCleanup: ${JSON.stringify({ required: c11CleanupRequired, ok: !c11CleanupRequired }, null, 2)}`);
 console.log(`visibleOutput: ${JSON.stringify(visibleOutput, null, 2)}`);
 console.log(`processCleanup: ${JSON.stringify(processCleanup, null, 2)}`);
 const failed = summaries.filter((summary) => !summary.ok);
-process.exitCode = failed.length === 0 && personaMemoryRestore.ok && visibleOutput.ok && processCleanup.ok ? 0 : 1;
+process.exitCode = failed.length === 0 && !c11CleanupRequired && visibleOutput.ok && processCleanup.ok ? 0 : 1;

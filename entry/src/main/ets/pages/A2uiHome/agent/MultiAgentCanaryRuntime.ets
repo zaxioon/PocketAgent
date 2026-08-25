@@ -24,15 +24,24 @@ import {
   JsonValue,
   LeaderDataTaskInputNormalizer,
   LeaderDecisionDataTask,
+  LeaderMemoryMutation,
+  LeaderMemoryToolExecutionGuard,
+  LeaderMemoryToolExecutor,
+  LeaderMemoryToolRequest,
+  LeaderMemoryToolResult,
   LeaderPersonaMetadata,
   LeaderPlanningContext,
   LeaderSkillMetadata,
   LeaderToolMetadata,
   LinkedMessageBus,
   LocalModel,
+  MemoryBatchResult,
+  MemoryCommitGuard,
+  MemoryWriteResult,
   MailDetail,
   MailDetailRequest,
   RegisteredActionExecutor,
+  RecalledMemoryContext,
   SurfaceActionAuthorizer,
   ToolDefinition,
   ToolDefinitionLookup,
@@ -48,6 +57,7 @@ import {
   VirtualActionIntentResolver,
   allAiphoneToolDefinitions,
   allToolDefinitions,
+  aiLogInfo,
   callStructuredTool,
   gmailDraftApplyAction,
   genericToolResultsA2ui,
@@ -63,19 +73,16 @@ import {
 } from '@loop/agent-core';
 import { leaderPersonaContext } from '../../../model/LeaderPersonaContext';
 import {
-  isStableWaterfallContentPreference,
-  memoryUpdateSurface,
-  parsePersonaMemoryUpdateInput,
-  PersonaMemoryUpdateRequest
-} from '../../../model/PersonaMemoryUpdate';
-import { personaPackForId } from '../../../model/PersonaStore';
+  PhoneLocalMemoryRuntimePort,
+  PhoneLocalRecalledMemory
+} from '../../../memory/PhoneLocalMemoryRuntime';
 import { MultiAgentLeaderPlanner } from './MultiAgentLeaderPlanner';
 import { MultiAgentActionPlanCompiler } from './MultiAgentActionPlanCompiler';
 import {
   HotelLocalDateProvider
 } from './HotelLeaderPlanner';
 import { mailDetailIdentityDigest, MultiAgentRuntime } from './MultiAgentRuntime';
-import { MultiAgentTurnOutcome } from './MultiAgentRuntimeTypes';
+import { MultiAgentSettledOutcome, MultiAgentTurnOutcome } from './MultiAgentRuntimeTypes';
 import { isHtmlHomeActionAllowed } from '../html/HtmlHomeActionPolicy';
 import { HtmlHomeDocument } from '../html/HtmlHomeTypes';
 import {
@@ -109,10 +116,29 @@ import {
   originalQueryFromBimPrompt
 } from '../bim/BimRuntime';
 
-const MEMORY_ACTION_ID: string = 'memory.update';
+const MEMORY_ACTION_IDS: string[] = [
+  'memory.remember',
+  'memory.update',
+  'memory.forget'
+];
 const TIME_TOOL_ID: string = 'time';
-const MEMORY_SUMMARY_LIMIT: number = 240;
 const TURN_HOST_GENERATION_LIMIT: number = 32;
+
+function memoryPlanningHint(toolId: string): string {
+  if (toolId === 'memory.remember') {
+    return 'Leader-owned local memory write. Use memoryMutation exactly as ' +
+      '{"operation":"remember","facts":["one atomic sentence"]}; facts is a string array with 1-5 items. ' +
+      'For a memory-only turn use roundAction="execute", dataTasks=[], no actionIntent, and omit answer.';
+  }
+  if (toolId === 'memory.update') {
+    return 'Leader-owned local memory update. Use memoryMutation exactly as ' +
+      '{"operation":"update","memoryId":"one recalled ID","fact":"one atomic sentence"}. ' +
+      'For a memory-only turn use roundAction="execute", dataTasks=[], no actionIntent, and omit answer.';
+  }
+  return 'Leader-owned local memory deletion. Use memoryMutation exactly as ' +
+    '{"operation":"forget","memoryId":"one recalled ID"}. ' +
+    'For a memory-only turn use roundAction="execute", dataTasks=[], no actionIntent, and omit answer.';
+}
 
 interface CalendarReviewOutput {
   surfaceId: string;
@@ -179,7 +205,7 @@ export interface MultiAgentCanaryOptions {
   currentHostSurface?: () => A2uiSurfaceState | null;
   currentHostGeneration?: () => number;
   onSurface: (surface: A2uiSurfaceState, runtimeGeneration: number) => boolean;
-  onMemoryUpdate: (update: PersonaMemoryUpdateRequest, runtimeGeneration: number) => boolean;
+  memoryRuntime?: PhoneLocalMemoryRuntimePort;
   onMailDetail?: (
     event: MailDetailInPlaceEvent,
     runtimeGeneration: number,
@@ -570,26 +596,8 @@ export interface MultiAgentCanaryActionContext {
   pageActionId?: string;
 }
 
-function memoryDefinition(): ToolDefinition {
-  return {
-    toolId: MEMORY_ACTION_ID,
-    domain: 'persona',
-    intent: MEMORY_ACTION_ID,
-    riskLevel: 'draft',
-    backendPriority: ['local_adapter'],
-    authModes: ['none'],
-    inputSchema: 'memoryUpdateRequest',
-    outputSchema: 'memoryUpdateResult',
-    a2uiComponent: 'InfoRows',
-    actions: [MEMORY_ACTION_ID]
-  };
-}
-
 class CanaryToolLookup implements ToolDefinitionLookup {
   find(toolId: string): ToolDefinition | null {
-    if (toolId === MEMORY_ACTION_ID) {
-      return memoryDefinition();
-    }
     return toolDefinitionForToolId(toolId);
   }
 }
@@ -974,28 +982,8 @@ function calendarReviewSurface(
   ));
 }
 
-function memoryRequest(args: Object): PersonaMemoryUpdateRequest | null {
-  if (args === null || typeof args !== 'object' || Array.isArray(args)) {
-    return null;
-  }
-  const values = args as Record<string, Object | string | number | boolean | null | undefined>;
-  const personaId = values['personaId'];
-  if (typeof personaId !== 'string' || personaId.trim().length === 0) {
-    return null;
-  }
-  return parsePersonaMemoryUpdateInput(JSON.stringify(args), personaId);
-}
-
 class CanaryArgsValidator implements ActionArgsValidator {
   validate(actionId: string, args: Object): ActionValidationResult {
-    if (actionId === MEMORY_ACTION_ID) {
-      const valid = memoryRequest(args) !== null;
-      return {
-        ok: valid,
-        code: valid ? '' : 'MEMORY_UPDATE_ARGS_INVALID',
-        message: valid ? '' : 'Memory update args are invalid.'
-      };
-    }
     return validateRegisteredPageActionArgs(actionId, args);
   }
 }
@@ -1014,10 +1002,6 @@ class CanarySurfaceAuthorizer implements SurfaceActionAuthorizer {
     actionId: string,
     args: Object
   ): boolean {
-    if (actionId === MEMORY_ACTION_ID) {
-      return surfaceId.startsWith('virtual:') &&
-        conversationId.length > 0 && turnId.length > 0 && memoryRequest(args) !== null;
-    }
     return this.hotel.allows(conversationId, turnId, surfaceId, actionId, args);
   }
 }
@@ -1205,7 +1189,7 @@ function exactCurrentGmailDraftApplyAction(
   return authority.action;
 }
 
-class MemoryIntentResolver implements VirtualActionIntentResolver {
+class CanaryVirtualActionIntentResolver implements VirtualActionIntentResolver {
   private readonly currentGmailDraftApply: () => A2uiAction | null;
 
   constructor(currentGmailDraftApply: () => A2uiAction | null) {
@@ -1219,67 +1203,24 @@ class MemoryIntentResolver implements VirtualActionIntentResolver {
       return null;
     }
     const actionId = request.allowedActionIds[0];
-    if (actionId !== MEMORY_ACTION_ID) {
-      let action: A2uiAction | null = null;
-      if (actionId === 'gmail.draft.apply') {
-        action = request.inputText.trim() === '确认应用刚才的 Gmail 草稿' ?
-          this.currentGmailDraftApply() : null;
-      } else {
-        const now: Date | null = calendarNow(request.currentLocalDate);
-        if (now === null) {
-          return null;
-        }
-        action = resolveVirtualRegisteredPageAction(
-          actionId, request.inputText, now
-        );
-      }
-      if (action === null || action.args === undefined) {
-        return null;
-      }
-      const offer: ActionOffer = {
-        offerId: 'initial-action:' + actionId,
-        actionId: actionId,
-        label: actionId,
-        variant: 'primary',
-        args: action.args
-      };
-      const intent: VirtualActionIntent = {
-        sourceToolId: VIRTUAL_ACTION_INTENT_SOURCE_TOOL_ID,
-        offer: offer,
-        autoRun: true
-      };
-      return intent;
+    let action: A2uiAction | null = null;
+    if (actionId === 'gmail.draft.apply') {
+      action = request.inputText.trim() === '确认应用刚才的 Gmail 草稿' ?
+        this.currentGmailDraftApply() : null;
+    } else {
+      const now: Date | null = calendarNow(request.currentLocalDate);
+      if (now === null) return null;
+      action = resolveVirtualRegisteredPageAction(actionId, request.inputText, now);
     }
-    const statement: string = originalQueryFromBimPrompt(request.inputText).trim();
-    if (statement.length === 0) {
-      return null;
-    }
-    const personaId = isStableWaterfallContentPreference(statement) ?
-      'entertainment_companion' : request.personaId;
-    const pack = personaPackForId(personaId);
-    if (pack.manifest.id !== personaId) {
-      return null;
-    }
-    const summary: string = statement.length > MEMORY_SUMMARY_LIMIT ?
-      statement.substring(0, MEMORY_SUMMARY_LIMIT) : statement;
-    const args: PersonaMemoryUpdateRequest = {
-      personaId,
-      summary,
-      memoryText: statement,
-      reason: '用户明确表达了可长期保存的偏好。'
-    };
+    if (action === null || action.args === undefined) return null;
     const offer: ActionOffer = {
-      offerId: 'memory-update:' + personaId,
-      actionId: MEMORY_ACTION_ID,
-      label: '更新记忆',
+      offerId: 'initial-action:' + actionId,
+      actionId: actionId,
+      label: actionId,
       variant: 'primary',
-      args
+      args: action.args
     };
-    return {
-      sourceToolId: MEMORY_ACTION_ID,
-      offer,
-      autoRun: true
-    };
+    return { sourceToolId: VIRTUAL_ACTION_INTENT_SOURCE_TOOL_ID, offer, autoRun: true };
   }
 }
 
@@ -1295,25 +1236,16 @@ const rejectPageAction: RegisteredPageAction = async (
 
 class CanaryRegisteredExecutor implements RegisteredActionExecutor {
   private readonly aiphone: AiphoneRegisteredActionExecutor;
-  private readonly onMemoryUpdate: (
-    update: PersonaMemoryUpdateRequest,
-    context: ActionExecutionContext
-  ) => boolean;
   private readonly onSurface: (surface: A2uiSurfaceState, context: ActionExecutionContext) => void;
   private readonly currentGmailDraftApply: () => A2uiAction | null;
   private sequence: number = 0;
 
   constructor(
     aiphone: AiphoneRegisteredActionExecutor,
-    onMemoryUpdate: (
-      update: PersonaMemoryUpdateRequest,
-      context: ActionExecutionContext
-    ) => boolean,
     onSurface: (surface: A2uiSurfaceState, context: ActionExecutionContext) => void,
     currentGmailDraftApply: () => A2uiAction | null
   ) {
     this.aiphone = aiphone;
-    this.onMemoryUpdate = onMemoryUpdate;
     this.onSurface = onSurface;
     this.currentGmailDraftApply = currentGmailDraftApply;
   }
@@ -1338,48 +1270,119 @@ class CanaryRegisteredExecutor implements RegisteredActionExecutor {
       const output: CalendarReviewOutput = { surfaceId };
       return { status: 'success', output };
     }
-    if (actionId !== MEMORY_ACTION_ID) {
-      if (actionId === 'gmail.draft.apply' && context.virtualAction === true) {
-        const current = this.currentGmailDraftApply();
-        if (current === null || current.args === undefined ||
-          JSON.stringify(current.args) !== JSON.stringify(args)) {
-          return {
-            status: 'error',
-            errorCode: 'GMAIL_DRAFT_SURFACE_STALE',
-            message: 'Gmail draft no longer matches the exact current surface.'
-          };
-        }
+    if (actionId === 'gmail.draft.apply' && context.virtualAction === true) {
+      const current = this.currentGmailDraftApply();
+      if (current === null || current.args === undefined ||
+        JSON.stringify(current.args) !== JSON.stringify(args)) {
+        return {
+          status: 'error',
+          errorCode: 'GMAIL_DRAFT_SURFACE_STALE',
+          message: 'Gmail draft no longer matches the exact current surface.'
+        };
       }
-      return this.aiphone.execute(actionId, args, context);
     }
-    const update = memoryRequest(args);
-    if (update === null) {
-      return {
-        status: 'error',
-        errorCode: 'MEMORY_UPDATE_ARGS_INVALID',
-        message: 'Memory update args are invalid.'
-      };
-    }
-    if (!this.onMemoryUpdate(update, context)) {
-      return {
-        status: 'error',
-        errorCode: 'MEMORY_UPDATE_PERSIST_FAILED',
-        message: 'Memory update could not be persisted.'
-      };
-    }
-    this.sequence++;
-    const surfaceId: string = 'memory-update:' + this.sequence.toString();
-    this.onSurface(memoryUpdateSurface(surfaceId, update), context);
-    const output: MemorySurfaceOutput = { surfaceId };
-    return {
-      status: 'success',
-      output
-    };
+    return this.aiphone.execute(actionId, args, context);
   }
 }
 
-interface MemorySurfaceOutput {
-  surfaceId: string;
+class PhoneLocalLeaderMemoryToolExecutor implements LeaderMemoryToolExecutor {
+  private readonly runtime: PhoneLocalMemoryRuntimePort | null;
+
+  constructor(runtime: PhoneLocalMemoryRuntimePort | null) {
+    this.runtime = runtime;
+  }
+
+  async execute(
+    request: LeaderMemoryToolRequest,
+    guard: LeaderMemoryToolExecutionGuard
+  ): Promise<LeaderMemoryToolResult> {
+    if (!guard.isActive()) {
+      return this.result(request, 'error', 'Long-term memory operation was canceled.', 0, 0);
+    }
+    if (this.runtime === null) {
+      return this.result(request, 'error', 'Long-term memory is unavailable on this device.', 0, 1);
+    }
+    const commitGuard: MemoryCommitGuard = new LeaderMemoryCommitGuard(guard);
+    const mutation: LeaderMemoryMutation = request.mutation;
+    if (mutation.operation === 'remember') {
+      const facts: string[] = mutation.facts.map((item): string => item.fact);
+      const result: MemoryBatchResult = await this.runtime.remember(
+        facts, request.turnId, request.personaId, commitGuard
+      );
+      if (result.succeededCount <= 0 || result.status === 'error') {
+        return this.result(
+          request,
+          'error',
+          result.error === undefined ? 'Long-term memory could not be saved.' : result.error.message,
+          result.succeededCount,
+          result.failedCount
+        );
+      }
+      if (result.failedCount > 0) {
+        return this.result(
+          request,
+          'partial',
+          '已记住 ' + result.succeededCount.toString() + ' 条，' +
+            result.failedCount.toString() + ' 条保存失败。',
+          result.succeededCount,
+          result.failedCount
+        );
+      }
+      return this.result(
+        request,
+        'success',
+        '已记住 ' + result.succeededCount.toString() + ' 条长期记忆。',
+        result.succeededCount,
+        result.failedCount
+      );
+    }
+    const result: MemoryWriteResult = mutation.operation === 'update' ?
+      await this.runtime.update(
+        mutation.memoryId, mutation.fact, request.turnId, request.personaId, commitGuard
+      ) : await this.runtime.forget(mutation.memoryId, commitGuard);
+    if (result.status === 'error') {
+      return this.result(
+        request,
+        'error',
+        result.error === undefined ? 'Long-term memory could not be changed.' : result.error.message,
+        0,
+        1
+      );
+    }
+    return this.result(
+      request,
+      'success',
+      mutation.operation === 'update' ? '已更新长期记忆。' : '已忘记这条长期记忆。',
+      1,
+      0
+    );
+  }
+
+  private result(
+    request: LeaderMemoryToolRequest,
+    status: 'success' | 'partial' | 'error',
+    message: string,
+    succeeded: number,
+    failed: number
+  ): LeaderMemoryToolResult {
+    aiLogInfo('[AIPhone][LeaderMemoryTool] conversation=' + request.conversationId +
+      ' turn=' + request.turnId + ' task=' + request.sourceTaskId +
+      ' operation=' + request.mutation.operation + ' status=' + status +
+      ' succeeded=' + succeeded.toString() + ' failed=' + failed.toString());
+    return { status, message };
+  }
+}
+
+class LeaderMemoryCommitGuard implements MemoryCommitGuard {
+  private readonly leaderGuard: LeaderMemoryToolExecutionGuard;
+
+  constructor(leaderGuard: LeaderMemoryToolExecutionGuard) {
+    this.leaderGuard = leaderGuard;
+  }
+
+  isActive(): boolean {
+    return this.leaderGuard.isActive();
+  }
 }
 
 function canaryPlanningContext(
@@ -1417,7 +1420,6 @@ function canaryPlanningContext(
     }
   );
   if (!focusedRelease) {
-    const memory = memoryDefinition();
     tools.push({
       toolId: 'dynamic.search',
       domain: 'dynamic',
@@ -1429,15 +1431,18 @@ function canaryPlanningContext(
       actions: [],
       planningHint: toolPlanningDescriptionForToolId('dynamic.search', allowTrustedOperationTargets)
     });
+  }
+  for (let index = 0; index < MEMORY_ACTION_IDS.length; index += 1) {
     tools.push({
-      toolId: memory.toolId,
-      domain: memory.domain,
-      intent: memory.intent,
-      riskLevel: memory.riskLevel,
-      registeredBackends: memory.backendPriority.slice(),
-      inputSchema: memory.inputSchema,
-      outputSchema: memory.outputSchema,
-      actions: memory.actions.slice()
+      toolId: MEMORY_ACTION_IDS[index],
+      domain: 'memory',
+      intent: MEMORY_ACTION_IDS[index],
+      riskLevel: 'draft',
+      registeredBackends: ['local_adapter'],
+      inputSchema: 'leaderMemoryMutation',
+      outputSchema: 'leaderMemoryToolResult',
+      actions: [],
+      planningHint: memoryPlanningHint(MEMORY_ACTION_IDS[index])
     });
   }
   return {
@@ -1457,8 +1462,7 @@ function scopedLeaderPersonas(
   return leaderPersonaContext(previousPersonaId).map((persona: LeaderPersonaMetadata): LeaderPersonaMetadata => ({
     personaId: persona.personaId,
     name: persona.name,
-    soul: persona.soul,
-    memory: persona.memory,
+    domains: persona.domains.slice(),
     previous: persona.previous,
     activeSkills: persona.activeSkills.filter((skill: LeaderSkillMetadata): boolean =>
       skill.toolIds.every((toolId: string): boolean => visibleToolIds.has(toolId))
@@ -1482,6 +1486,7 @@ export function rememberedPersonaAfterOutcome(
 
 export class MultiAgentCanaryRuntime {
   private readonly runtime: MultiAgentRuntime;
+  private readonly memoryRuntime: PhoneLocalMemoryRuntimePort | null;
   private readonly authority: HotelSurfaceAuthority;
   private readonly followUpIds: PreparedHotelFollowUpIds;
   private readonly surfaceWriter: HotelRuntimeSurfaceWriter;
@@ -1507,6 +1512,7 @@ export class MultiAgentCanaryRuntime {
     const conversationId: string = options.conversationId === undefined ?
       'aiphone-canary-' + Date.now().toString() : options.conversationId;
     this.conversationId = conversationId;
+    this.memoryRuntime = options.memoryRuntime === undefined ? null : options.memoryRuntime;
     this.currentPageSnapshot = options.currentPageSnapshot === undefined ?
       (): RegisteredPageSnapshot | null => null : options.currentPageSnapshot;
     this.currentHostSurface = options.currentHostSurface === undefined ?
@@ -1644,13 +1650,6 @@ export class MultiAgentCanaryRuntime {
       actionCompiler: new MultiAgentActionPlanCompiler(options.model),
       actionExecutor: new CanaryRegisteredExecutor(
         aiphoneExecutor,
-        (update: PersonaMemoryUpdateRequest, context: ActionExecutionContext): boolean => {
-          const hostGeneration = this.turnHostGenerations.get(context.turnId);
-          if (hostGeneration !== undefined && hostGeneration > 0) {
-            return options.onMemoryUpdate(update, hostGeneration);
-          }
-          return false;
-        },
         (surface: A2uiSurfaceState, context: ActionExecutionContext): void => {
           const hostGeneration = this.turnHostGenerations.get(context.turnId);
           if (hostGeneration === undefined || hostGeneration <= 0) {
@@ -1675,7 +1674,10 @@ export class MultiAgentCanaryRuntime {
         },
         currentGmailDraftApply
       ),
-      virtualActionResolver: new MemoryIntentResolver(currentGmailDraftApply),
+      virtualActionResolver: new CanaryVirtualActionIntentResolver(currentGmailDraftApply),
+      memoryToolExecutor: new PhoneLocalLeaderMemoryToolExecutor(
+        options.memoryRuntime === undefined ? null : options.memoryRuntime
+      ),
       submitTimeoutMs: options.submitTimeoutMs,
       actionTimeoutMs: options.actionTimeoutMs,
       settingsFingerprint: options.settingsFingerprint,
@@ -1705,14 +1707,47 @@ export class MultiAgentCanaryRuntime {
     }
     this.submissionSequence++;
     const submissionSequence: number = this.submissionSequence;
-    const input: UserInputPayload = {
-      text: context.text,
-      recentMessages: context.recentMessages,
-      previousPersonaId: this.lastLeaderPersonaId,
-      currentSurfaceSummary: context.currentSurfaceSummary,
-      recentObservations: context.recentObservations
-    };
-    return this.runtime.submit(text, input, capturedGeneration)
+    const recallStartedAt: number = Date.now();
+    const guardRecallGeneration: boolean = this.memoryRuntime !== null && capturedGeneration > 0 &&
+      capturedGeneration === this.currentHostGeneration();
+    const recall: Promise<PhoneLocalRecalledMemory[]> = this.memoryRuntime === null ?
+      Promise.resolve([]) : this.memoryRuntime.recall(text).catch(
+        (_error: Object): PhoneLocalRecalledMemory[] => []
+      );
+    return recall.then((memories: PhoneLocalRecalledMemory[]): Promise<MultiAgentTurnOutcome> => {
+      if (submissionSequence !== this.submissionSequence ||
+        (guardRecallGeneration && capturedGeneration !== this.currentHostGeneration())) {
+        aiLogInfo('[AIPhone][LeaderMemoryRecall] status=canceled count=0 durationMs=' +
+          Math.max(0, Date.now() - recallStartedAt).toString());
+        const canceled: MultiAgentSettledOutcome = {
+          kind: 'settled',
+          ok: false,
+          status: 'canceled',
+          surfaceId: '',
+          message: 'Memory recall no longer belongs to the current turn.',
+          personaId: this.lastLeaderPersonaId,
+          skillId: ''
+        };
+        return Promise.resolve(canceled);
+      }
+      aiLogInfo('[AIPhone][LeaderMemoryRecall] status=' + (memories.length > 0 ? 'hit' : 'miss') +
+        ' count=' + memories.length.toString() + ' durationMs=' +
+        Math.max(0, Date.now() - recallStartedAt).toString());
+      const input: UserInputPayload = {
+        text: context.text,
+        recentMessages: context.recentMessages,
+        recalledMemories: memories.map((memory: PhoneLocalRecalledMemory): RecalledMemoryContext => ({
+          memoryId: memory.memoryId,
+          fact: memory.fact,
+          personaTag: memory.personaTag,
+          authority: memory.authority
+        })),
+        previousPersonaId: this.lastLeaderPersonaId,
+        currentSurfaceSummary: context.currentSurfaceSummary,
+        recentObservations: context.recentObservations
+      };
+      return this.runtime.submit(text, input, capturedGeneration);
+    })
       .then((outcome: MultiAgentTurnOutcome): MultiAgentTurnOutcome => {
         this.lastLeaderPersonaId = rememberedPersonaAfterOutcome(
           this.lastLeaderPersonaId,
@@ -1832,6 +1867,7 @@ export class MultiAgentCanaryRuntime {
   }
 
   dispose(): void {
+    this.submissionSequence++;
     this.runtime.dispose();
     this.aiphoneExecutor.dispose();
     this.mailDetailBridge.dispose();

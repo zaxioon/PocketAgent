@@ -8,6 +8,7 @@ import {
 const MAX_MEMORY_RECORDS_PER_TURN = 5;
 const DEFAULT_MAX_FACT_LENGTH = 240;
 const MAX_SCENE_ID_LENGTH = 64;
+const MAX_PERSONA_TAG_LENGTH = 64;
 const MAX_SOURCE_TURN_ID_LENGTH = 128;
 
 function compactWhitespace(value: string): string {
@@ -59,7 +60,7 @@ function hasMultipleSentences(fact: string): boolean {
 
 function issue(
   inputIndex: number,
-  field: 'batch' | 'fact' | 'sceneId' | 'sourceTurnId',
+  field: 'batch' | 'fact' | 'sceneId' | 'personaTag' | 'authority' | 'sourceTurnId',
   code: string,
   message: string
 ): MemoryValidationIssue {
@@ -87,6 +88,8 @@ export function validateMemoryDraftBatch(
   records.forEach((record: MemoryDraft, index: number): void => {
     const fact = compactWhitespace(record.fact);
     const sceneId = record.sceneId.trim();
+    const personaTag = (record.personaTag ?? sceneId).trim();
+    const authority = record.authority ?? 'leader';
     const sourceTurnId = record.sourceTurnId.trim();
 
     if (fact.length === 0) {
@@ -105,12 +108,21 @@ export function validateMemoryDraftBatch(
       issues.push(issue(index, 'sceneId', 'memory_scene_unknown', 'Memory sceneId is not allowed.'));
     }
 
+    if (!validScopedId(personaTag, MAX_PERSONA_TAG_LENGTH)) {
+      issues.push(issue(index, 'personaTag', 'memory_persona_tag_invalid',
+        'Memory personaTag is invalid.'));
+    }
+
+    if (authority !== 'leader' && authority !== 'seed') {
+      issues.push(issue(index, 'authority', 'memory_authority_invalid', 'Memory authority is invalid.'));
+    }
+
     if (!validScopedId(sourceTurnId, MAX_SOURCE_TURN_ID_LENGTH)) {
       issues.push(issue(index, 'sourceTurnId', 'memory_source_turn_invalid',
         'Memory sourceTurnId is invalid.'));
     }
 
-    sanitized.push({ fact, sceneId, sourceTurnId });
+    sanitized.push({ fact, sceneId, personaTag, authority, sourceTurnId });
   });
 
   return {

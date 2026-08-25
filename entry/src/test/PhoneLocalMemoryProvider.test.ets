@@ -2,6 +2,7 @@ import { describe, expect, it } from '@ohos/hypium';
 import {
   EmbeddingPort,
   MemoryHit,
+  MemoryCommitGuard,
   MemoryRecord,
   MemoryRememberRequest
 } from '@loop/agent-core';
@@ -13,6 +14,8 @@ import {
   PHONE_LOCAL_MEMORY_MAX_CANDIDATE_LIMIT,
   PHONE_LOCAL_MEMORY_MIN_CANDIDATE_LIMIT,
   PHONE_LOCAL_MEMORY_INSERT_SQL,
+  PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL,
+  PHONE_LOCAL_MEMORY_METADATA_SCHEMA_SQL,
   PHONE_LOCAL_MEMORY_SCHEMA_SQL,
   PHONE_LOCAL_MEMORY_UPDATE_SQL,
   PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL,
@@ -31,6 +34,8 @@ function copyRecord(record: MemoryRecord): MemoryRecord {
     memoryId: record.memoryId,
     ownerId: record.ownerId,
     sceneId: record.sceneId,
+    personaTag: record.personaTag,
+    authority: record.authority,
     fact: record.fact,
     normalizedFact: record.normalizedFact,
     factHash: record.factHash,
@@ -68,6 +73,35 @@ class FailingEmbeddingPort implements EmbeddingPort {
   }
 }
 
+class MutableMemoryCommitGuard implements MemoryCommitGuard {
+  active: boolean = true;
+
+  isActive(): boolean {
+    return this.active;
+  }
+}
+
+class CancelingEmbeddingPort implements EmbeddingPort {
+  readonly profileId: string = 'bge-small-zh-v1.5:test';
+  readonly dimension: number = 512;
+  calls: number = 0;
+  private guard: MutableMemoryCommitGuard;
+  private cancelOnCall: number;
+
+  constructor(guard: MutableMemoryCommitGuard, cancelOnCall: number) {
+    this.guard = guard;
+    this.cancelOnCall = cancelOnCall;
+  }
+
+  async embed(_text: string): Promise<number[]> {
+    this.calls += 1;
+    const vector: number[] = new Array<number>(this.dimension).fill(0);
+    vector[0] = 1;
+    if (this.calls === this.cancelOnCall) this.guard.active = false;
+    return vector;
+  }
+}
+
 class CapturingMemoryLogger implements PhoneLocalMemoryLogger {
   entries: PhoneLocalMemoryLogContext[] = [];
 
@@ -80,14 +114,17 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
   records: MemoryRecord[] = [];
   failFact: string = '';
   searchCalls: PhoneLocalMemorySearchRequest[] = [];
+  metadata: Map<string, string> = new Map<string, string>();
+  insertHook: (() => void) | null = null;
 
   async initialize(): Promise<void> {}
 
-  async findByFact(ownerId: string, sceneId: string, factHash: string,
+  async findByFact(ownerId: string, embeddingProfileId: string, factHash: string,
     normalizedFact: string): Promise<MemoryRecord | null> {
     for (let index = 0; index < this.records.length; index += 1) {
       const record = this.records[index];
-      if (record.ownerId === ownerId && record.sceneId === sceneId && record.factHash === factHash &&
+      if (record.ownerId === ownerId && record.embeddingProfileId === embeddingProfileId &&
+        record.factHash === factHash &&
         record.normalizedFact === normalizedFact) return copyRecord(record);
     }
     return null;
@@ -146,11 +183,12 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
     // async lookup here would yield and let two test inserts both observe an empty store.
     for (let index = 0; index < this.records.length; index += 1) {
       const existing = this.records[index];
-      if (existing.ownerId === record.ownerId && existing.sceneId === record.sceneId &&
+      if (existing.ownerId === record.ownerId && existing.embeddingProfileId === record.embeddingProfileId &&
         existing.factHash === record.factHash && existing.normalizedFact === record.normalizedFact) {
         throw new Error('injected unique constraint');
       }
     }
+    if (this.insertHook !== null) this.insertHook();
     this.records.push(copyRecord(record));
   }
 
@@ -180,9 +218,17 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
     }
     return existing;
   }
+
+  async getMetadata(key: string): Promise<string | null> {
+    return this.metadata.get(key) ?? null;
+  }
+
+  async setMetadata(key: string, value: string): Promise<void> {
+    this.metadata.set(key, value);
+  }
 }
 
-function provider(store: FakeMemoryStore, embedder: FakeEmbeddingPort): PhoneLocalMemoryProvider {
+function provider(store: FakeMemoryStore, embedder: EmbeddingPort): PhoneLocalMemoryProvider {
   let nextId = 0;
   let now = 1000;
   return new PhoneLocalMemoryProvider(store, embedder, {
@@ -199,7 +245,14 @@ export default function phoneLocalMemoryProviderTest() {
       expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL.indexOf('BLOB')).assertEqual(-1);
       expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL).assertContain('owner_id TEXT NOT NULL');
       expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL).assertContain('scene_id TEXT NOT NULL');
+      expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL).assertContain('persona_tag TEXT NOT NULL');
+      expect(PHONE_LOCAL_MEMORY_SCHEMA_SQL).assertContain('authority TEXT NOT NULL');
       expect(PHONE_LOCAL_MEMORY_HISTORY_SCHEMA_SQL).assertContain('operation TEXT NOT NULL');
+      expect(PHONE_LOCAL_MEMORY_METADATA_SCHEMA_SQL).assertContain('metadata_key TEXT PRIMARY KEY');
+      expect(PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL).assertContain(
+        'owner_id, embedding_profile_id, fact_hash, normalized_fact'
+      );
+      expect(PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL.indexOf('scene_id')).assertEqual(-1);
       expect(PHONE_LOCAL_MEMORY_DELETE_HISTORY_SQL).assertContain('owner_id = ? AND memory_id = ?');
       expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('USING GSDISKANN(embedding COSINE)');
       expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('queue_size=20');
@@ -242,7 +295,7 @@ export default function phoneLocalMemoryProviderTest() {
       expect(store.records.length).assertEqual(2);
     });
 
-    it('deduplicates the same normalized fact inside one owner and scene', 0, async () => {
+    it('deduplicates the same normalized fact across scenes inside one owner and profile', 0, async () => {
       const store = new FakeMemoryStore();
       const embedder = new FakeEmbeddingPort();
       const memory = provider(store, embedder);
@@ -252,7 +305,7 @@ export default function phoneLocalMemoryProviderTest() {
       });
       const second = await memory.remember({
         ownerId: 'owner-1',
-        records: [{ fact: '  用户喝咖啡不要糖  ', sceneId: 'food_companion', sourceTurnId: 'turn-2' }]
+        records: [{ fact: '  用户喝咖啡不要糖  ', sceneId: 'travel_companion', sourceTurnId: 'turn-2' }]
       });
 
       expect(first.status).assertEqual('success');
@@ -291,6 +344,42 @@ export default function phoneLocalMemoryProviderTest() {
       expect(store.records.length).assertEqual(1);
     });
 
+    it('stops a best-effort batch before commit when its generation guard is canceled', 0, async () => {
+      const store = new FakeMemoryStore();
+      const guard = new MutableMemoryCommitGuard();
+      const embedder = new CancelingEmbeddingPort(guard, 2);
+      const result = await provider(store, embedder).remember({
+        ownerId: 'owner-1', records: [
+          { fact: '第一条长期事实', sceneId: 'global', sourceTurnId: 'turn-1' },
+          { fact: '第二条长期事实', sceneId: 'global', sourceTurnId: 'turn-1' },
+          { fact: '第三条长期事实', sceneId: 'global', sourceTurnId: 'turn-1' }
+        ]
+      }, guard);
+
+      expect(result.status).assertEqual('success');
+      expect(result.succeededCount).assertEqual(1);
+      expect(result.failedCount).assertEqual(2);
+      expect(result.records[1].error?.code ?? '').assertEqual('memory_operation_canceled');
+      expect(result.records[2].error?.code ?? '').assertEqual('memory_operation_canceled');
+      expect(store.records.length).assertEqual(1);
+      expect(embedder.calls).assertEqual(2);
+    });
+
+    it('does not interrupt a write after the store transaction boundary is entered', 0, async () => {
+      const store = new FakeMemoryStore();
+      const guard = new MutableMemoryCommitGuard();
+      store.insertHook = (): void => { guard.active = false; };
+      const result = await provider(store, new FakeEmbeddingPort()).remember({
+        ownerId: 'owner-1', records: [
+          { fact: '事务开始后仍应完成的事实', sceneId: 'global', sourceTurnId: 'turn-1' }
+        ]
+      }, guard);
+
+      expect(result.status).assertEqual('success');
+      expect(store.records.length).assertEqual(1);
+      expect(guard.active).assertFalse();
+    });
+
     it('hard-filters owner and scene before semantic ranking', 0, async () => {
       const store = new FakeMemoryStore();
       const memory = provider(store, new FakeEmbeddingPort());
@@ -326,6 +415,26 @@ export default function phoneLocalMemoryProviderTest() {
       expect(hits.length).assertEqual(1);
     });
 
+    it('searches all scenes for one owner when sceneIds is empty', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      await memory.remember({ ownerId: 'owner-1', records: [
+        { fact: '用户喝咖啡不要糖', sceneId: 'food_companion', sourceTurnId: 'turn-1' },
+        { fact: '用户去过咖啡博物馆', sceneId: 'travel_companion', sourceTurnId: 'turn-2' }
+      ] });
+      await memory.remember({ ownerId: 'owner-2', records: [
+        { fact: '其他用户也去过咖啡博物馆', sceneId: 'travel_companion', sourceTurnId: 'turn-3' }
+      ] });
+
+      const hits = await memory.search({
+        ownerId: 'owner-1', text: '咖啡', sceneIds: [], topK: 5
+      });
+      expect(hits.length).assertEqual(2);
+      expect(hits[0].record.ownerId).assertEqual('owner-1');
+      expect(hits[1].record.ownerId).assertEqual('owner-1');
+      expect(store.searchCalls[0].sceneIds.length).assertEqual(0);
+    });
+
     it('caps database-side vector search to one hundred results', 0, async () => {
       const store = new FakeMemoryStore();
       const memory = provider(store, new FakeEmbeddingPort());
@@ -352,6 +461,31 @@ export default function phoneLocalMemoryProviderTest() {
       const forgotten = await memory.forget('owner-1', memoryId);
       expect(forgotten.status).assertEqual('success');
       expect(await memory.get('owner-1', memoryId)).assertNull();
+    });
+
+    it('cancels update after embedding and forget immediately before their commits', 0, async () => {
+      const store = new FakeMemoryStore();
+      const initial = provider(store, new FakeEmbeddingPort());
+      const added = await initial.remember({ ownerId: 'owner-1', records: [
+        { fact: '用户原本偏好无糖', sceneId: 'global', sourceTurnId: 'turn-1' }
+      ] });
+      const memoryId = added.records[0].record?.memoryId ?? '';
+
+      const updateGuard = new MutableMemoryCommitGuard();
+      const canceling = provider(store, new CancelingEmbeddingPort(updateGuard, 1));
+      const updated = await canceling.update({
+        ownerId: 'owner-1', memoryId, fact: '用户现在偏好半糖', sourceTurnId: 'turn-2'
+      }, updateGuard);
+      expect(updated.status).assertEqual('error');
+      expect(updated.error?.code ?? '').assertEqual('memory_operation_canceled');
+      expect((await initial.get('owner-1', memoryId))?.fact ?? '').assertEqual('用户原本偏好无糖');
+
+      const forgetGuard = new MutableMemoryCommitGuard();
+      forgetGuard.active = false;
+      const forgotten = await initial.forget('owner-1', memoryId, forgetGuard);
+      expect(forgotten.status).assertEqual('error');
+      expect(forgotten.error?.code ?? '').assertEqual('memory_operation_canceled');
+      expect(await initial.get('owner-1', memoryId) === null).assertFalse();
     });
 
     it('prevents another owner from reading updating or forgetting a record by id', 0, async () => {

@@ -10,6 +10,7 @@ import {
   LeaderBimContextUpdate,
   LeaderBimSuggestion,
   LeaderCurrentLocalDateProvider,
+  LeaderMemoryToolExecutor,
   LeaderPlanner,
   LeaderDataTaskInputNormalizer,
   LeaderPlanningContext,
@@ -49,6 +50,7 @@ export interface MultiAgentRuntimeOptions {
   planningContext: LeaderPlanningContext;
   planningContextProvider?: (prompt: string) => LeaderPlanningContext;
   currentLocalDateProvider?: LeaderCurrentLocalDateProvider;
+  memoryToolExecutor?: LeaderMemoryToolExecutor;
   dataTaskInputNormalizer?: LeaderDataTaskInputNormalizer;
   dataAuthorizer: DataTaskAuthorizer;
   dataExecutor: DataTaskExecutor;

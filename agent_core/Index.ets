@@ -49,8 +49,10 @@ export {
 export {
   leaderActionCapabilityIds,
   leaderDataCapabilityIds,
+  leaderMemoryCapabilityIds,
   leaderIsActionCapability,
   leaderIsDataCapability,
+  leaderIsMemoryCapability,
   leaderIsExplicitActionOwner
 } from './src/main/ets/agent/leader/LeaderCapabilityOwnership';
 export { DataAgent } from './src/main/ets/agent/data/DataAgent';

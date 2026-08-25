@@ -1,11 +1,14 @@
 import { common } from '@kit.AbilityKit';
 import { relationalStore } from '@kit.ArkData';
 import util from '@ohos.util';
-import { MemoryHit, MemoryRecord } from '@loop/agent-core';
+import { MemoryAuthority, MemoryHit, MemoryRecord } from '@loop/agent-core';
 
-export const PHONE_LOCAL_MEMORY_VECTOR_DB_NAME: string = 'pocketagent_conversation_memory_vector.db';
+export const PHONE_LOCAL_MEMORY_VECTOR_DB_NAME: string = 'pocketagent_conversation_memory_vector_v2.db';
 export const PHONE_LOCAL_MEMORY_TABLE: string = 'conversation_memory';
 export const PHONE_LOCAL_MEMORY_HISTORY_TABLE: string = 'conversation_memory_history';
+export const PHONE_LOCAL_MEMORY_METADATA_TABLE: string = 'conversation_memory_metadata';
+export const PHONE_LOCAL_MEMORY_SCHEMA_VERSION_KEY: string = 'schema_version';
+export const PHONE_LOCAL_MEMORY_SCHEMA_VERSION: string = '2';
 export const PHONE_LOCAL_MEMORY_VECTOR_DIMENSION: number = 512;
 export const PHONE_LOCAL_MEMORY_MIN_CANDIDATE_LIMIT: number = 100;
 export const PHONE_LOCAL_MEMORY_MAX_CANDIDATE_LIMIT: number = 1000;
@@ -15,6 +18,8 @@ export const PHONE_LOCAL_MEMORY_SCHEMA_SQL: string =
     'memory_id TEXT PRIMARY KEY, ' +
     'owner_id TEXT NOT NULL, ' +
     'scene_id TEXT NOT NULL, ' +
+    'persona_tag TEXT NOT NULL, ' +
+    'authority TEXT NOT NULL, ' +
     'fact TEXT NOT NULL, ' +
     'normalized_fact TEXT NOT NULL, ' +
     'fact_hash TEXT NOT NULL, ' +
@@ -36,9 +41,16 @@ export const PHONE_LOCAL_MEMORY_HISTORY_SCHEMA_SQL: string =
     'created_at INTEGER NOT NULL' +
   ')';
 
+export const PHONE_LOCAL_MEMORY_METADATA_SCHEMA_SQL: string =
+  'CREATE TABLE IF NOT EXISTS conversation_memory_metadata (' +
+    'metadata_key TEXT PRIMARY KEY, ' +
+    'metadata_value TEXT NOT NULL, ' +
+    'updated_at INTEGER NOT NULL' +
+  ')';
+
 export const PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL: string =
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_memory_dedupe ' +
-  'ON conversation_memory(owner_id, scene_id, fact_hash, normalized_fact)';
+  'ON conversation_memory(owner_id, embedding_profile_id, fact_hash, normalized_fact)';
 
 export const PHONE_LOCAL_MEMORY_SCOPE_INDEX_SQL: string =
   'CREATE INDEX IF NOT EXISTS idx_conversation_memory_scope ' +
@@ -54,12 +66,13 @@ export const PHONE_LOCAL_MEMORY_DELETE_HISTORY_SQL: string =
 
 export const PHONE_LOCAL_MEMORY_INSERT_SQL: string =
   'INSERT INTO conversation_memory (' +
-    'memory_id, owner_id, scene_id, fact, normalized_fact, fact_hash, embedding, ' +
+    'memory_id, owner_id, scene_id, persona_tag, authority, fact, normalized_fact, fact_hash, embedding, ' +
     'embedding_profile_id, source_turn_id, created_at, updated_at' +
-  ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+  ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
 export const PHONE_LOCAL_MEMORY_UPDATE_SQL: string =
-  'UPDATE conversation_memory SET scene_id = ?, fact = ?, normalized_fact = ?, fact_hash = ?, ' +
+  'UPDATE conversation_memory SET scene_id = ?, persona_tag = ?, authority = ?, ' +
+  'fact = ?, normalized_fact = ?, fact_hash = ?, ' +
   'embedding = ?, embedding_profile_id = ?, source_turn_id = ?, updated_at = ? ' +
   'WHERE owner_id = ? AND memory_id = ?';
 
@@ -84,7 +97,7 @@ export interface PhoneLocalMemorySearchRequest {
 
 export interface PhoneLocalMemoryStore {
   initialize(): Promise<void>;
-  findByFact(ownerId: string, sceneId: string, factHash: string,
+  findByFact(ownerId: string, embeddingProfileId: string, factHash: string,
     normalizedFact: string): Promise<MemoryRecord | null>;
   get(ownerId: string, memoryId: string): Promise<MemoryRecord | null>;
   list(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]>;
@@ -93,6 +106,8 @@ export interface PhoneLocalMemoryStore {
   replace(ownerId: string, record: MemoryRecord): Promise<void>;
   remove(ownerId: string, memoryId: string): Promise<MemoryRecord | null>;
   removeAll(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]>;
+  getMetadata(key: string): Promise<string | null>;
+  setMetadata(key: string, value: string): Promise<void>;
 }
 
 interface WriteWaiter {
@@ -134,6 +149,8 @@ function recordValues(record: MemoryRecord): relationalStore.ValueType[] {
     record.memoryId,
     record.ownerId,
     record.sceneId,
+    record.personaTag,
+    record.authority,
     record.fact,
     record.normalizedFact,
     record.factHash,
@@ -148,6 +165,8 @@ function recordValues(record: MemoryRecord): relationalStore.ValueType[] {
 function updateValues(ownerId: string, record: MemoryRecord): relationalStore.ValueType[] {
   return [
     record.sceneId,
+    record.personaTag,
+    record.authority,
     record.fact,
     record.normalizedFact,
     record.factHash,
@@ -167,11 +186,17 @@ function vectorFromValue(value: relationalStore.ValueType): number[] {
   return vector;
 }
 
+function memoryAuthorityFromValue(value: string): MemoryAuthority {
+  return value === 'seed' ? 'seed' : 'leader';
+}
+
 function recordFromResult(result: relationalStore.ResultSet): MemoryRecord {
   return {
     memoryId: result.getString(result.getColumnIndex('memory_id')),
     ownerId: result.getString(result.getColumnIndex('owner_id')),
     sceneId: result.getString(result.getColumnIndex('scene_id')),
+    personaTag: result.getString(result.getColumnIndex('persona_tag')),
+    authority: memoryAuthorityFromValue(result.getString(result.getColumnIndex('authority'))),
     fact: result.getString(result.getColumnIndex('fact')),
     normalizedFact: result.getString(result.getColumnIndex('normalized_fact')),
     factHash: result.getString(result.getColumnIndex('fact_hash')),
@@ -259,10 +284,39 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
     const opened = await relationalStore.getRdbStore(this.context, config);
     await opened.execute(PHONE_LOCAL_MEMORY_SCHEMA_SQL);
     await opened.execute(PHONE_LOCAL_MEMORY_HISTORY_SCHEMA_SQL);
+    await opened.execute(PHONE_LOCAL_MEMORY_METADATA_SCHEMA_SQL);
+    const schemaVersion = await this.metadataValue(opened, PHONE_LOCAL_MEMORY_SCHEMA_VERSION_KEY);
     await opened.execute(PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL);
     await opened.execute(PHONE_LOCAL_MEMORY_SCOPE_INDEX_SQL);
     await opened.execute(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL);
+    if (schemaVersion !== PHONE_LOCAL_MEMORY_SCHEMA_VERSION) {
+      const txId = await opened.beginTrans();
+      try {
+        await opened.execute(
+          'INSERT OR REPLACE INTO conversation_memory_metadata ' +
+          '(metadata_key, metadata_value, updated_at) VALUES (?, ?, ?)',
+          txId,
+          [PHONE_LOCAL_MEMORY_SCHEMA_VERSION_KEY, PHONE_LOCAL_MEMORY_SCHEMA_VERSION, Date.now()]
+        );
+        await opened.commit(txId);
+      } catch (error) {
+        await opened.rollback(txId);
+        throw error instanceof Error ? error : new Error('Local memory schema marker write failed.');
+      }
+    }
     this.store = opened;
+  }
+
+  private async metadataValue(store: relationalStore.RdbStore, key: string): Promise<string | null> {
+    const result = await store.querySql(
+      'SELECT metadata_value FROM conversation_memory_metadata WHERE metadata_key = ? LIMIT 1', [key]
+    );
+    try {
+      if (!result.goToFirstRow()) return null;
+      return result.getString(result.getColumnIndex('metadata_value'));
+    } finally {
+      result.close();
+    }
   }
 
   private async readyStore(): Promise<relationalStore.RdbStore> {
@@ -271,13 +325,13 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
     return this.store;
   }
 
-  async findByFact(ownerId: string, sceneId: string, factHash: string,
+  async findByFact(ownerId: string, embeddingProfileId: string, factHash: string,
     normalizedFact: string): Promise<MemoryRecord | null> {
     const store = await this.readyStore();
     const result = await store.querySql(
-      'SELECT * FROM conversation_memory WHERE owner_id = ? AND scene_id = ? ' +
+      'SELECT * FROM conversation_memory WHERE owner_id = ? AND embedding_profile_id = ? ' +
       'AND fact_hash = ? AND normalized_fact = ? LIMIT 1',
-      [ownerId, sceneId, factHash, normalizedFact]
+      [ownerId, embeddingProfileId, factHash, normalizedFact]
     );
     const records = recordsFromResult(result);
     return records.length > 0 ? records[0] : null;
@@ -408,6 +462,41 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
       await this.remove(ownerId, existing[index].memoryId);
     }
     return existing;
+  }
+
+  async getMetadata(key: string): Promise<string | null> {
+    const store = await this.readyStore();
+    const result = await store.querySql(
+      'SELECT metadata_value FROM conversation_memory_metadata WHERE metadata_key = ? LIMIT 1', [key]
+    );
+    try {
+      if (!result.goToFirstRow()) return null;
+      return result.getString(result.getColumnIndex('metadata_value'));
+    } finally {
+      result.close();
+    }
+  }
+
+  async setMetadata(key: string, value: string): Promise<void> {
+    const store = await this.readyStore();
+    await this.writeMutex.acquire();
+    try {
+      const txId = await store.beginTrans();
+      try {
+        await store.execute(
+          'INSERT OR REPLACE INTO conversation_memory_metadata ' +
+          '(metadata_key, metadata_value, updated_at) VALUES (?, ?, ?)',
+          txId, [key, value, Date.now()]
+        );
+        await store.commit(txId);
+      } catch (error) {
+        await store.rollback(txId);
+        const failure: Error = error instanceof Error ? error : new Error('Local memory metadata write failed.');
+        throw failure;
+      }
+    } finally {
+      this.writeMutex.release();
+    }
   }
 
   private async insertHistory(store: relationalStore.RdbStore, txId: number, record: MemoryRecord,

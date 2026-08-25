@@ -1,5 +1,6 @@
 import {
   MemoryBatchResult,
+  MemoryCommitGuard,
   MemoryHit,
   MemoryQuery,
   MemoryRecord,
@@ -21,15 +22,15 @@ export interface EmbeddingPort {
  * Storage, vector indexing and model lifecycle belong to platform adapters.
  */
 export interface ConversationMemoryPort {
-  remember(request: MemoryRememberRequest): Promise<MemoryBatchResult>;
+  remember(request: MemoryRememberRequest, guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
 
   search(query: MemoryQuery): Promise<MemoryHit[]>;
 
   get(ownerId: string, memoryId: string): Promise<MemoryRecord | null>;
 
-  update(request: MemoryUpdateRequest): Promise<MemoryWriteResult>;
+  update(request: MemoryUpdateRequest, guard?: MemoryCommitGuard): Promise<MemoryWriteResult>;
 
-  forget(ownerId: string, memoryId: string): Promise<MemoryWriteResult>;
+  forget(ownerId: string, memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult>;
 
-  forgetAll(ownerId: string, sceneIds?: string[]): Promise<MemoryBatchResult>;
+  forgetAll(ownerId: string, sceneIds?: string[], guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
 }
