@@ -609,9 +609,15 @@ function hasBoundedLeaderModelCalls(source) {
     /const\s+MAX_LEADER_PROMPT_CHARS\s*:\s*number\s*=\s*100000\s*;/.test(live) &&
     prompt.includes('toolCatalog.length > MAX_LEADER_TOOL_CATALOG_CHARS') &&
     prompt.includes("throw new Error('LEADER_TOOL_CATALOG_LIMIT')") &&
-    prompt.includes('const stableSystemPrompt: string = [') &&
+    prompt.includes('const memoryAvailable: boolean = context.tools.some(') &&
+    prompt.includes('(tool: LeaderToolMetadata): boolean => this.memoryCapabilityId(tool.toolId)') &&
+    prompt.includes('const stableSystemPromptRaw: string = [') &&
+    prompt.includes('leaderSystemPrompt(memoryAvailable)') &&
     prompt.includes("'Registry capabilities: ' + toolCatalog") &&
+    prompt.includes('memoryAvailable ? C10_C11_SELECTION_CONTRACT : C10_C11_SELECTION_CONTRACT_WITHOUT_MEMORY') &&
+    prompt.includes("memoryAvailable ? MEMORY_MUTATION_CONTRACT : ''") &&
     prompt.includes('const dynamicPrompt: string = [') &&
+    prompt.includes('const stableSystemPrompt: string = stableSystemPromptRaw;') &&
     prompt.includes('return { stableSystemPrompt, dynamicPrompt }') &&
     bounded.includes('stableSystemPrompt.length + prompt.length > MAX_LEADER_PROMPT_CHARS') &&
     bounded.includes("throw new Error('LEADER_PROMPT_LIMIT')") &&
@@ -1617,6 +1623,24 @@ function verifySourceContracts() {
       )
     ),
     'verifier rejects removal of the live tool catalog bound'
+  );
+  assert(
+    !hasBoundedLeaderModelCalls(
+      canaryLeaderPlanner.replace(
+        'leaderSystemPrompt(memoryAvailable)',
+        'leaderSystemPrompt(true)'
+      )
+    ),
+    'verifier rejects a stable system schema that bypasses memory availability'
+  );
+  assert(
+    !hasBoundedLeaderModelCalls(
+      canaryLeaderPlanner.replace(
+        'const stableSystemPrompt: string = stableSystemPromptRaw;',
+        'const stableSystemPrompt: string = leaderSystemPrompt(memoryAvailable);'
+      )
+    ),
+    'verifier rejects removal of the availability-projected stable system prompt'
   );
   assertContains(index, "export { runAiphoneTool }", 'public export includes runAiphoneTool');
   assertContains(index, 'aiphoneInfoJsonl', 'public export includes final answer helper');

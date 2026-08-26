@@ -138,6 +138,7 @@ import conversationMemoryCoreTest from './ConversationMemoryCore.test';
 import phoneLocalMemoryProviderTest from './PhoneLocalMemoryProvider.test';
 import phoneLocalMemoryRuntimeTest from './PhoneLocalMemoryRuntime.test';
 import phoneLocalMemoryBlobFallbackTest from './PhoneLocalMemoryBlobFallback.test';
+import phoneLocalMemoryAvailabilityTest from './PhoneLocalMemoryAvailability.test';
 import bertWordPieceTokenizerTest from './BertWordPieceTokenizer.test';
 import bgeMindSporeEmbeddingPortTest from './BgeMindSporeEmbeddingPort.test';
 
@@ -282,6 +283,7 @@ export default function testsuite() {
   phoneLocalMemoryProviderTest();
   phoneLocalMemoryRuntimeTest();
   phoneLocalMemoryBlobFallbackTest();
+  phoneLocalMemoryAvailabilityTest();
   bertWordPieceTokenizerTest();
   bgeMindSporeEmbeddingPortTest();
 }

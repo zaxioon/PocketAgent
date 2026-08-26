@@ -86,6 +86,7 @@ import {
   PhoneLocalMemoryRuntimePort,
   PhoneLocalRecalledMemory
 } from '../../../memory/PhoneLocalMemoryRuntime';
+import { PhoneLocalMemoryAvailabilityPort } from '../../../memory/PhoneLocalMemoryAvailability';
 import {
   MemoryCandidatesForgetActionArgs,
   MemoryCandidateSelectionItem,
@@ -226,6 +227,8 @@ export interface MultiAgentCanaryOptions {
   currentHostGeneration?: () => number;
   onSurface: (surface: A2uiSurfaceState, runtimeGeneration: number) => boolean;
   memoryRuntime?: PhoneLocalMemoryRuntimePort;
+  /** Process-lifetime feature gate; omitted preserves existing injected-test behavior. */
+  memoryAvailability?: PhoneLocalMemoryAvailabilityPort;
   onMailDetail?: (
     event: MailDetailInPlaceEvent,
     runtimeGeneration: number,
@@ -1537,7 +1540,8 @@ function canaryPlanningContext(
   previousPersonaId: string,
   _prompt: string = '',
   allowTrustedOperationTargets: boolean = false,
-  focusedRelease: boolean = false
+  focusedRelease: boolean = false,
+  memoryAvailable: boolean = true
 ): LeaderPlanningContext {
   const definitions: ToolDefinition[] = focusedRelease ? allAiphoneToolDefinitions() : allToolDefinitions();
   const tools: LeaderToolMetadata[] = definitions
@@ -1582,7 +1586,7 @@ function canaryPlanningContext(
       planningHint: toolPlanningDescriptionForToolId('dynamic.search', allowTrustedOperationTargets)
     });
   }
-  for (let index = 0; index < MEMORY_ACTION_IDS.length; index += 1) {
+  for (let index = 0; memoryAvailable && index < MEMORY_ACTION_IDS.length; index += 1) {
     tools.push({
       toolId: MEMORY_ACTION_IDS[index],
       domain: 'memory',
@@ -1597,13 +1601,21 @@ function canaryPlanningContext(
   }
   return {
     tools,
-    personas: scopedLeaderPersonas(previousPersonaId, tools)
+    personas: scopedLeaderPersonas(previousPersonaId, tools, memoryAvailable)
   };
+}
+
+function instructionsWithoutMemoryCapabilityIds(value: string): string {
+  return value.split('\n').filter((line: string): boolean =>
+    MEMORY_ACTION_IDS.every((toolId: string): boolean => line.indexOf(toolId) < 0) &&
+      line.indexOf('memory.recall') < 0
+  ).join('\n');
 }
 
 function scopedLeaderPersonas(
   previousPersonaId: string,
-  tools: LeaderToolMetadata[]
+  tools: LeaderToolMetadata[],
+  memoryAvailable: boolean = true
 ): LeaderPersonaMetadata[] {
   const visibleToolIds: Set<string> = new Set<string>();
   for (let index = 0; index < tools.length; index++) {
@@ -1614,7 +1626,16 @@ function scopedLeaderPersonas(
     name: persona.name,
     domains: persona.domains.slice(),
     previous: persona.previous,
-    activeSkills: persona.activeSkills.filter((skill: LeaderSkillMetadata): boolean =>
+    activeSkills: persona.activeSkills.map((skill: LeaderSkillMetadata): LeaderSkillMetadata => ({
+      skillId: skill.skillId,
+      description: skill.description,
+      instructions: memoryAvailable ? skill.instructions :
+        instructionsWithoutMemoryCapabilityIds(skill.instructions),
+      status: skill.status,
+      toolIds: memoryAvailable ? skill.toolIds.slice() : skill.toolIds.filter(
+        (toolId: string): boolean => MEMORY_ACTION_IDS.indexOf(toolId) < 0
+      )
+    })).filter((skill: LeaderSkillMetadata): boolean =>
       skill.toolIds.every((toolId: string): boolean => visibleToolIds.has(toolId))
     )
   }));
@@ -1637,6 +1658,7 @@ export function rememberedPersonaAfterOutcome(
 export class MultiAgentCanaryRuntime {
   private readonly runtime: MultiAgentRuntime;
   private readonly memoryRuntime: PhoneLocalMemoryRuntimePort | null;
+  private readonly memoryAvailable: boolean;
   private readonly authority: HotelSurfaceAuthority;
   private readonly followUpIds: PreparedHotelFollowUpIds;
   private readonly surfaceWriter: HotelRuntimeSurfaceWriter;
@@ -1667,7 +1689,10 @@ export class MultiAgentCanaryRuntime {
     const conversationId: string = options.conversationId === undefined ?
       'aiphone-canary-' + Date.now().toString() : options.conversationId;
     this.conversationId = conversationId;
-    this.memoryRuntime = options.memoryRuntime === undefined ? null : options.memoryRuntime;
+    this.memoryAvailable = options.memoryAvailability === undefined ? true :
+      options.memoryAvailability.isAvailable();
+    this.memoryRuntime = this.memoryAvailable && options.memoryRuntime !== undefined ?
+      options.memoryRuntime : null;
     this.onHostSurface = options.onSurface;
     this.currentPageSnapshot = options.currentPageSnapshot === undefined ?
       (): RegisteredPageSnapshot | null => null : options.currentPageSnapshot;
@@ -1773,7 +1798,8 @@ export class MultiAgentCanaryRuntime {
     this.aiphoneExecutor = aiphoneExecutor;
     const allowTrustedOperationTargets = options.allowTrustedOperationTargets === true;
     const initialContext = canaryPlanningContext(
-      this.lastLeaderPersonaId, '', allowTrustedOperationTargets, options.focusedRelease === true
+      this.lastLeaderPersonaId, '', allowTrustedOperationTargets, options.focusedRelease === true,
+      this.memoryAvailable
     );
     const dataTaskInputNormalizer: LeaderDataTaskInputNormalizer = (
       input: InputUserPayload,
@@ -1786,7 +1812,7 @@ export class MultiAgentCanaryRuntime {
       dataTaskInputNormalizer
     );
     const leaderMemoryTools = new PhoneLocalLeaderMemoryToolExecutor(
-      options.memoryRuntime === undefined ? null : options.memoryRuntime,
+      this.memoryRuntime,
       (
         request: LeaderMemoryRecallToolRequest,
         observation: MemoryRecallObservation
@@ -1799,7 +1825,8 @@ export class MultiAgentCanaryRuntime {
       planningContext: initialContext,
       planningContextProvider: (prompt: string): LeaderPlanningContext =>
         canaryPlanningContext(
-          this.lastLeaderPersonaId, prompt, allowTrustedOperationTargets, options.focusedRelease === true
+          this.lastLeaderPersonaId, prompt, allowTrustedOperationTargets, options.focusedRelease === true,
+          this.memoryAvailable
         ),
       currentLocalDateProvider: options.currentLocalDate,
       dataTaskInputNormalizer,
@@ -1838,8 +1865,8 @@ export class MultiAgentCanaryRuntime {
         currentGmailDraftApply
       ),
       virtualActionResolver: new CanaryVirtualActionIntentResolver(currentGmailDraftApply),
-      memoryToolExecutor: leaderMemoryTools,
-      memoryRecallToolExecutor: leaderMemoryTools,
+      memoryToolExecutor: this.memoryAvailable ? leaderMemoryTools : undefined,
+      memoryRecallToolExecutor: this.memoryAvailable ? leaderMemoryTools : undefined,
       submitTimeoutMs: options.submitTimeoutMs,
       actionTimeoutMs: options.actionTimeoutMs,
       settingsFingerprint: options.settingsFingerprint,
@@ -1871,6 +1898,25 @@ export class MultiAgentCanaryRuntime {
     }
     this.submissionSequence++;
     const submissionSequence: number = this.submissionSequence;
+    if (!this.memoryAvailable) {
+      const input: UserInputPayload = {
+        text: context.text,
+        recentMessages: context.recentMessages,
+        sessionSummary: context.sessionSummary,
+        lastTurnPersonaId: this.lastLeaderPersonaId,
+        currentSurfaceSummary: context.currentSurfaceSummary,
+        recentObservations: context.recentObservations
+      };
+      return this.runtime.submit(text, input, capturedGeneration)
+        .then((outcome: MultiAgentTurnOutcome): MultiAgentTurnOutcome => {
+          this.lastLeaderPersonaId = rememberedPersonaAfterOutcome(
+            this.lastLeaderPersonaId,
+            outcome,
+            submissionSequence === this.submissionSequence
+          );
+          return outcome;
+        });
+    }
     let recalledForSubmission: RecalledMemoryContext[] = [];
     const recallStartedAt: number = Date.now();
     const guardRecallGeneration: boolean = this.memoryRuntime !== null && capturedGeneration > 0 &&

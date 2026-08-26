@@ -263,6 +263,10 @@ import { PublicPersonaPage } from './components/PublicPersonaPage';
 import { PublicPersonaClient } from '../../publicpersona/PublicPersonaClient';
 import { PhoneLocalMemoryRuntime } from '../../memory/PhoneLocalMemoryRuntime';
 import {
+  PhoneLocalMemoryAvailabilityPort,
+  phoneLocalMemoryAvailabilityForContext
+} from '../../memory/PhoneLocalMemoryAvailability';
+import {
   PublicPersonaCandidate,
   PublicPersonaPhase,
   PublicPersonaProgress,
@@ -1183,6 +1187,7 @@ struct Index {
   private hotelReturnSurface: A2uiSurfaceState | null = null;
   private multiAgentRuntime: MultiAgentCanaryRuntime | null = null;
   private phoneLocalMemoryRuntime: PhoneLocalMemoryRuntime | null = null;
+  private phoneLocalMemoryAvailability: PhoneLocalMemoryAvailabilityPort | null = null;
   private bimStoreInstance: BimStore | null = null;
   private bimCuratorTail: Promise<void> = Promise.resolve();
   private pendingBimEvidence: BimTurnEvidence | null = null;
@@ -4114,7 +4119,9 @@ struct Index {
       settingsFingerprint: fingerprint,
       focusedRelease: true
     };
-    options.memoryRuntime = this.localMemoryRuntime();
+    const memoryAvailability = this.localMemoryAvailability();
+    options.memoryAvailability = memoryAvailability;
+    if (memoryAvailability.isAvailable()) options.memoryRuntime = this.localMemoryRuntime();
     if (ENABLE_MULTI_AGENT_UI_LAYOUT_LLM && provider.isConfigured()) {
       options.uiLayoutPlanner = new A2uiAgentRunner(new OpenAiA2uiModel(provider));
     }
@@ -4129,6 +4136,14 @@ struct Index {
       this.phoneLocalMemoryRuntime = new PhoneLocalMemoryRuntime(context);
     }
     return this.phoneLocalMemoryRuntime;
+  }
+
+  private localMemoryAvailability(): PhoneLocalMemoryAvailabilityPort {
+    if (this.phoneLocalMemoryAvailability === null) {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      this.phoneLocalMemoryAvailability = phoneLocalMemoryAvailabilityForContext(context);
+    }
+    return this.phoneLocalMemoryAvailability;
   }
 
   private disposeHotelRuntime(): void {

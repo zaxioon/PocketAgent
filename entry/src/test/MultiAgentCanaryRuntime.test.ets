@@ -54,12 +54,15 @@ import {
   PhoneLocalMemoryRuntimePort,
   PhoneLocalRecalledMemory
 } from '../main/ets/memory/PhoneLocalMemoryRuntime';
+import { PhoneLocalMemoryAvailabilityPort } from '../main/ets/memory/PhoneLocalMemoryAvailability';
 import {
   MultiAgentCanaryActionContext,
   MultiAgentCanaryOptions,
   MultiAgentCanaryRuntime,
   rememberedPersonaAfterOutcome
 } from '../main/ets/pages/A2uiHome/agent/MultiAgentCanaryRuntime';
+import { SESSION_COMPACTION_TOKEN_THRESHOLD } from
+  '../main/ets/pages/A2uiHome/agent/SessionContextCompaction';
 import {
   RegisteredPageActionContext,
   SystemUriOpener
@@ -725,6 +728,18 @@ class RecordingPhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
 class ThrowingRecallMemoryRuntime extends RecordingPhoneLocalMemoryRuntime {
   async recall(_text: string, _topK: number = 5): Promise<PhoneLocalRecalledMemory[]> {
     throw new Error('private recall failure');
+  }
+}
+
+class StaticMemoryAvailability implements PhoneLocalMemoryAvailabilityPort {
+  private readonly available: boolean;
+
+  constructor(available: boolean) {
+    this.available = available;
+  }
+
+  isAvailable(): boolean {
+    return this.available;
   }
 }
 
@@ -3457,6 +3472,43 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(bus.count(AgentMessageType.ACTION_PLAN_REQUEST)).assertEqual(0);
       runtime.dispose();
     });
+
+    it('keeps ordinary session planning but hides and skips all memory capabilities when the model is absent', 0,
+      async () => {
+        const model = new QueueModel([ANSWER_DECISION]);
+        const memory = new RecordingPhoneLocalMemoryRuntime();
+        const options = canaryOptions(
+          model, new CanaryHotelExecutor(), new RecordingOpener(), [], []
+        );
+        options.memoryRuntime = memory;
+        options.memoryAvailability = new StaticMemoryAvailability(false);
+        const runtime = new MultiAgentCanaryRuntime(options);
+
+        const outcome = await runtime.submit('请记住，但模型文件缺失时正常回答', {
+          text: '请记住，但模型文件缺失时正常回答',
+          sessionSummary: '仍然保留的滚动会话摘要'
+        }) as MultiAgentSettledOutcome;
+
+        expect(outcome.status).assertEqual('success');
+        expect(memory.recallQueries.length).assertEqual(0);
+        expect(memory.rememberCalls.length).assertEqual(0);
+        expect(memory.forgetCalls.length).assertEqual(0);
+        expect(model.systemPrompts[0].indexOf('memory.remember')).assertEqual(-1);
+        expect(model.systemPrompts[0].indexOf('memory.update')).assertEqual(-1);
+        expect(model.systemPrompts[0].indexOf('memory.forget')).assertEqual(-1);
+        expect(model.systemPrompts[0].indexOf('memory.recall')).assertEqual(-1);
+        expect(model.systemPrompts[0].indexOf('"skillId":"food-search"')).assertLarger(-1);
+        expect(model.systemPrompts[0].indexOf('"toolIds":["food.search"]')).assertLarger(-1);
+        expect(model.prompts[0].indexOf('[memory.recall Tool Observation]')).assertEqual(-1);
+        expect(model.prompts[0].indexOf('memory.remember')).assertEqual(-1);
+        expect(model.prompts[0].indexOf('memory.update')).assertEqual(-1);
+        expect(model.prompts[0].indexOf('memory.forget')).assertEqual(-1);
+        expect(model.prompts[0].indexOf('memory.recall')).assertEqual(-1);
+        expect(model.prompts[0].indexOf('仍然保留的滚动会话摘要')).assertLarger(-1);
+        expect(SESSION_COMPACTION_TOKEN_THRESHOLD).assertEqual(50000);
+        expect(model.prompts.length).assertEqual(1);
+        runtime.dispose();
+      });
 
     it('deletes one exact opaque multi-selection and rejects forged empty duplicate stale or replayed actions', 0,
       async () => {
