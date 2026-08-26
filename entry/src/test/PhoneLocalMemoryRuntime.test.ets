@@ -2,10 +2,8 @@ import { describe, expect, it } from '@ohos/hypium';
 import { EmbeddingPort, MemoryCommitGuard, MemoryHit, MemoryRecord } from '@loop/agent-core';
 import {
   PHONE_LOCAL_MEMORY_OWNER_ID,
-  PHONE_LOCAL_MEMORY_SEED_MARKER,
   PhoneLocalMemoryRuntime,
-  PhoneLocalMemoryRuntimeLogger,
-  PhoneLocalMemoryRuntimeOptions
+  PhoneLocalMemoryRuntimeLogger
 } from '../main/ets/memory/PhoneLocalMemoryRuntime';
 import {
   PHONE_LOCAL_MEMORY_OPERATION_CANCELED,
@@ -80,8 +78,6 @@ function requireRuntimeCommit(guard?: MemoryCommitGuard): void {
 class RuntimeMemoryStore implements PhoneLocalMemoryStore {
   records: MemoryRecord[] = [];
   metadata: Map<string, string> = new Map<string, string>();
-  failOnceFact: string = '';
-  failedOnce: boolean = false;
 
   async initialize(): Promise<void> {}
 
@@ -130,10 +126,6 @@ class RuntimeMemoryStore implements PhoneLocalMemoryStore {
 
   async insert(record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void> {
     requireRuntimeCommit(guard);
-    if (!this.failedOnce && record.fact === this.failOnceFact) {
-      this.failedOnce = true;
-      throw new Error('injected one-time seed failure');
-    }
     const duplicate = await this.findByFact(
       record.ownerId, record.embeddingProfileId, record.factHash, record.normalizedFact
     );
@@ -184,11 +176,7 @@ class RuntimeMemoryStore implements PhoneLocalMemoryStore {
 
 class RuntimeBackendRegistry implements PhoneLocalMemoryBackendRegistryPort {
   selected: PhoneLocalMemoryBackendId | null;
-  seedBlocked: boolean = false;
   writes: PhoneLocalMemoryBackendId[] = [];
-  calls: string[] = [];
-  failSelectedWrites: number = 0;
-  failSeedBlockedWrites: number = 0;
 
   constructor(selected: PhoneLocalMemoryBackendId | null = null) {
     this.selected = selected;
@@ -199,26 +187,8 @@ class RuntimeBackendRegistry implements PhoneLocalMemoryBackendRegistryPort {
   }
 
   async setSelectedBackend(backendId: PhoneLocalMemoryBackendId): Promise<void> {
-    this.calls.push('selected:' + backendId);
-    if (this.failSelectedWrites > 0) {
-      this.failSelectedWrites -= 1;
-      throw new Error('injected selected backend marker failure');
-    }
     this.selected = backendId;
     this.writes.push(backendId);
-  }
-
-  async isSeedBlocked(): Promise<boolean> {
-    return this.seedBlocked;
-  }
-
-  async setSeedBlocked(): Promise<void> {
-    this.calls.push('seed_blocked');
-    if (this.failSeedBlockedWrites > 0) {
-      this.failSeedBlockedWrites -= 1;
-      throw new Error('injected seed blocked marker failure');
-    }
-    this.seedBlocked = true;
   }
 }
 
@@ -262,7 +232,7 @@ function nextRuntimeMemoryId(): string {
 
 export default function phoneLocalMemoryRuntimeTest() {
   describe('PhoneLocalMemoryRuntime', () => {
-    it('seeds eight global records once and preserves a forgotten seed after restart', 0, async () => {
+    it('starts empty and does not write fixed facts or seed metadata across restart', 0, async () => {
       const store = new RuntimeMemoryStore();
       const runtime = new PhoneLocalMemoryRuntime(null, {
         storeFactory: (): PhoneLocalMemoryStore => store,
@@ -270,23 +240,19 @@ export default function phoneLocalMemoryRuntimeTest() {
         idFactory: nextRuntimeMemoryId
       });
       const hits = await runtime.recall('工作邮件和晚间足球');
+      expect(hits.length).assertEqual(0);
+      expect(store.records.length).assertEqual(0);
+      expect(store.metadata.size).assertEqual(0);
 
-      expect(store.records.length).assertEqual(8);
-      expect(store.metadata.get(PHONE_LOCAL_MEMORY_SEED_MARKER) ?? '').assertEqual('complete');
-      expect(hits.length).assertEqual(5);
-      expect(hits[0].memoryId.length > 0).assertTrue();
-      expect(hits[0].authority).assertEqual('seed');
-      expect(store.records[0].ownerId).assertEqual(PHONE_LOCAL_MEMORY_OWNER_ID);
-      expect(store.records[0].sceneId).assertEqual('global');
-
-      await runtime.forget(store.records[0].memoryId);
       const restarted = new PhoneLocalMemoryRuntime(null, {
         storeFactory: (): PhoneLocalMemoryStore => store,
         embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
         idFactory: nextRuntimeMemoryId
       });
-      await restarted.recall('饮品');
-      expect(store.records.length).assertEqual(7);
+      const restartedHits = await restarted.recall('饮品');
+      expect(restartedHits.length).assertEqual(0);
+      expect(store.records.length).assertEqual(0);
+      expect(store.metadata.size).assertEqual(0);
     });
 
     it('writes leader facts globally and bounds the recalled projection', 0, async () => {
@@ -351,29 +317,6 @@ export default function phoneLocalMemoryRuntimeTest() {
       expect(twentyHits.length).assertEqual(20);
     });
 
-    it('leaves the marker unset after a partial seed failure and fills the gap next startup', 0, async () => {
-      const store = new RuntimeMemoryStore();
-      store.failOnceFact = '用户出行时偏好少换乘。';
-      const first = new PhoneLocalMemoryRuntime(null, {
-        storeFactory: (): PhoneLocalMemoryStore => store,
-        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
-        idFactory: nextRuntimeMemoryId
-      });
-      await first.recall('出行');
-
-      expect(store.records.length).assertEqual(7);
-      expect(store.metadata.get(PHONE_LOCAL_MEMORY_SEED_MARKER) === undefined).assertTrue();
-
-      const second = new PhoneLocalMemoryRuntime(null, {
-        storeFactory: (): PhoneLocalMemoryStore => store,
-        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
-        idFactory: nextRuntimeMemoryId
-      });
-      await second.recall('出行');
-      expect(store.records.length).assertEqual(8);
-      expect(store.metadata.get(PHONE_LOCAL_MEMORY_SEED_MARKER) ?? '').assertEqual('complete');
-    });
-
     it('times out recall without exposing the query or retrying inside the turn', 0, async () => {
       const store = new RuntimeMemoryStore();
       const logger = new RuntimeLogger();
@@ -412,8 +355,7 @@ export default function phoneLocalMemoryRuntimeTest() {
 
       expect(hits.length).assertEqual(0);
       expect(mutation.status).assertEqual('error');
-      expect(logger.messages.length > 0).assertTrue();
-      expect(logger.messages.join('|').indexOf(query)).assertEqual(-1);
+      expect(logger.messages.length).assertEqual(0);
     });
 
     it('selects and caches the BLOB backend when vector initialization fails', 0, async () => {
@@ -443,7 +385,8 @@ export default function phoneLocalMemoryRuntimeTest() {
       expect(vectorFactories).assertEqual(1);
       expect(blobFactories).assertEqual(1);
       expect(registry.selected ?? '').assertEqual('blob');
-      expect(blobStore.metadata.get(PHONE_LOCAL_MEMORY_SEED_MARKER) ?? '').assertEqual('complete');
+      expect(blobStore.records.length).assertEqual(0);
+      expect(blobStore.metadata.size).assertEqual(0);
       expect(logger.messages.join('|')).assertContain('memory_vector_backend_unavailable');
     });
 
@@ -462,7 +405,8 @@ export default function phoneLocalMemoryRuntimeTest() {
       await runtime.recall('probe fallback');
       expect(vectorStore.searchCalls).assertEqual(1);
       expect(registry.selected ?? '').assertEqual('blob');
-      expect(blobStore.records.length).assertEqual(8);
+      expect(blobStore.records.length).assertEqual(0);
+      expect(blobStore.metadata.size).assertEqual(0);
     });
 
     it('keeps a previously selected BLOB backend sticky when vector is available again', 0, async () => {
@@ -483,35 +427,11 @@ export default function phoneLocalMemoryRuntimeTest() {
       await runtime.recall('sticky blob');
       expect(vectorFactories).assertEqual(0);
       expect(registry.selected ?? '').assertEqual('blob');
-      expect(blobStore.records.length).assertEqual(8);
+      expect(blobStore.records.length).assertEqual(0);
+      expect(blobStore.metadata.size).assertEqual(0);
     });
 
-    it('blocks seed restoration before publishing a changed backend marker', 0, async () => {
-      const failureModes: string[] = ['seed_blocked', 'selected'];
-      for (let index = 0; index < failureModes.length; index += 1) {
-        const blobStore = new RuntimeMemoryStore();
-        const registry = new RuntimeBackendRegistry('vector');
-        if (failureModes[index] === 'seed_blocked') registry.failSeedBlockedWrites = 1;
-        else registry.failSelectedWrites = 1;
-        const options: PhoneLocalMemoryRuntimeOptions = {
-          vectorStoreFactory: (): PhoneLocalMemoryStore => new InitializationFailureStore(),
-          blobStoreFactory: (): PhoneLocalMemoryStore => blobStore,
-          backendRegistryFactory: (): PhoneLocalMemoryBackendRegistryPort => registry,
-          embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
-          idFactory: nextRuntimeMemoryId
-        };
-
-        await new PhoneLocalMemoryRuntime(null, options).recall('marker failure');
-        expect(blobStore.records.length).assertEqual(0);
-        await new PhoneLocalMemoryRuntime(null, options).recall('marker failure restart');
-        expect(blobStore.records.length).assertEqual(0);
-        expect(registry.seedBlocked).assertTrue();
-        const joinedCalls = registry.calls.join(',');
-        expect(joinedCalls.indexOf('seed_blocked') < joinedCalls.lastIndexOf('selected:blob')).assertTrue();
-      }
-    });
-
-    it('detects an unmigrated backend change and does not restore seed records', 0, async () => {
+    it('detects an unmigrated backend change without manufacturing memory records', 0, async () => {
       const blobStore = new RuntimeMemoryStore();
       const registry = new RuntimeBackendRegistry('vector');
       const logger = new RuntimeLogger();
@@ -535,10 +455,9 @@ export default function phoneLocalMemoryRuntimeTest() {
       });
       await restarted.recall('changed backend restart');
       expect(blobStore.records.length).assertEqual(0);
-      expect(registry.seedBlocked).assertTrue();
-      expect(blobStore.metadata.get(PHONE_LOCAL_MEMORY_SEED_MARKER) === undefined).assertTrue();
+      expect(blobStore.metadata.size).assertEqual(0);
+      expect(registry.selected ?? '').assertEqual('blob');
       expect(logger.messages.join('|')).assertContain('memory_backend_changed_data_not_migrated');
-      expect(logger.messages.join('|')).assertContain('memory_seed_skipped_backend_changed');
     });
 
     it('does not switch or instantiate BLOB after a transient vector search failure', 0, async () => {

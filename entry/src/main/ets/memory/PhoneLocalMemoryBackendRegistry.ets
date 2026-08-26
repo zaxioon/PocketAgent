@@ -6,7 +6,6 @@ export type PhoneLocalMemoryBackendId = 'vector' | 'blob';
 export const PHONE_LOCAL_MEMORY_BACKEND_REGISTRY_DB_NAME: string =
   'pocketagent_conversation_memory_backend_v1.db';
 export const PHONE_LOCAL_MEMORY_BACKEND_MARKER_KEY: string = 'selected_backend';
-export const PHONE_LOCAL_MEMORY_SEED_BLOCKED_MARKER_KEY: string = 'seed_blocked_unmigrated';
 export const PHONE_LOCAL_MEMORY_BACKEND_REGISTRY_SCHEMA_SQL: string =
   'CREATE TABLE IF NOT EXISTS conversation_memory_backend_registry (' +
     'metadata_key TEXT PRIMARY KEY, metadata_value TEXT NOT NULL, updated_at INTEGER NOT NULL)';
@@ -14,8 +13,6 @@ export const PHONE_LOCAL_MEMORY_BACKEND_REGISTRY_SCHEMA_SQL: string =
 export interface PhoneLocalMemoryBackendRegistryPort {
   getSelectedBackend(): Promise<PhoneLocalMemoryBackendId | null>;
   setSelectedBackend(backendId: PhoneLocalMemoryBackendId): Promise<void>;
-  isSeedBlocked(): Promise<boolean>;
-  setSeedBlocked(): Promise<void>;
 }
 
 export class ArkDataPhoneLocalMemoryBackendRegistry implements PhoneLocalMemoryBackendRegistryPort {
@@ -70,23 +67,6 @@ export class ArkDataPhoneLocalMemoryBackendRegistry implements PhoneLocalMemoryB
 
   async setSelectedBackend(backendId: PhoneLocalMemoryBackendId): Promise<void> {
     await this.setValue(PHONE_LOCAL_MEMORY_BACKEND_MARKER_KEY, backendId);
-  }
-
-  async isSeedBlocked(): Promise<boolean> {
-    const result = await (await this.readyStore()).querySql(
-      'SELECT metadata_value FROM conversation_memory_backend_registry ' +
-      'WHERE metadata_key = ? LIMIT 1', [PHONE_LOCAL_MEMORY_SEED_BLOCKED_MARKER_KEY]
-    );
-    try {
-      if (!result.goToFirstRow()) return false;
-      return result.getString(result.getColumnIndex('metadata_value')) === 'true';
-    } finally {
-      result.close();
-    }
-  }
-
-  async setSeedBlocked(): Promise<void> {
-    await this.setValue(PHONE_LOCAL_MEMORY_SEED_BLOCKED_MARKER_KEY, 'true');
   }
 
   private async setValue(key: string, value: string): Promise<void> {

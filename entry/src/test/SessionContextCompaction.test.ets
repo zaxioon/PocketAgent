@@ -288,6 +288,62 @@ export default function sessionContextCompactionTest() {
         expect(complete.length).assertEqual(12);
       });
 
+    it('strictly bounds fallback tails that contain no user boundary', 0, async () => {
+      const oldUserAndAssistants: SessionHistoryMessage[] = [];
+      oldUserAndAssistants.push({ id: 'old-user', role: 'user', content: 'OLD_USER_MARKER' });
+      for (let index = 1; index < 12; index++) {
+        oldUserAndAssistants.push({
+          id: 'assistant-' + index.toString(),
+          role: 'assistant',
+          content: 'assistant-' + index.toString()
+        });
+      }
+      const oldUserModel = new CompactionModel(['', '', '']);
+      const oldUserCompactor = new SessionContextCompactor((): LocalModel => oldUserModel, {
+        estimatedTokenThreshold: 1,
+        activeCharLimit: 100000,
+        fallbackMessageLimit: 4
+      });
+
+      await oldUserCompactor.compactAfterTurn(oldUserAndAssistants);
+      const oldUserFallback = await oldUserCompactor.activeContext(oldUserAndAssistants);
+
+      expect(oldUserFallback.recentMessages.length).assertEqual(4);
+      expect(JSON.stringify(oldUserFallback.recentMessages).indexOf('OLD_USER_MARKER')).assertEqual(-1);
+      expect(oldUserFallback.recentMessages[0].content).assertEqual('assistant-8');
+
+      const assistantsOnly: SessionHistoryMessage[] = [];
+      for (let index = 0; index < 10; index++) {
+        assistantsOnly.push({
+          id: 'only-assistant-' + index.toString(),
+          role: 'assistant',
+          content: 'only-assistant-' + index.toString()
+        });
+      }
+      const assistantsModel = new CompactionModel(['', '', '']);
+      const assistantsCompactor = new SessionContextCompactor((): LocalModel => assistantsModel, {
+        estimatedTokenThreshold: 1,
+        activeCharLimit: 100000,
+        fallbackMessageLimit: 4
+      });
+      await assistantsCompactor.compactAfterTurn(assistantsOnly);
+      const assistantsFallback = await assistantsCompactor.activeContext(assistantsOnly);
+      expect(assistantsFallback.recentMessages.length).assertEqual(4);
+      expect(assistantsFallback.recentMessages[0].content).assertEqual('only-assistant-6');
+
+      const shortAssistants: SessionHistoryMessage[] = assistantsOnly.slice(0, 6);
+      const shortModel = new CompactionModel(['', '', '']);
+      const shortCompactor = new SessionContextCompactor((): LocalModel => shortModel, {
+        estimatedTokenThreshold: 1,
+        activeCharLimit: 100000,
+        fallbackMessageLimit: 8
+      });
+      await shortCompactor.compactAfterTurn(shortAssistants);
+      const shortFallback = await shortCompactor.activeContext(shortAssistants);
+      expect(shortFallback.recentMessages.length).assertEqual(6);
+      expect(shortFallback.recentMessages[0].content).assertEqual('only-assistant-0');
+    });
+
     it('waits for pending turn-end compaction so the next Leader sees its summary or persistent trim', 0,
       async () => {
         const successModel = new GatedCompactionModel();

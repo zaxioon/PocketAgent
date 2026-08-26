@@ -272,7 +272,7 @@ export class SessionContextCompactor {
   private fallbackMessages(active: SessionHistoryMessage[]): SessionHistoryMessage[] {
     const desiredStart: number = active.length > this.options.fallbackMessageLimit ?
       active.length - this.options.fallbackMessageLimit : 0;
-    let start: number = 0;
+    let start: number = desiredStart;
     for (let index = desiredStart; index < active.length; index++) {
       if (active[index].role === 'user') {
         start = index;

@@ -37,7 +37,6 @@ export const PHONE_LOCAL_MEMORY_RECALL_TOTAL_LIMIT: number = memoryRecallTotalMa
 export const PHONE_LOCAL_MEMORY_RECALL_MAX_TOTAL_LIMIT: number = memoryRecallTotalMaxChars(
   MEMORY_RECALL_MAX_TOP_K
 );
-export const PHONE_LOCAL_MEMORY_SEED_MARKER: string = 'seed:persona-test-preferences:v1';
 
 const MEMORY_RUNTIME_LOG_DOMAIN: number = 0x0000;
 const MEMORY_RUNTIME_LOG_TAG: string = 'MemoryRuntime';
@@ -68,8 +67,6 @@ export interface PhoneLocalMemoryRuntimeOptions {
 
 interface SelectedMemoryStore {
   store: PhoneLocalMemoryStore;
-  backendId: PhoneLocalMemoryBackendId;
-  seedAllowed: boolean;
 }
 
 export interface PhoneLocalMemoryRuntimePort {
@@ -80,22 +77,6 @@ export interface PhoneLocalMemoryRuntimePort {
     personaTag: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult>;
   forget(memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult>;
 }
-
-interface SeedMemoryFact {
-  fact: string;
-  personaTag: string;
-}
-
-const V1_SEED_FACTS: SeedMemoryFact[] = [
-  { fact: '用户在工作日会用饮品提神。', personaTag: 'food_companion' },
-  { fact: '用户选择附近饮品时优先考虑可自取。', personaTag: 'food_companion' },
-  { fact: '用户出行时偏好少换乘。', personaTag: 'travel_companion' },
-  { fact: '用户偏好时间安排可控的出行方案。', personaTag: 'travel_companion' },
-  { fact: '用户偏好简洁的邮件。', personaTag: 'work_companion' },
-  { fact: '用户偏好礼貌的邮件语气。', personaTag: 'work_companion' },
-  { fact: '用户偏好工作邮件结论先行。', personaTag: 'work_companion' },
-  { fact: '用户会把世界杯和足球内容作为晚间娱乐选择。', personaTag: 'entertainment_companion' }
-];
 
 class HilogPhoneLocalMemoryRuntimeLogger implements PhoneLocalMemoryRuntimeLogger {
   warn(code: string, operation: string, errorMessage: string): void {
@@ -243,30 +224,22 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
       await this.options.embedderFactory() : await this.createDefaultEmbedder();
     // The runtime wrapper fixes every new write to global. Keep the provider compatible with
     // legacy records in another scene so an exact-id update/forget can still complete.
-    const provider = new PhoneLocalMemoryProvider(store, embedder, {
+    return new PhoneLocalMemoryProvider(store, embedder, {
       idFactory: this.options.idFactory
     });
-    if (selected.seedAllowed) await this.ensureV1Seeds(store, provider);
-    else this.logger.warn('memory_seed_skipped_backend_changed', 'seed',
-      'Memory backend changed and data migration is not implemented; seed restoration was skipped.');
-    return provider;
   }
 
   private async selectStore(): Promise<SelectedMemoryStore> {
     if (this.options.storeFactory !== undefined) {
       const store = this.options.storeFactory();
       await store.initialize();
-      return { store, backendId: 'vector', seedAllowed: true };
+      return { store };
     }
     const registry = this.createBackendRegistry();
     let previousBackend: PhoneLocalMemoryBackendId | null = null;
-    let seedBlocked = false;
-    let registryReadable = true;
     try {
       previousBackend = await registry.getSelectedBackend();
-      seedBlocked = await registry.isSeedBlocked();
     } catch (error) {
-      registryReadable = false;
       this.log('memory_backend_marker_read_failed', 'initialize', error);
     }
 
@@ -294,11 +267,8 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     // the install predates the registry; an older vector-only install cannot be distinguished from
     // a fresh install on a non-vector device without a separate migration signal.
     const backendChanged = previousBackend !== null && previousBackend !== selectedBackend;
-    let markerWritten = false;
     try {
-      if (backendChanged) await registry.setSeedBlocked();
       await registry.setSelectedBackend(selectedBackend);
-      markerWritten = true;
     } catch (error) {
       this.log('memory_backend_marker_write_failed', 'initialize', error);
     }
@@ -306,11 +276,7 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
       this.logger.warn('memory_backend_changed_data_not_migrated', 'initialize',
         'Memory backend changed and existing data was not migrated.');
     }
-    return {
-      store: selectedStore,
-      backendId: selectedBackend,
-      seedAllowed: registryReadable && markerWritten && !seedBlocked && !backendChanged
-    };
+    return { store: selectedStore };
   }
 
   private createVectorStore(): PhoneLocalMemoryStore {
@@ -357,32 +323,6 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     if (this.context === null) throw new Error('Phone-local memory requires an application context.');
     const tokenizer = await BertWordPieceTokenizer.fromRawfile(this.context);
     return await BgeMindSporeEmbeddingPort.fromRawfile(this.context, tokenizer);
-  }
-
-  private async ensureV1Seeds(store: PhoneLocalMemoryStore, provider: PhoneLocalMemoryProvider): Promise<void> {
-    try {
-      if (await store.getMetadata(PHONE_LOCAL_MEMORY_SEED_MARKER) !== null) return;
-      let allSucceeded = true;
-      for (let offset = 0; offset < V1_SEED_FACTS.length; offset += 5) {
-        const records: MemoryDraft[] = [];
-        const limit = Math.min(offset + 5, V1_SEED_FACTS.length);
-        for (let index = offset; index < limit; index += 1) {
-          records.push({
-            fact: V1_SEED_FACTS[index].fact,
-            sceneId: PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
-            personaTag: V1_SEED_FACTS[index].personaTag,
-            authority: 'seed',
-            sourceTurnId: 'seed-v1-' + (index + 1).toString()
-          });
-        }
-        const result = await provider.remember({ ownerId: PHONE_LOCAL_MEMORY_OWNER_ID, records });
-        if (result.status !== 'success' || result.failedCount > 0) allSucceeded = false;
-      }
-      if (allSucceeded) await store.setMetadata(PHONE_LOCAL_MEMORY_SEED_MARKER, 'complete');
-      else this.logger.warn('memory_seed_incomplete', 'seed', 'One or more seed records were not saved.');
-    } catch (error) {
-      this.log('memory_seed_incomplete', 'seed', error);
-    }
   }
 
   private withTimeout<T>(task: Promise<T>): Promise<T> {
