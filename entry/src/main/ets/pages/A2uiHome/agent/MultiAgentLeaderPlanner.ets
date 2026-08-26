@@ -1661,6 +1661,9 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
     round: number
   ): LeaderDecision {
     let trimmed: string = output.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}"')) {
+      trimmed = trimmed.substring(0, trimmed.length - 1);
+    }
     if (trimmed.startsWith('{') && !trimmed.endsWith('}')) {
       trimmed += '}';
     }
@@ -1671,10 +1674,13 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
     try {
       parsed = JSON.parse(trimmed) as Object;
     } catch (_error) {
-      if (!trimmed.endsWith('}}')) {
+      if (trimmed.endsWith('}"}')) {
+        trimmed = trimmed.substring(0, trimmed.length - 2);
+      } else if (trimmed.endsWith('}}')) {
+        trimmed = trimmed.substring(0, trimmed.length - 1);
+      } else {
         throw new Error('Leader planner requires exactly one JSON object.');
       }
-      trimmed = trimmed.substring(0, trimmed.length - 1);
       try {
         parsed = JSON.parse(trimmed) as Object;
       } catch (_redundantClosureError) {
@@ -1825,7 +1831,11 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       this.registeredCapability(context, 'maps.place.search') ? MAPS_SELECTION_CONTRACT : '',
       C10_C11_SELECTION_CONTRACT,
       SOCIAL_SELECTION_CONTRACT,
-      AGGREGATE_MEDIA_SELECTION_CONTRACT,
+      this.registeredCapability(context, 'media.aggregate.search') ?
+        AGGREGATE_MEDIA_SELECTION_CONTRACT :
+        'Aggregate media search is discovery-only. Never name or schedule media.aggregate.search. ' +
+          'For a news or discussion search request, answer with requestedCapabilityIds=[], dataTasks=[], ' +
+          'no actionIntent, and direct the user to swipe to Discovery and use its search button.',
       CALENDAR_UPDATE_SELECTION_CONTRACT,
       CALENDAR_DELETE_SELECTION_CONTRACT,
       OBSERVATION_REUSE_CONTRACT,

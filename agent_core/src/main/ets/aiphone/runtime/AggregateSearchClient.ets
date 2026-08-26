@@ -7,7 +7,13 @@ import {
 } from './ComposioDynamicBackend';
 import { DynamicGenericToolResult } from './DynamicToolTypes';
 import { callMediaVideoSearch } from './MediaVideoClient';
+import { callBilibiliVideoComments } from './BilibiliApiClient';
+import { callYouTubeVideoComments } from './YouTubeApiClient';
 import { searchApplePodcasts } from './ApplePodcastClient';
+import { loadCnNewsSource } from './PublicFeedClient';
+import { discoverPublicGitHub, searchPublicGitHub } from './GitHubPublicClient';
+import { discoverSteamNews } from './SteamNewsClient';
+import { GlobalNewsConfig, loadGlobalNews } from './GlobalNewsClient';
 import {
   DoubanPlaywrightMcpClient,
   DoubanPlaywrightMcpConfig,
@@ -15,6 +21,7 @@ import {
 } from './DoubanPlaywrightMcpClient';
 import {
   discoverTwitchInterestStreams,
+  searchTwitchChannels,
   TwitchChannelSearchBatch,
   TwitchChannelSearchItem,
   TwitchSearchConfig
@@ -43,10 +50,13 @@ import {
 } from './AggregateSearchSourceRegistry';
 import {
   WaterfallCandidate,
+  WaterfallComment,
+  WaterfallCommentsResult,
   WaterfallContinuation,
   WaterfallFeedState,
   WaterfallFormat,
   WaterfallLoadRequest,
+  WaterfallMetric,
   WaterfallPreferenceSnapshot,
   WaterfallQueryStage,
   WaterfallRecallRoute,
@@ -78,6 +88,7 @@ interface AggregateXSearchArgs {
   expansions: string;
   mediaFields: string;
   tweetFields: string;
+  userFields?: string;
   cursor?: string;
 }
 
@@ -101,13 +112,60 @@ interface AggregateHackerNewsItemArgs {
   itemId: string;
 }
 
+function decodeHttpUrl(value: string): string {
+  return value.replace(/&amp;/g, '&').trim();
+}
+
+function isDisplayableImageUrl(value: string): boolean {
+  const url = decodeHttpUrl(value).toLowerCase();
+  if (!url.startsWith('http')) return false;
+  if (url === 'self' || url === 'default' || url === 'nsfw' || url === 'spoiler' || url === 'image') {
+    return false;
+  }
+  if (url.indexOf('v.redd.it/') >= 0 || url.indexOf('/comments/') >= 0 ||
+    url.indexOf('reddit.com/gallery') >= 0) {
+    return false;
+  }
+  if (url.indexOf('.jpg') >= 0 || url.indexOf('.jpeg') >= 0 || url.indexOf('.png') >= 0 ||
+    url.indexOf('.webp') >= 0 || url.indexOf('.gif') >= 0 || url.indexOf('image') >= 0 ||
+    url.indexOf('pic') >= 0 || url.indexOf('thumb') >= 0) {
+    return true;
+  }
+  // ponytail: host heuristic; native fetch+Referer proxy if Reddit CDN still 403s in WebView
+  return url.indexOf('i.redd.it/') >= 0 || url.indexOf('preview.redd.it/') >= 0 ||
+    url.indexOf('thumbs.redditmedia.com/') >= 0 || url.indexOf('i.imgur.com/') >= 0 ||
+    url.indexOf('pbs.twimg.com/') >= 0;
+}
+
+export function redditImageDeliveryUrl(value: string): string {
+  const url = decodeHttpUrl(value);
+  const lower = url.toLowerCase();
+  if (!lower.startsWith('https://i.redd.it/') && !lower.startsWith('https://preview.redd.it/') &&
+    !lower.startsWith('https://external-preview.redd.it/') &&
+    !lower.startsWith('https://thumbs.redditmedia.com/')) {
+    return url;
+  }
+  // ponytail: public cache is enough here; use an owned weserv deployment if an image SLA becomes necessary.
+  return 'https://wsrv.nl/?url=' + encodeURIComponent(url) + '&output=webp&w=1200';
+}
+
+function appendImageUrl(urls: string[], value: string): void {
+  const url = decodeHttpUrl(value);
+  if (!isDisplayableImageUrl(url)) return;
+  const deliveredUrl = redditImageDeliveryUrl(url);
+  if (urls.indexOf(deliveredUrl) >= 0) return;
+  urls.push(deliveredUrl);
+}
+
 function waterfallPostCoverUrl(post: AggregateSearchPost): string {
   const labels: string[] = ['mediaurl', 'image', 'images', 'thumbnail', 'cover', 'pic', 'picture'];
   for (let index = 0; index < post.rows.length; index++) {
     const label = post.rows[index].label.trim().toLowerCase();
-    const value = post.rows[index].value.trim();
-    if (labels.indexOf(label) >= 0 && value.toLowerCase().startsWith('http')) {
-      return value.split(/\s+/)[0];
+    if (labels.indexOf(label) < 0) continue;
+    const parts = post.rows[index].value.trim().split(/\s+/);
+    for (let part = 0; part < parts.length; part++) {
+      const url = decodeHttpUrl(parts[part]);
+      if (isDisplayableImageUrl(url)) return url;
     }
   }
   return '';
@@ -131,19 +189,85 @@ function waterfallPostVideoUrl(post: AggregateSearchPost): string {
   return '';
 }
 
-function waterfallPostSummary(post: AggregateSearchPost): string {
-  const comments: string[] = [];
-  post.rows.forEach((row: AggregateSearchRowData): void => {
-    const label = row.label.trim().toLowerCase();
-    if ((label === 'comment' || label === 'reply') && row.value.trim().length > 0 && comments.length < 2) {
-      comments.push(row.value.trim());
-    }
-  });
-  return comments.length > 0 ? post.text + '\n\n评论摘录\n• ' + comments.join('\n• ') : post.text;
-}
-
 function waterfallTitle(value: string): string {
   return /^result\s+\d+$/i.test(value.trim()) ? '' : value;
+}
+
+function normalizedMetricLabel(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function aggregateRowText(rows: AggregateSearchRowData[], labels: string[]): string {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const label = normalizedMetricLabel(rows[rowIndex].label);
+    for (let labelIndex = 0; labelIndex < labels.length; labelIndex++) {
+      if (label === normalizedMetricLabel(labels[labelIndex])) return rows[rowIndex].value.trim();
+    }
+  }
+  return '';
+}
+
+function metricNumber(value: string): number | undefined {
+  const parsed = Number(value.trim().replace(/,/g, ''));
+  return value.trim().length > 0 && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function addMetric(metrics: WaterfallMetric[], kind: string, value: string): void {
+  const parsed = metricNumber(value);
+  if (parsed !== undefined) metrics.push({ kind: kind, value: parsed });
+}
+
+function videoMetrics(video: AggregateSearchVideo): WaterfallMetric[] {
+  const metrics: WaterfallMetric[] = [];
+  addMetric(metrics, 'view', aggregateRowText(video.rows, ['Views', 'View Count', 'Play']));
+  addMetric(metrics, 'like', aggregateRowText(video.rows, ['Likes', 'Like Count']));
+  addMetric(metrics, 'favorite', aggregateRowText(video.rows, ['Favorites', 'Favorite Count']));
+  addMetric(metrics, 'comment', aggregateRowText(video.rows, ['Comments', 'Comment Count', 'Replies']));
+  addMetric(metrics, 'coin', aggregateRowText(video.rows, ['Coins']));
+  addMetric(metrics, 'danmaku', aggregateRowText(video.rows, ['Danmaku']));
+  addMetric(metrics, 'share', aggregateRowText(video.rows, ['Shares']));
+  return metrics;
+}
+
+function postMetrics(post: AggregateSearchPost): WaterfallMetric[] {
+  const metrics: WaterfallMetric[] = [];
+  if (post.source === 'github') {
+    addMetric(metrics, 'star', aggregateRowText(post.rows, ['Stars']));
+    addMetric(metrics, 'fork', aggregateRowText(post.rows, ['Forks']));
+    return metrics;
+  }
+  const record = post.rows.length > 0 ? dynamicPostRecord(post.rows[0].value) : null;
+  const publicMetrics = record === null ? null : dynamicRecord(record.public_metrics);
+  if (post.source === 'x' && publicMetrics !== null) {
+    addMetric(metrics, 'view', recordText(publicMetrics, ['impression_count']));
+    addMetric(metrics, 'like', recordText(publicMetrics, ['like_count']));
+    addMetric(metrics, 'comment', recordText(publicMetrics, ['reply_count']));
+    addMetric(metrics, 'repost', recordText(publicMetrics, ['retweet_count']));
+    addMetric(metrics, 'quote', recordText(publicMetrics, ['quote_count']));
+    addMetric(metrics, 'favorite', recordText(publicMetrics, ['bookmark_count']));
+    return metrics;
+  }
+  addMetric(metrics, post.source === 'zhihu' ? 'like' : 'score', post.score);
+  addMetric(metrics, 'comment', post.commentCount);
+  return metrics;
+}
+
+function aggregateAvatar(rows: AggregateSearchRowData[]): string {
+  const avatar = aggregateRowText(rows, ['Author Avatar', 'authorAvatar', 'Avatar', 'upic']);
+  return avatar.startsWith('http') ? avatar : '';
+}
+
+function commentsFromRows(rows: AggregateSearchRowData[]): WaterfallComment[] {
+  const comments: WaterfallComment[] = [];
+  rows.forEach((row: AggregateSearchRowData): void => {
+    const label = row.label.trim().toLowerCase();
+    const value = row.value.trim();
+    if ((label === 'comment' || label === 'reply') && value.length > 0 && comments.length < 5 &&
+      comments.every((comment: WaterfallComment): boolean => comment.text !== value)) {
+      comments.push({ text: value });
+    }
+  });
+  return comments;
 }
 
 export function aggregateMediaCandidates(
@@ -165,20 +289,29 @@ export function aggregateMediaCandidates(
   const topicsFor = (title: string, summary: string): string[] =>
     waterfallTextTokens(title + ' ' + summary);
   videos.forEach((video: AggregateSearchVideo, index: number) => {
+    const metrics = videoMetrics(video);
+    const providerItemId = video.source === 'bilibili' ?
+      aggregateRowText(video.rows, ['AID']) :
+      aggregateRowText(video.rows, ['Video ID']);
     candidates.push({
       id: video.id,
       source: video.source,
+      provider: video.provider,
       mediaType: 'video',
       title: video.title,
       summary: video.summary,
       url: video.url,
       coverUrl: video.thumbnail,
+      providerItemId: providerItemId || undefined,
       publishedAt: video.publishedAt,
       duration: video.duration,
       originalIndex: batchIndex * 1000 + index,
       searchQuery: searchQuery,
       queryStage: queryStage,
       sourceRank: nextSourceRank(video.source),
+      authorName: aggregateRowText(video.rows, ['Channel', 'Author', 'Owner']) || undefined,
+      authorAvatarUrl: aggregateAvatar(video.rows) || undefined,
+      metrics: metrics.length > 0 ? metrics : undefined,
       topics: topicsFor(video.title, video.summary),
       format: 'landscape_video',
       recallRoute: recallRoute,
@@ -193,22 +326,31 @@ export function aggregateMediaCandidates(
     const parsedScore = Number(post.score.trim());
     const format: WaterfallFormat = mediaType === 'video' ? 'landscape_video' :
       (mediaType === 'image_text' ? 'image_text' : 'text');
+    const metrics = postMetrics(post);
+    const comments = (post.comments ?? commentsFromRows(post.rows)).slice(0, 5);
     candidates.push({
       id: post.id,
       source: post.source,
+      provider: post.provider,
       mediaType: mediaType,
       title: waterfallTitle(post.title),
-      summary: waterfallPostSummary(post),
+      summary: post.text,
       url: post.url,
       coverUrl: coverUrl,
       mediaUrl: mediaUrl,
       feedUrl: post.feedUrl,
+      providerItemId: postProviderId(post) || undefined,
+      comments: comments.length > 0 ? comments : undefined,
+      commentLoadState: comments.length > 0 ? 'ready' : (post.source === 'zhihu' ? 'empty' : undefined),
       publishedAt: post.publishedAt,
       originalIndex: batchIndex * 1000 + videos.length + index,
       searchQuery: searchQuery,
       queryStage: queryStage,
       sourceRank: nextSourceRank(post.source),
       providerScore: post.score.trim().length > 0 && Number.isFinite(parsedScore) ? parsedScore : undefined,
+      authorName: post.author || aggregateRowText(post.rows, ['Author', 'authorName']) || undefined,
+      authorAvatarUrl: aggregateAvatar(post.rows) || undefined,
+      metrics: metrics.length > 0 ? metrics : undefined,
       topics: topicsFor(post.title, post.text),
       format: format,
       recallRoute: recallRoute,
@@ -225,6 +367,7 @@ export interface AggregateZhihuConfig {
 export interface AggregateExternalProviderConfig {
   doubanPlaywright: DoubanPlaywrightMcpConfig;
   twitch: TwitchSearchConfig;
+  globalNews: GlobalNewsConfig;
 }
 
 interface AggregateHttpResult {
@@ -240,7 +383,8 @@ export const AGGREGATE_SEARCH_PARTIAL_THROTTLE_MS: number = 5000;
 let runtimeEnabledSources: AggregateSearchSource[] = aggregateSearchRegistrySourceIds();
 let runtimeExternalProviderConfig: AggregateExternalProviderConfig = {
   doubanPlaywright: { mcpUrl: '', bearerToken: '' },
-  twitch: { clientId: '', clientSecret: '' }
+  twitch: { clientId: '', clientSecret: '' },
+  globalNews: { guardianApiKey: '', newsApiKey: '' }
 };
 let runtimePreferenceProfile: WaterfallPreferenceSnapshot | undefined = undefined;
 let runtimeSearchPolicy: AggregateSearchPolicy = {
@@ -249,6 +393,7 @@ let runtimeSearchPolicy: AggregateSearchPolicy = {
 };
 const X_PUBLIC_SEARCH_MARKER: string = 'X 公开 post 搜索关键词:';
 const ZHIHU_SEARCH_URL: string = 'https://developer.zhihu.com/api/v1/content/zhihu_search';
+const ZHIHU_HOT_LIST_URL: string = 'https://developer.zhihu.com/api/v1/content/hot_list';
 
 function textOf(value: AggregateArgValue): string {
   if (value === undefined || value === null) {
@@ -295,14 +440,21 @@ function cleanAggregateSearchQuery(value: string): string {
       query = query.substring(prefix.length).trim();
     }
   });
-  ['的相关新闻和讨论', '相关新闻和讨论', '的新闻和讨论', '新闻和讨论', '的相关新闻讨论', '相关新闻讨论',
+  const tailMarkers: string[] = ['的相关新闻和讨论', '相关新闻和讨论', '的新闻和讨论', '新闻和讨论', '的相关新闻讨论', '相关新闻讨论',
     '新闻讨论', '的相关新闻', '相关新闻', '的相关讨论', '相关讨论', '的新闻', '新闻',
     '的讨论', '讨论', '热议', '观点', '帖子', 'po文', '公开动态',
-    '，知乎也看', '，Reddit也看', '，reddit也看'].forEach((tail: string) => {
-    if (query.length > tail.length && query.substring(query.length - tail.length) === tail) {
-      query = query.substring(0, query.length - tail.length).trim();
+    '，知乎也看', '，Reddit也看', '，reddit也看'];
+  let trimmedTail = true;
+  while (trimmedTail) {
+    trimmedTail = false;
+    for (let index = 0; index < tailMarkers.length; index++) {
+      const tail = tailMarkers[index];
+      if (query.length > tail.length && query.substring(query.length - tail.length) === tail) {
+        query = query.substring(0, query.length - tail.length).trim();
+        trimmedTail = true;
+      }
     }
-  });
+  }
   return query.length > 0 ? query : original;
 }
 
@@ -399,6 +551,10 @@ export function configureAggregateExternalProvidersForRuntime(config: AggregateE
     twitch: {
       clientId: config.twitch.clientId.trim(),
       clientSecret: config.twitch.clientSecret.trim()
+    },
+    globalNews: {
+      guardianApiKey: config.globalNews.guardianApiKey.trim(),
+      newsApiKey: config.globalNews.newsApiKey.trim()
     }
   };
 }
@@ -577,7 +733,7 @@ function statusFor(source: AggregateSearchSource, status: string, message: strin
 }
 
 function dynamicSource(result: DynamicGenericToolResult): AggregateSearchSource {
-  return result.sourceTag === 'YouTube Data API' ? 'youtube' : 'bilibili';
+  return result.sourceTag === 'YouTube Data API' || result.sourceTag === 'Composio YouTube' ? 'youtube' : 'bilibili';
 }
 
 function dynamicVideoUrl(result: DynamicGenericToolResult): string {
@@ -594,6 +750,8 @@ function dynamicVideoUrl(result: DynamicGenericToolResult): string {
 
 function videoFromDynamic(source: AggregateSearchSource, result: DynamicGenericToolResult, index: number): AggregateSearchVideo {
   const providerId = rowValue(result, source === 'youtube' ? 'Video ID' : 'BVID');
+  const thumbnail = source === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(providerId) ?
+    'https://wsrv.nl/?url=i.ytimg.com/vi/' + providerId + '/mqdefault.jpg' : rowValue(result, 'Thumbnail');
   return {
     id: source + '-' + (providerId.length > 0 ? providerId : index.toString()),
     source: source,
@@ -601,7 +759,7 @@ function videoFromDynamic(source: AggregateSearchSource, result: DynamicGenericT
     title: result.title,
     summary: result.summary,
     url: dynamicVideoUrl(result),
-    thumbnail: rowValue(result, 'Thumbnail'),
+    thumbnail: thumbnail,
     publishedAt: rowValue(result, 'Published'),
     duration: rowValue(result, 'Duration'),
     status: result.status === 'success' ? 'success' : 'error',
@@ -620,15 +778,7 @@ function imageUrlsFromText(value: string): string[] {
     return [];
   }
   const urls: string[] = [];
-  matches.forEach((raw: string) => {
-    const lower = raw.toLowerCase();
-    if ((lower.indexOf('.jpg') < 0 && lower.indexOf('.jpeg') < 0 && lower.indexOf('.png') < 0 &&
-      lower.indexOf('.webp') < 0 && lower.indexOf('.gif') < 0 && lower.indexOf('image') < 0 &&
-      lower.indexOf('pic') < 0) || urls.indexOf(raw) >= 0) {
-      return;
-    }
-    urls.push(raw);
-  });
+  matches.forEach((raw: string) => appendImageUrl(urls, raw));
   return urls;
 }
 
@@ -733,21 +883,37 @@ function dynamicPostUrl(value: string): string {
   return urlFromText(value);
 }
 
-function appendImageUrl(urls: string[], value: string): void {
-  if (value.length > 0 && urls.indexOf(value) < 0) {
-    urls.push(value);
-  }
-}
-
 function imageUrlsFromDynamicPost(value: string): string[] {
   const urls = imageUrlsFromText(value);
   const record = dynamicPostRecord(value);
   if (record === null) {
     return urls;
   }
-  ['thumbnail_pic', 'bmiddle_pic', 'original_pic', 'image_url', 'cover', 'thumbnail', 'url_overridden_by_dest'].forEach((key: string) => {
-    appendImageUrl(urls, textOf(record[key]).trim());
+  ['thumbnail_pic', 'bmiddle_pic', 'original_pic', 'image_url', 'cover', 'thumbnail',
+    'url_overridden_by_dest', 'preview_image_url'].forEach((key: string) => {
+    appendImageUrl(urls, textOf(record[key]));
   });
+  const preview = dynamicRecord(record.preview);
+  const previewImages = preview === null ? null : preview.images;
+  if (Array.isArray(previewImages)) {
+    previewImages.forEach((item: DynamicPostValue) => {
+      const image = dynamicRecord(item);
+      const source = image === null ? null : dynamicRecord(image.source);
+      if (source !== null) {
+        appendImageUrl(urls, textOf(source.url));
+      }
+    });
+  }
+  const metadata = dynamicRecord(record.media_metadata);
+  if (metadata !== null) {
+    Object.keys(metadata).forEach((key: string) => {
+      const sized = dynamicRecord(metadata[key]);
+      const source = sized === null ? null : dynamicRecord(sized.s);
+      if (source !== null) {
+        appendImageUrl(urls, textOf(source.u));
+      }
+    });
+  }
   const pics = record.pics;
   if (Array.isArray(pics)) {
     pics.forEach((item: DynamicPostValue) => {
@@ -759,7 +925,8 @@ function imageUrlsFromDynamicPost(value: string): string[] {
         return;
       }
       if (typeof item === 'object') {
-        appendImageUrl(urls, recordText(item as DynamicPostRecord, ['url', 'large_url', 'thumbnail_pic', 'bmiddle_pic', 'original_pic']));
+        appendImageUrl(urls, recordText(item as DynamicPostRecord,
+          ['url', 'large_url', 'thumbnail_pic', 'bmiddle_pic', 'original_pic']));
       }
     });
   }
@@ -817,7 +984,7 @@ function directVideoUrl(value: DynamicPostValue, depth: number = 0): string {
 }
 
 function appendCommentTexts(value: DynamicPostValue, comments: string[], depth: number = 0): void {
-  if (comments.length >= 2 || depth > 5 || value === undefined || value === null) {
+  if (comments.length >= 5 || depth > 5 || value === undefined || value === null) {
     return;
   }
   if (Array.isArray(value)) {
@@ -1070,13 +1237,14 @@ export function redditPostsFromComposioResult(result: DynamicGenericToolResult):
 export function xPostsFromComposioResult(result: DynamicGenericToolResult): AggregateSearchPost[] {
   const posts = postsFromDynamicResult('x', 'X', result);
   appendXMediaRows(posts, xMediaRecords(result.rawPreview));
+  appendXAuthorRows(posts, xIncludedRecords(result.rawPreview, 'users'));
   return posts;
 }
 
-function xMediaRecords(value: DynamicPostValue): Object[] {
+function xIncludedRecords(value: DynamicPostValue, key: string): Object[] {
   if (typeof value === 'string') {
     try {
-      return xMediaRecords(JSON.parse(value) as DynamicPostValue);
+      return xIncludedRecords(JSON.parse(value) as DynamicPostValue, key);
     } catch (_error) {
       return [];
     }
@@ -1086,24 +1254,28 @@ function xMediaRecords(value: DynamicPostValue): Object[] {
   }
   const record = value as DynamicPostRecord;
   const includes = dynamicRecord(record.includes);
-  if (includes !== null && Array.isArray(includes.media)) {
-    return objectArrayFrom(includes.media);
+  if (includes !== null && Array.isArray(includes[key])) {
+    return objectArrayFrom(includes[key]);
   }
   const preview = record.preview;
   if (preview !== undefined) {
-    const nested = xMediaRecords(preview);
+    const nested = xIncludedRecords(preview, key);
     if (nested.length > 0) {
       return nested;
     }
   }
   const keys = Object.keys(record);
   for (let index = 0; index < keys.length; index++) {
-    const nested = xMediaRecords(record[keys[index]]);
+    const nested = xIncludedRecords(record[keys[index]], key);
     if (nested.length > 0) {
       return nested;
     }
   }
   return [];
+}
+
+function xMediaRecords(value: DynamicPostValue): Object[] {
+  return xIncludedRecords(value, 'media');
 }
 
 function stringValues(value: DynamicPostValue): string[] {
@@ -1138,6 +1310,22 @@ function appendXMediaRows(posts: AggregateSearchPost[], media: Object[]): void {
       if (video.length > 0) {
         post.rows.push({ label: 'video', value: video });
       }
+      break;
+    }
+  });
+}
+
+function appendXAuthorRows(posts: AggregateSearchPost[], users: Object[]): void {
+  posts.forEach((post: AggregateSearchPost): void => {
+    const record = post.rows.length > 0 ? dynamicPostRecord(post.rows[0].value) : null;
+    const authorId = record === null ? '' : recordText(record, ['author_id']);
+    for (let index = 0; index < users.length; index++) {
+      const user = dynamicRecord(users[index]);
+      if (user === null || recordText(user, ['id']) !== authorId) continue;
+      post.author = recordText(user, ['name', 'username']);
+      post.handle = recordText(user, ['username']);
+      const avatar = recordText(user, ['profile_image_url']);
+      if (avatar.length > 0) post.rows.push({ label: 'authorAvatar', value: avatar });
       break;
     }
   });
@@ -1281,6 +1469,11 @@ export function zhihuSearchUrl(query: string, count: number = 10): string {
   return ZHIHU_SEARCH_URL + '?Query=' + encodeURIComponent(query) + '&Count=' + encodeURIComponent(count.toString());
 }
 
+export function zhihuHotListUrl(limit: number = 10): string {
+  const bounded = Math.max(1, Math.min(30, Math.floor(limit)));
+  return ZHIHU_HOT_LIST_URL + '?Limit=' + encodeURIComponent(bounded.toString());
+}
+
 function zhihuTimestamp(): string {
   return Math.floor(Date.now() / 1000).toString();
 }
@@ -1289,6 +1482,30 @@ async function requestZhihuSearch(query: string, apiKey: string): Promise<Aggreg
   const request = http.createHttp();
   try {
     const response = await request.request(zhihuSearchUrl(query, 10), {
+      method: http.RequestMethod.GET,
+      header: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer ' + apiKey.trim(),
+        'X-Request-Timestamp': zhihuTimestamp(),
+        'Content-Type': 'application/json'
+      },
+      usingProtocol: http.HttpProtocol.HTTP1_1,
+      connectTimeout: 10000,
+      readTimeout: 30000
+    });
+    return {
+      code: response.responseCode,
+      text: responseText(response.result)
+    };
+  } finally {
+    request.destroy();
+  }
+}
+
+async function requestZhihuHotList(limit: number, apiKey: string): Promise<AggregateHttpResult> {
+  const request = http.createHttp();
+  try {
+    const response = await request.request(zhihuHotListUrl(limit), {
       method: http.RequestMethod.GET,
       header: {
         'Accept': 'application/json',
@@ -1344,6 +1561,7 @@ function zhihuPostFromItem(item: Object, index: number): AggregateSearchPost {
   const author = recordText(record, ['AuthorName', 'authorName', 'author', 'Source', 'source', 'Site', 'site']);
   const score = recordText(record, ['VoteUpCount', 'voteUpCount', 'Score', 'score', 'Relevance', 'relevance']);
   const commentCount = recordText(record, ['CommentCount', 'commentCount', 'comments_count', 'num_comments']);
+  const contentId = recordText(record, ['ContentID', 'contentID', 'id']);
   const rows: AggregateSearchRowData[] = [
     { label: 'author', value: author },
     { label: 'contentType', value: recordText(record, ['ContentType', 'contentType']) },
@@ -1352,12 +1570,15 @@ function zhihuPostFromItem(item: Object, index: number): AggregateSearchPost {
     { label: 'score', value: score },
     { label: 'comments', value: commentCount }
   ];
+  if (contentId.length > 0) {
+    rows.push({ label: 'Content ID', value: contentId });
+  }
   const avatar = recordText(record, ['AuthorAvatar', 'authorAvatar', 'AuthorBadge', 'authorBadge']);
   if (avatar.length > 0) {
     rows.push({ label: 'authorAvatar', value: avatar });
   }
   return {
-    id: 'zhihu-' + (recordText(record, ['ContentID', 'contentID', 'id']) || index.toString()),
+    id: 'zhihu-' + (contentId || index.toString()),
     source: 'zhihu',
     provider: '知乎',
     title: title.length > 0 ? title : '知乎内容',
@@ -1369,8 +1590,33 @@ function zhihuPostFromItem(item: Object, index: number): AggregateSearchPost {
     score: score,
     commentCount: commentCount,
     status: 'success',
-    rows: rows
+    rows: rows,
+    comments: zhihuCommentsFromItem(record)
   };
+}
+
+function zhihuCommentsFromItem(record: DynamicPostRecord): WaterfallComment[] {
+  const raw = record.CommentInfoList ?? record.commentInfoList ?? record.comments;
+  if (!Array.isArray(raw)) return [];
+  const comments: WaterfallComment[] = [];
+  raw.forEach((value: DynamicPostValue): void => {
+    if (comments.length >= 5) return;
+    const item = dynamicRecord(value);
+    if (item === null) return;
+    const content = plainPostText(recordText(item, ['Content', 'content', 'Text', 'text']));
+    if (content.length === 0 || comments.some((comment: WaterfallComment): boolean => comment.text === content)) return;
+    const likeCount = metricNumber(recordText(item, ['LikeCount', 'likeCount', 'VoteUpCount', 'voteUpCount']));
+    const replyCount = metricNumber(recordText(item, ['ReplyCount', 'replyCount', 'ChildCommentCount']));
+    comments.push({
+      text: content,
+      authorName: recordText(item, ['AuthorName', 'authorName', 'Author', 'author']) || undefined,
+      authorAvatarUrl: recordText(item, ['AuthorAvatar', 'authorAvatar']) || undefined,
+      publishedAt: zhihuTimeText(recordText(item, ['CreateTime', 'createTime', 'created_at'])) || undefined,
+      likeCount: likeCount,
+      replyCount: replyCount
+    });
+  });
+  return comments;
 }
 
 export function zhihuPostsFromSearchPayload(rawJson: string): AggregateSearchPost[] {
@@ -1380,6 +1626,38 @@ export function zhihuPostsFromSearchPayload(rawJson: string): AggregateSearchPos
     if (post.title.length > 0 || post.text.length > 0 || post.url.length > 0) {
       posts.push(post);
     }
+  });
+  return posts;
+}
+
+export function zhihuPostsFromHotListPayload(rawJson: string): AggregateSearchPost[] {
+  const posts: AggregateSearchPost[] = [];
+  zhihuItemsFromPayload(rawJson).forEach((item: Object): void => {
+    const record = item as DynamicPostRecord;
+    const title = plainPostText(recordText(record, ['Title', 'title']));
+    const url = recordText(record, ['Url', 'url']);
+    const summary = plainPostText(recordText(record, ['Summary', 'summary']));
+    const thumbnail = recordText(record, ['ThumbnailUrl', 'thumbnailUrl']);
+    if (title.length === 0 && summary.length === 0 && url.length === 0) {
+      return;
+    }
+    const contentId = recordText(record, ['ContentID', 'contentID', 'id']);
+    const identity = contentId || url.split('#')[0] || title + '|' + summary;
+    posts.push({
+      id: 'zhihu-hot-' + encodeURIComponent(identity).slice(0, 512),
+      source: 'zhihu',
+      provider: '知乎',
+      title: title.length > 0 ? title : '知乎热榜',
+      author: '',
+      handle: '',
+      text: summary,
+      url: url,
+      publishedAt: '',
+      score: '',
+      commentCount: '',
+      status: 'success',
+      rows: [{ label: 'Cover', value: thumbnail }]
+    });
   });
   return posts;
 }
@@ -1418,6 +1696,33 @@ async function appendZhihuPosts(
   }
 }
 
+async function appendZhihuHotListPosts(
+  config: AggregateZhihuConfig,
+  limit: number,
+  posts: AggregateSearchPost[],
+  statuses: AggregateSearchSourceStatus[]
+): Promise<void> {
+  const apiKey = config.apiKey.trim();
+  if (apiKey.length === 0) {
+    statuses.push(statusFor('zhihu', 'needs_auth', '未配置 ZHIHU_API_KEY（知乎 Access Secret）。', 0));
+    return;
+  }
+  try {
+    const response = await requestZhihuHotList(limit, apiKey);
+    if (response.code < 200 || response.code >= 300) {
+      throw new Error('HTTP ' + response.code.toString() + ': ' + response.text.substring(0, 240));
+    }
+    const nextPosts = zhihuPostsFromHotListPayload(response.text);
+    nextPosts.forEach((post: AggregateSearchPost): void => {
+      posts.push(post);
+    });
+    statuses.push(statusFor('zhihu', nextPosts.length > 0 ? 'success' : 'empty',
+      '知乎热榜返回 ' + nextPosts.length.toString() + ' 条。', nextPosts.length));
+  } catch (error) {
+    statuses.push(statusFor('zhihu', statusFromZhihuError(error), '知乎热榜 API 调用失败：' + errorText(error), 0));
+  }
+}
+
 function emptyZhihuConfig(): AggregateZhihuConfig {
   return {
     apiKey: ''
@@ -1439,6 +1744,7 @@ class AggregateSearchPartialThrottle {
   }
 
   publish(snapshot: AggregateSearchResult): void {
+    if (snapshot.videos.length === 0 && snapshot.posts.length === 0) return;
     if (this.intervalMs === 0) {
       this.observer(snapshot);
       return;
@@ -1722,7 +2028,6 @@ async function aggregateComposioSourceBatch(
   const posts: AggregateSearchPost[] = [];
   const statuses: AggregateSearchSourceStatus[] = [];
   const result = await appendComposioPosts(source, provider, prompt, posts, statuses, fixedToolId, fixedArgs);
-  await enrichPostComments(source, posts);
   return {
     source: source,
     videos: [],
@@ -1737,6 +2042,8 @@ function postRecord(post: AggregateSearchPost): DynamicPostRecord | null {
 }
 
 function postProviderId(post: AggregateSearchPost): string {
+  const rowId = aggregateRowText(post.rows, ['Content ID', 'Provider ID']);
+  if (rowId.length > 0) return rowId;
   const record = postRecord(post);
   if (record !== null) {
     const id = recordText(record, ['id', 'objectID', 'object_id', 'story_id']);
@@ -1757,20 +2064,12 @@ function commentTextsFromResult(result: DynamicGenericToolResult): string[] {
   try {
     appendCommentTexts(JSON.parse(result.rawPreview) as DynamicPostValue, comments);
   } catch (_error) {}
-  if (comments.length < 2) {
+  if (comments.length < 5) {
     result.rows.forEach((row: AggregateSearchRowData): void => {
       appendCommentTexts(parsedDynamicPostRecord(row.value), comments);
     });
   }
-  return comments.slice(0, 2);
-}
-
-function appendComments(post: AggregateSearchPost, comments: string[]): void {
-  comments.forEach((comment: string): void => {
-    if (comment !== post.text && post.rows.every((row: AggregateSearchRowData): boolean => row.value !== comment)) {
-      post.rows.push({ label: 'comment', value: comment });
-    }
-  });
+  return comments.slice(0, 5);
 }
 
 function childIdsFromResult(result: DynamicGenericToolResult): string[] {
@@ -1784,68 +2083,85 @@ function childIdsFromResult(result: DynamicGenericToolResult): string[] {
     } else if (record !== null && Array.isArray(record.kids)) {
       kids = record.kids as DynamicPostValue[];
     }
-    return kids.slice(0, 2).map((item: DynamicPostValue): string => textOf(item).trim()).filter((id: string): boolean => id.length > 0);
+    return kids.slice(0, 5).map((item: DynamicPostValue): string => textOf(item).trim()).filter((id: string): boolean => id.length > 0);
   } catch (_error) {
     return [];
   }
 }
 
-async function enrichPostComments(source: AggregateSearchSource, posts: AggregateSearchPost[]): Promise<void> {
-  // ponytail: 首卡补评论不阻塞整批；逐卡评论等真正展示时再懒加载。
-  if (posts.length > 0) {
-    await enrichOnePostComments(source, posts[0]);
-  }
+export function waterfallCommentSourceSupported(source: string): boolean {
+  return source === 'youtube' || source === 'bilibili' || source === 'x' ||
+    source === 'hackernews' || source === 'reddit';
 }
 
-async function enrichOnePostComments(source: AggregateSearchSource, post: AggregateSearchPost): Promise<void> {
-  // commentCount 为空表示"未知"而非"没有评论"：未知时也尝试拉取，只有明确 0 才跳过。
-  const knownCount = Number(post.commentCount);
-  const knownZero = post.commentCount.trim().length > 0 && !Number.isNaN(knownCount) && knownCount <= 0;
-  if (knownZero || post.rows.some((row: AggregateSearchRowData): boolean => row.label === 'comment')) {
-    return;
-  }
-  const id = postProviderId(post);
-  if (id.length === 0) {
-    return;
-  }
+function commentResult(comments: WaterfallComment[]): WaterfallCommentsResult {
+  const visible = comments.filter((comment: WaterfallComment): boolean => comment.text.trim().length > 0).slice(0, 5);
+  return { state: visible.length > 0 ? 'ready' : 'empty', comments: visible };
+}
+
+function textComments(values: string[]): WaterfallComment[] {
+  return values.slice(0, 5).map((value: string): WaterfallComment => ({ text: value }));
+}
+
+export async function loadWaterfallComments(
+  source: AggregateSearchSource,
+  providerItemId: string,
+  youtubeApiKey: string = ''
+): Promise<WaterfallCommentsResult> {
+  const id = providerItemId.trim();
+  if (!waterfallCommentSourceSupported(source) || id.length === 0) return { state: 'empty', comments: [] };
   try {
+    if (source === 'youtube') return commentResult(await callYouTubeVideoComments(id, youtubeApiKey));
+    if (source === 'bilibili') return commentResult(await callBilibiliVideoComments(id));
     if (source === 'reddit') {
       const args: AggregateRedditCommentsArgs = { articleId: id };
       const result = await callComposioFixedDynamic('帮我用 Composio Reddit 读取帖子评论', 'social.reddit.comments', args as Object);
       if (result !== null && result.status === 'success') {
-        appendComments(post, commentTextsFromResult(result));
+        return commentResult(textComments(commentTextsFromResult(result)));
       }
-      return;
+      return { state: 'empty', comments: [] };
     }
     if (source === 'x') {
       const args: AggregateXSearchArgs = {
         query: 'conversation_id:' + id + ' -is:retweet', pageSize: 10,
-        expansions: 'author_id', mediaFields: '', tweetFields: 'id,text,author_id,created_at,conversation_id'
+        expansions: 'author_id', mediaFields: '', tweetFields: 'id,text,author_id,created_at,conversation_id',
+        userFields: 'id,name,username,profile_image_url'
       };
       const result = await callComposioFixedDynamic('帮我用 Composio X 读取公开回复', 'x.post.search', args as Object);
       if (result !== null && result.status === 'success') {
-        appendComments(post, xPostsFromComposioResult(result).map((reply: AggregateSearchPost): string => reply.text).slice(0, 2));
+        return commentResult(xPostsFromComposioResult(result).filter((reply: AggregateSearchPost): boolean =>
+          postProviderId(reply) !== id).slice(0, 5).map((reply: AggregateSearchPost): WaterfallComment => ({
+          text: reply.text,
+          authorName: reply.author || undefined,
+          authorAvatarUrl: aggregateAvatar(reply.rows) || undefined,
+          publishedAt: reply.publishedAt || undefined
+        })));
       }
-      return;
+      return { state: 'empty', comments: [] };
     }
     if (source === 'hackernews') {
       const parentArgs: AggregateHackerNewsItemArgs = { itemId: id };
       const parent = await callComposioFixedDynamic('帮我用 Composio Hacker News 读取帖子', 'social.hackernews.item.read', parentArgs as Object);
       if (parent === null || parent.status !== 'success') {
-        return;
+        return { state: 'empty', comments: [] };
       }
       const childIds = childIdsFromResult(parent);
+      const comments: string[] = [];
       for (let index = 0; index < childIds.length; index++) {
         const childArgs: AggregateHackerNewsItemArgs = { itemId: childIds[index] };
         const child = await callComposioFixedDynamic('帮我用 Composio Hacker News 读取评论', 'social.hackernews.item.read', childArgs as Object);
         if (child !== null && child.status === 'success') {
-          appendComments(post, commentTextsFromResult(child));
+          commentTextsFromResult(child).forEach((text: string): void => {
+            if (comments.length < 5 && comments.indexOf(text) < 0) comments.push(text);
+          });
         }
       }
+      return commentResult(textComments(comments));
     }
   } catch (_error) {
-    // 评论是补充信息；失败时保留已成功的主帖和真实评论数量。
+    return { state: 'error', comments: [] };
   }
+  return { state: 'empty', comments: [] };
 }
 
 async function aggregateZhihuSourceBatch(config: AggregateZhihuConfig, query: string): Promise<AggregateSearchSourceBatch> {
@@ -1857,6 +2173,22 @@ async function aggregateZhihuSourceBatch(config: AggregateZhihuConfig, query: st
     videos: [],
     posts: posts.slice(0, 10),
     status: statuses.length > 0 ? statuses[0] : statusFor('zhihu', 'empty', '知乎返回 0 条。', 0),
+    continuation: null
+  };
+}
+
+export async function aggregateZhihuHotListBatch(
+  config: AggregateZhihuConfig,
+  limit: number = 10
+): Promise<AggregateSearchSourceBatch> {
+  const posts: AggregateSearchPost[] = [];
+  const statuses: AggregateSearchSourceStatus[] = [];
+  await appendZhihuHotListPosts(config, limit, posts, statuses);
+  return {
+    source: 'zhihu',
+    videos: [],
+    posts: posts.slice(0, limit),
+    status: statuses.length > 0 ? statuses[0] : statusFor('zhihu', 'empty', '知乎热榜返回 0 条。', 0),
     continuation: null
   };
 }
@@ -1944,6 +2276,8 @@ function twitchPost(item: TwitchChannelSearchItem): AggregateSearchPost {
     details.push('科技热门');
   } else if (item.kind === 'game') {
     details.push('游戏热门');
+  } else {
+    details.push('关键词搜索');
   }
   if (item.gameName.length > 0) {
     details.push(item.gameName);
@@ -1972,17 +2306,10 @@ async function aggregateTwitchSourceBatch(
   policy: AggregateSearchPolicy,
   context: AggregateSearchSourceContext
 ): Promise<AggregateSearchSourceBatch> {
-  if (context !== 'interest') {
-    return {
-      source: 'twitch', videos: [], posts: [],
-      status: statusFor('twitch', 'unsupported', 'Twitch 仅用于发现流，普通聚合搜索不会发起请求。', 0),
-      continuation: null, rawCount: 0
-    };
-  }
-  const result: TwitchChannelSearchBatch = await discoverTwitchInterestStreams(
-    runtimeExternalProviderConfig.twitch,
-    { multilingual: policy.multilingual, technologyLimit: 3 }
-  );
+  const cursor = continuation !== null && continuation.kind === 'cursor' ? continuation.value : null;
+  const result: TwitchChannelSearchBatch = context === 'interest' ? await discoverTwitchInterestStreams(
+    runtimeExternalProviderConfig.twitch, { multilingual: policy.multilingual, technologyLimit: 3 }
+  ) : await searchTwitchChannels(runtimeExternalProviderConfig.twitch, query, limit, cursor);
   const posts = result.items.filter((item: TwitchChannelSearchItem): boolean =>
     twitchItemAllowedByPolicy(item, policy)).map((item: TwitchChannelSearchItem): AggregateSearchPost =>
     twitchPost(item));
@@ -2026,13 +2353,26 @@ function aggregateSourceBatch(
   if (source === 'twitch') {
     return aggregateTwitchSourceBatch(query, continuation, limit, policy, context);
   }
+  if (source === 'cnnews') {
+    return loadCnNewsSource(limit, context === 'search' ? query : '');
+  }
+  if (source === 'github') {
+    return context === 'interest' ? discoverPublicGitHub(limit) : searchPublicGitHub(query, limit);
+  }
+  if (source === 'steam') {
+    return discoverSteamNews(context === 'search' ? query : '', limit);
+  }
+  if (source === 'globalnews') {
+    return loadGlobalNews(runtimeExternalProviderConfig.globalNews, context === 'search' ? query : '', limit);
+  }
   if (source === 'x') {
     const args: AggregateXSearchArgs = {
       query: aggregateXSearchQuery(query, policy),
       pageSize: limit,
       expansions: 'attachments.media_keys,author_id',
       mediaFields: 'media_key,type,url,preview_image_url,variants,width,height',
-      tweetFields: 'id,text,author_id,created_at,public_metrics,attachments,conversation_id'
+      tweetFields: 'id,text,author_id,created_at,public_metrics,attachments,conversation_id',
+      userFields: 'id,name,username,profile_image_url'
     };
     if (continuation !== null && continuation.kind === 'cursor') {
       args.cursor = continuation.value;

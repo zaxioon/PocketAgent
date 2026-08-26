@@ -22,8 +22,36 @@ const indexPage = readFileSync(
   new URL('../entry/src/main/ets/pages/A2uiHome/Index.ets', import.meta.url),
   'utf8'
 );
+const canaryRuntime = readFileSync(
+  new URL('../entry/src/main/ets/pages/A2uiHome/agent/MultiAgentCanaryRuntime.ets', import.meta.url),
+  'utf8'
+);
+const leaderPlanner = readFileSync(
+  new URL('../entry/src/main/ets/pages/A2uiHome/agent/MultiAgentLeaderPlanner.ets', import.meta.url),
+  'utf8'
+);
+const waterfallCore = readFileSync(
+  new URL('../agent_core/src/main/ets/aiphone/runtime/WaterfallAnythingCore.ets', import.meta.url),
+  'utf8'
+);
+const toolGateway = readFileSync(
+  new URL('../agent_core/src/main/ets/aiphone/runtime/ToolGatewayClient.ets', import.meta.url),
+  'utf8'
+);
 const entryAbility = readFileSync(
   new URL('../entry/src/main/ets/entryability/EntryAbility.ets', import.meta.url),
+  'utf8'
+);
+const appScope = readFileSync(
+  new URL('../AppScope/app.json5', import.meta.url),
+  'utf8'
+);
+const cnnewsLogo = readFileSync(
+  new URL('../entry/src/main/resources/base/media/logo_cnnews.svg', import.meta.url),
+  'utf8'
+);
+const steamLogo = readFileSync(
+  new URL('../entry/src/main/resources/base/media/logo_steam.svg', import.meta.url),
   'utf8'
 );
 
@@ -45,11 +73,34 @@ const sourceLabelsJson = JSON.stringify([
   { source: 'youtube', label: 'YouTube' },
   { source: 'bilibili', label: 'B 站' },
   { source: 'applepodcasts', label: 'Apple Podcasts' },
-  { source: 'twitch', label: 'Twitch' }
+  { source: 'twitch', label: 'Twitch' },
+  { source: 'github', label: 'GitHub' },
+  { source: 'steam', label: 'Steam' },
+  { source: 'cnnews', label: 'CNNews' },
+  { source: 'globalnews', label: 'GlobalNews' }
 ]);
 const sourceOnlyJson = JSON.stringify(['applepodcasts', 'twitch']);
-const searchSourcesJson = JSON.stringify(['youtube', 'bilibili', 'applepodcasts']);
-const interestSourcesJson = JSON.stringify(['youtube', 'bilibili', 'applepodcasts', 'twitch']);
+const searchSourcesJson = JSON.stringify([
+  'youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu', 'applepodcasts', 'twitch',
+  'github', 'steam', 'cnnews', 'globalnews'
+]);
+const interestSourcesJson = JSON.stringify([
+  'youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu', 'applepodcasts', 'twitch',
+  'github', 'steam', 'cnnews', 'globalnews'
+]);
+assert.deepEqual(JSON.parse(searchSourcesJson), [
+  'youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu', 'applepodcasts', 'twitch',
+  'github', 'steam', 'cnnews', 'globalnews'
+]);
+assert.deepEqual(JSON.parse(searchSourcesJson), JSON.parse(interestSourcesJson));
+assert.deepEqual(JSON.parse(interestSourcesJson), [
+  'youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu', 'applepodcasts', 'twitch',
+  'github', 'steam', 'cnnews', 'globalnews'
+]);
+assert.doesNotMatch(cnnewsLogo, /<image|data:image\/png/,
+  'the grouped CNNews mark must stay vector-only so ArkWeb cannot show broken nested images');
+assert.doesNotMatch(steamLogo, /<image|data:image\/png/,
+  'the Steam mark must stay vector-only');
 const waterfallTemplateWithRegistry = waterfallJs
   .split('${WATERFALL_SOURCE_LABELS_JSON}').join(sourceLabelsJson)
   .split('${WATERFALL_SOURCE_ONLY_SOURCES_JSON}').join(sourceOnlyJson)
@@ -57,17 +108,40 @@ const waterfallTemplateWithRegistry = waterfallJs
   .split('${WATERFALL_INTEREST_SOURCE_IDS_JSON}').join(interestSourcesJson);
 const emittedWaterfallJs = Function('return `' + waterfallTemplateWithRegistry + '`;')();
 assert.doesNotThrow(() => new vm.Script(emittedWaterfallJs));
+const aggregatePostMediaSource = renderer.slice(
+  renderer.indexOf('function renderPostMedia'),
+  renderer.indexOf('function renderPostLink')
+);
+assert.match(aggregatePostMediaSource, /class="aggregate-post-media"[^>]*onerror="this\.hidden=true"/,
+  'failed remote post media such as Reddit CDN images must not expose a broken image');
 const reducedMotionCss = waterfallCss.slice(waterfallCss.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
 assert.match(indexPage, /@State interestWaterfallFullscreen:\s*boolean\s*=\s*false/,
   'search and interest Waterfall surfaces must not overwrite one shared fullscreen flag');
-assert.match(indexPage, /\.disableSwipe\(this\.waterfallFullscreen\s*\|\|\s*this\.interestWaterfallFullscreen\)/,
-  'either Waterfall fullscreen surface must disable the native root Swiper so it cannot steal detail gestures');
+assert.match(indexPage, /\.disableSwipe\(this\.bimRootIndex === 1\s*\|\|\s*this\.waterfallFullscreen\)/,
+  'the discovery page must keep the root Swiper locked so reader close does not relayout both pages');
 assert.doesNotMatch(indexPage, /\.disableSwipe\(false\)/,
   'the native root Swiper must not stay swipeable while Waterfall is fullscreen');
+assert.doesNotMatch(indexPage,
+  /\.disableSwipe\(this\.waterfallFullscreen\s*\|\|\s*this\.interestWaterfallFullscreen\)/,
+  'reader fullscreen must not toggle the native Swiper on every open and close');
 assert.doesNotMatch(indexPage, /onWaterfallFullscreenChange:\s*\(_active:\s*boolean\):\s*void\s*=>\s*\{\}/,
   'both Waterfall surfaces must report fullscreen state so the native root Swiper cannot steal gestures');
-assert.match(indexPage, /if \(!this\.interestWaterfallFullscreen\)\s*\{\s*Row\(\)\s*\{\s*WaterfallVoiceDock/s,
+assert.match(indexPage, /WaterfallVoiceDock\(\{/,
   'the one voice entry must exist only on the main independent discovery layer');
+assert.doesNotMatch(indexPage, /if \(!this\.interestWaterfallFullscreen\)\s*\{\s*WaterfallVoiceDock/s,
+  'returning to the feed must not remount the voice dock over the WebView');
+assert.doesNotMatch(indexPage,
+  /WaterfallVoiceDock\([\s\S]*?Visibility\.Hidden/,
+  'Visibility.Hidden still relayouts the WebView stack when the dock returns');
+assert.doesNotMatch(indexPage,
+  /WaterfallVoiceDock\([\s\S]*?\.opacity\(this\.interestWaterfallFullscreen/,
+  'opacity 0 still leaves a native layer on top of the reader WebView');
+assert.match(indexPage,
+  /HtmlHomeSurfaceView\([\s\S]*?\.zIndex\(1\)/,
+  'the WebView must stay above a lowered dock so reading is not composited under a native overlay');
+assert.match(indexPage,
+  /interestWaterfallFullscreen \? 0 : 2/,
+  'fullscreen tucks the already-mounted dock behind the WebView instead of covering it');
 assert.match(indexPage, /startVoiceInput\('waterfall'\)/,
   'the discovery dock must reuse ASR through its independent target');
 assert.match(entryAbility, /waterfallConversationPrompt/,
@@ -82,6 +156,47 @@ assert.match(indexPage, /requestSequences\.get\(source\) !== this\.interestSourc
   'a stale per-source discovery response must not overwrite a newer refill');
 assert.match(indexPage, /plannedSources\.indexOf\(source\) < 0/,
   're-enabling a source must not start a fresh recall when continuation is already planned');
+assert.match(indexPage, /WaterfallInterestRecallBatch[\s\S]*result\.request\.query/,
+  'each discovery source must log route, query, and whether it returned cards');
+assert.doesNotMatch(indexPage, /waitingForInitialPeers/,
+  'the first source with cards must paint immediately instead of waiting for slower peers');
+assert.doesNotMatch(waterfallJs, /function interleaveBySource/,
+  'feed order must follow native ranking instead of a renderer round-robin');
+assert.match(waterfallJs, /function renderedOrderCandidates\(payload\) \{\s*return candidates\(payload\)\.filter/,
+  'the renderer must paint payload order after filtering disabled sources');
+assert.match(waterfallJs, /insertAdjacentHTML\('beforebegin'/,
+  'late source cards must slot in without rebuilding the visible card');
+assert.match(toolGateway, /source === 'zhihu' \|\| source === 'bilibili'/,
+  'local discovery sources must start before YouTube/Composio can occupy the HTTP pool');
+assert.match(waterfallCore, /WATERFALL_WESTERN_EXPLORATION_QUERIES/,
+  'X / HN / Reddit must not search Chinese exploration queries');
+assert.match(waterfallCore, /'人工智能', '科技数码', '编程开发', '科学科普'/,
+  'Chinese discovery sources must search tech queries, not leaked profile tokens');
+assert.doesNotMatch(waterfallCore, /影视文化|生活灵感|运动赛事/,
+  'discovery exploration must not keep lifestyle and entertainment filler queries');
+assert.match(indexPage, /waterfallAdvanceVisibleFromAction/,
+  'native advance must accept the visible card, not only the stale current pointer');
+assert.match(indexPage,
+  /action\.id === 'waterfall\.comments\.load'[\s\S]*?this\.waterfallActionCandidate\(/,
+  'saved-only details must resolve comment requests through the existing saved-card candidate path');
+assert.match(indexPage, /persistSavedWaterfallCandidate\(current\)/,
+  'loaded comments must refresh an existing saved-card snapshot');
+assert.match(indexPage, /if \(active > 8\) return/,
+  'discovery refill must start before the user can swipe through the last three cards');
+assert.match(waterfallCore, /WATERFALL_LOW_WATERMARK: number = 3/,
+  'native inventory must refill before the rendered tail is exhausted');
+assert.match(waterfallCore, /function limitConsecutiveSources/,
+  'a later source must break a same-source run after the frozen window');
+assert.match(waterfallCore, /targetId: string = ''/,
+  'one advance may catch the feed pointer up to the visible card');
+const mergePayloadSource = waterfallJs.slice(
+  waterfallJs.indexOf('function mergePayload'),
+  waterfallJs.indexOf('function postSourceSelection')
+);
+assert.match(mergePayloadSource, /advancePending = false;/,
+  'a payload that does not move currentId must still unblock the next catch-up');
+assert.doesNotMatch(mergePayloadSource, /oldCurrentId !== text\(payload\.currentId\)\) advancePending = false/,
+  'holding advancePending until currentId changes deadlocks after a stale no-op');
 const fullscreenExpression = surfaceView.match(
   /export function waterfallLayerFullscreen\([^)]*\): boolean \{\s*return ([^;]+);\s*\}/
 );
@@ -103,16 +218,36 @@ assert.doesNotMatch(voiceDock, /按住说想看的内容/,
   'the discovery voice entry must read like a light tool, not a full chat composer');
 assert.doesNotMatch(voiceDock, /\.width\('100%'\)/,
   'the single voice entry must not occupy the full feed width');
-assert.match(voiceDock, /\.width\(216\)[\s\S]*\.height\(46\)/,
-  'the compact dock must keep a large enough touch target without dominating the feed');
-assert.match(voiceDock, /\.borderRadius\(16\)/,
-  'the compact voice tool must follow the soft card radius instead of looking like a text field');
-assert.match(indexPage, /WaterfallVoiceDock\([\s\S]*?\}\)\s*\}\s*\.width\('100%'\)\s*\.justifyContent\(FlexAlign\.Center\)/,
-  'the compact voice entry must stay centered below the discovery feed');
-assert.match(voiceDock, /this\.pressed \? 0\.98 : 1/,
+assert.doesNotMatch(voiceDock, /\.width\(216\)|\.height\(46\)/,
+  'the voice control must be a round button, not a composer-like bar');
+assert.match(voiceDock, /\.width\(48\)[\s\S]*\.height\(48\)/,
+  'the voice control needs a quiet 48px touch target, not a dominant floating action button');
+assert.match(voiceDock, /\.borderRadius\(24\)/,
+  'the voice control must be a circle, not a pill input');
+assert.match(voiceDock, /private fillColor\(\): string \{[\s\S]*?return COLOR_CARD;\s*\}/,
+  'idle fill must recede into the card surface instead of painting a solid accent disc');
+assert.doesNotMatch(voiceDock, /private fillColor\(\): string \{[^}]*return COLOR_ACCENT;/,
+  'the idle mic must not compete with the active discovery card');
+assert.doesNotMatch(indexPage, /Row\(\) \{\s*WaterfallVoiceDock/,
+  'the voice control must overlay the feed instead of consuming a chrome row');
+assert.match(indexPage, /Stack\(\{\s*alignContent:\s*Alignment\.Bottom\s*\}\)\s*\{\s*Image\(\$r\('app\.media\.home_light_aurora_background'\)\)[\s\S]*?HtmlHomeSurfaceView[\s\S]*?WaterfallVoiceDock/s,
+  'the independent discovery page must reuse the home aurora and pin the round voice button to the feed');
+  assert.match(voiceDock, /this\.pressed \? 0\.96 : 1/,
   'the voice entry needs immediate tactile press feedback');
 assert.match(voiceDock, /shouldStop = this\.pressed \|\| this\.isListening/,
   'releasing a fast press must stop ASR even before the parent prop catches up');
+assert.match(voiceDock, /from '\.\.\/style\/A2uiHomeTheme'/,
+  'the independent voice dock must use the same theme source as the home composer');
+for (const token of ['COLOR_ACCENT', 'COLOR_ACCENT_DEEP', 'COLOR_ACCENT_SOFT', 'COLOR_CARD',
+  'COLOR_CARD_EDGE', 'COLOR_CARD_SHADOW', 'COLOR_MUTED']) {
+  assert.match(voiceDock, new RegExp(`\\b${token}\\b`), `voice dock must use ${token}`);
+}
+assert.doesNotMatch(voiceDock, /COLOR_GLASS/,
+  'translucent glass over the warm paper stains the mic button yellow');
+assert.doesNotMatch(voiceDock, /#252522|#E9E8E3|#F8F7F3|#DAD9D3/,
+  'the discovery voice dock must not introduce a separate black and gray palette');
+assert.match(voiceDock, /\.opacity\(this\.isBusy \? 0\.72 : 1\)/,
+  'busy voice text must retain readable contrast on the warm surface');
 assert.match(waterfallJs, /if \(directDiscovery\) setFullscreen\(true\)/,
   'reader, source sheet, and video detail must hide the independent voice dock');
 assert.match(waterfallJs, /if \(directDiscovery\) setFullscreen\(false\)/,
@@ -148,8 +283,30 @@ assert.doesNotMatch(waterfallCss, /\.waterfall-card-shell:active\s*\{/,
   'source-only card shells must not shrink on touch');
 assert.doesNotMatch(waterfallCss, /\.waterfall-card-ambient/);
 assert.doesNotMatch(waterfallCss, /\.waterfall-card-shell\s*\{[^}]*height:\s*min\(70dvh/s);
-assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*scroll-snap-align:\s*center/s);
+assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*scroll-snap-align:\s*center/s,
+  'the settled card must stay in the visual center instead of sticking to the page top');
 assert.doesNotMatch(waterfallCss, /\.waterfall-card\s*\{[^}]*height:\s*100dvh/s);
+assert.doesNotMatch(waterfallCss, /\.waterfall-card\s*\{[^}]*height:\s*76dvh/s,
+  'cards must size to their format, not a forced viewport slot');
+assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*height:\s*auto[^}]*min-height:\s*0[^}]*margin:\s*0 auto 28px/s,
+  'landscape, portrait, image-text, and text cards keep their own height');
+assert.match(waterfallCss,
+  /\.waterfall-card-shell\s*\{[^}]*height:\s*auto[^}]*min-height:\s*0[^}]*margin:\s*0 14px/s,
+  'the white card surface must hug content instead of filling a page slot');
+assert.match(waterfallCss,
+  /\.waterfall-card--video\.waterfall-card--landscape \.waterfall-cinema-stage\s*\{[^}]*max-height:\s*min\(38dvh, 330px\)/s,
+  'landscape video cards keep the 16:9 stage');
+assert.match(waterfallCss,
+  /\.waterfall-card--video\.waterfall-card--portrait \.waterfall-cinema-stage\s*\{[^}]*width:\s*min\(68%, 270px\)[^}]*max-height:\s*min\(49dvh, 440px\)/s,
+  'portrait video cards keep the 9:16 stage');
+assert.match(waterfallCss,
+  /\.waterfall-card--image-text \.waterfall-cinema-stage\s*\{[^}]*height:\s*min\(40dvh, 360px\)/s);
+assert.match(waterfallCss,
+  /\.waterfall-card--text \.waterfall-card-shell\s*\{[^}]*min-height:\s*min\(44dvh, 420px\)[^}]*padding:\s*22px/s);
+assert.doesNotMatch(waterfallCss, /padding-top:\s*22vh/,
+  'a 22vh track pad is the empty band above the first card');
+assert.doesNotMatch(waterfallCss, /padding-top:\s*12dvh/,
+  'a 12dvh empty band above the first card is not the toolbar inset');
 assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*contain:\s*layout(?!\s+paint)/s,
   'card layout isolation must not clip the shadow into a horizontal line');
 assert.doesNotMatch(waterfallCss, /\.waterfall-card\s*\{[^}]*contain:[^;}]*paint/s);
@@ -157,8 +314,8 @@ assert.match(waterfallCss, /\.waterfall-icon svg\s*\{/);
 assert.doesNotMatch(waterfallCss, /\.waterfall-top-hotzone\s*\{/);
 assert.doesNotMatch(waterfallJs, /data-waterfall-top-hotzone/);
 assert.match(waterfallCss, /\.waterfall-toolbar\s*\{[^}]*opacity:\s*1/s);
-assert.match(waterfallCss, /\.waterfall-toolbar\s*\{[^}]*left:\s*0[^}]*right:\s*0[^}]*background:\s*#eef0f2[^}]*border-bottom:/s,
-  'discovery controls must live in one persistent top bar instead of floating pills');
+assert.match(waterfallCss, /\.waterfall-toolbar\s*\{[^}]*left:\s*0[^}]*right:\s*0[^}]*background:\s*linear-gradient/s,
+  'discovery chrome must fade into the feed instead of sitting on a solid strip');
 assert.match(waterfallCss, /\.waterfall-toolbar button,[^}]*\.waterfall-toolbar-title\s*\{[^}]*border:\s*0[^}]*box-shadow:\s*none/s,
   'persistent top-bar controls must not keep floating button surfaces');
 assert.match(waterfallJs, /data-waterfall-open/);
@@ -169,10 +326,106 @@ assert.ok(
 );
 assert.doesNotMatch(waterfallJs, />阅读全文</);
 assert.match(waterfallJs, /class="waterfall-source-action"[^>]*aria-label="查看来源"/);
+assert.match(waterfallJs, /data-waterfall-card-action=/,
+  'feed and detail cards must expose the same product reaction controls');
+assert.match(waterfallJs, /id: 'waterfall\.card\.action'/,
+  'reaction controls must use the bounded native action bridge');
+assert.match(waterfallJs, /function renderCollection/,
+  'manual saves need one dedicated collection view');
+assert.match(waterfallCss, /\.waterfall-card-action\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/s,
+  'compact icons must keep a 44px accessible hit target');
+assert.match(waterfallCss, /\.waterfall-card-action \.waterfall-icon\s*\{[^}]*width:\s*32px[^}]*height:\s*32px/s,
+  'the visible selected surface must stay quieter than the hit target');
+assert.match(waterfallCss, /\.waterfall-card-action \.waterfall-icon svg\s*\{[^}]*width:\s*19px[^}]*height:\s*19px/s,
+  'card actions must not compete with card content');
+assert.match(renderer, /data-waterfall-collection-open/,
+  'the discovery toolbar needs an icon-only collection entry');
+assert.match(renderer, /data-waterfall-search-open/,
+  'direct discovery needs one explicit search entry in its existing toolbar');
+assert.match(renderer, /id="waterfall-search-form"/,
+  'search must expand in the discovery toolbar instead of opening another page');
+assert.match(waterfallCss,
+  /\.waterfall-toolbar\.is-searching[\s\S]*?\.waterfall-search-form[\s\S]*?transform:\s*none/,
+  'the selected A interaction must morph the search field in place');
+assert.match(waterfallJs, /id:\s*'waterfall\.search\.submit'/,
+  'discovery search must use its bounded native action bridge');
+assert.match(waterfallJs, /id:\s*'waterfall\.search\.exit'/,
+  'the first back action in search results must restore discovery');
+assert.match(canaryRuntime,
+  /!focusedRelease \|\|[\s\S]*?definition\.toolId !== 'media\.aggregate\.search'/,
+  'natural conversation must not advertise aggregate search in the focused release');
+assert.match(leaderPlanner,
+  /registeredCapability\(context, 'media\.aggregate\.search'\)[\s\S]*?Aggregate media search is discovery-only/,
+  'the leader must not be prompted to invent the discovery-only search capability');
+assert.match(waterfallJs, /searchFeedScrollTop/,
+  'exiting search must restore the exact pre-search discovery position');
+assert.match(waterfallJs, /searchInput\.blur\(\)/,
+  'exiting search must release the web input focus before returning home');
+assert.match(indexPage,
+  /\.onChange\(\(index: number\)[\s\S]*?index === 1[\s\S]*?else inputMethod\.getController\(\)\.hideTextInput\(\)/,
+  'returning home must dismiss a keyboard opened by discovery search');
+assert.match(indexPage,
+  /if \(document\.kind !== 'aggregate-search'\) \{[\s\S]*?return document;[\s\S]*?return createHtmlHomeDocument\(\{[\s\S]*?messages: this\.messages/,
+  'a persisted legacy aggregate surface must fall back to the normal home without deleting conversation history');
+assert.match(waterfallJs, /searchPending[\s\S]*?payload[\s\S]*?candidates\.length === 0/,
+  'an empty pending payload must leave the current discovery card mounted');
+const searchCompletionSource = waterfallJs.slice(
+  waterfallJs.indexOf('if (searchActive && searchPending'),
+  waterfallJs.indexOf('pendingPayload = payloadAfterCardAction')
+);
+assert.match(searchCompletionSource, /searchInput\.blur\(\)/,
+  'completed search must dismiss its text input focus');
+assert.match(searchCompletionSource, /toolbar\.classList\.remove\('is-searching'\)/,
+  'completed search must restore collection and source controls');
+const openSearchSource = waterfallJs.slice(
+  waterfallJs.indexOf('function openSearch'),
+  waterfallJs.indexOf('function submitSearch')
+);
+assert.doesNotMatch(openSearchSource, /if \(!directDiscovery \|\| searchActive/,
+  'the restored search control must reopen for query refinement');
+const directDiscoveryUpdateSource = indexPage.slice(
+  indexPage.indexOf('private applyInterestWaterfallUpdate'),
+  indexPage.indexOf('private runNextInterestExplorationIfNeeded')
+);
+assert.match(directDiscoveryUpdateSource,
+  /update\.expansionRequest !== undefined[\s\S]*?runInterestWaterfallExpansion/,
+  'discovery search must execute query expansion when continuation planning requests it');
+const exitDiscoverySearchSource = indexPage.slice(
+  indexPage.indexOf('private exitInterestWaterfallSearch'),
+  indexPage.indexOf('private ensureInterestWaterfall')
+);
+assert.match(exitDiscoverySearchSource,
+  /waterfallPreferenceProfile\.discoveryEnabledSources[\s\S]*?applyWaterfallSourceSelection/,
+  'Back from search results must reconcile the discovery snapshot with saved source changes');
+assert.match(renderer, /id="waterfall-collection"/,
+  'the collection must stay inside the existing ArkWeb shell');
+assert.match(waterfallJs, /function readerParagraphs/,
+  'long detail copy needs conservative paragraph normalization');
+assert.doesNotMatch(toolGateway,
+  /recall\.route === 'popular' && allowedSources\.indexOf\('zhihu'\)/,
+  'Zhihu discovery must use the shared search path that returns likes and comments');
+assert.match(waterfallJs, /function playCardActionFeedback/,
+  'like and save need one reusable, interruptible feedback motion');
+assert.match(waterfallJs, /Math\.min\(4,/,
+  'card-action particles must stay capped at four');
+assert.match(waterfallJs, /function renderSourceConvergence/,
+  'first discovery load must visualize real source convergence');
+assert.match(homePage, /struct PageStateIndicator/,
+  'home needs one non-clickable status indicator above the composer');
+assert.doesNotMatch(indexPage, /PageStateIndicator\s*\(\s*\{/,
+  'the page indicator belongs only on home, never over discovery');
+assert.match(indexPage, /geoLocationManager\.isLocationEnabled\(\)/,
+  'location permission success must still detect a disabled system location service');
+assert.match(homePage, /定位服务未开启，附近结果可能不够准确。/,
+  'the disabled-location notice must stay contextual above the composer');
 assert.match(waterfallJs, /waterfall-reader--image-text/);
 assert.match(waterfallJs, /waterfall-reader--text/);
 assert.match(waterfallJs, /waterfall-reader--video/);
-assert.match(waterfallJs, /waterfall-reader-video-card/);
+assert.match(waterfallJs, /waterfall-reader-copy/);
+assert.doesNotMatch(waterfallJs, /waterfall-reader-video-card/,
+  'video, image-text, and text details must use the same reader structure');
+assert.doesNotMatch(waterfallJs, /waterfall-reader-video-copy/,
+  'detail copy must not fork into a video-only wrapper');
 assert.match(waterfallJs, /requestAnimationFrame/);
 assert.doesNotMatch(waterfallJs, /reader\.offsetWidth/,
   'opening details must not force a synchronous full-reader layout');
@@ -191,19 +444,46 @@ assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*opacity:\s*0\.14[^}]*scale
   'distant cards stay dimmer than the current card');
 assert.match(waterfallCss, /\.waterfall-card\.is-adjacent\s*\{[^}]*opacity:\s*0\.42[^}]*scale\(0\.975\)/s,
   'the cards above and below the current card must read as adjacent, not fully faded');
-assert.match(waterfallCss, /\.waterfall-card\.is-active,\s*\n\.waterfall-card--video-fullscreen\s*\{[^}]*opacity:\s*1[^}]*scale\(1\)/s,
-  'the current card must stay fully opaque');
+assert.doesNotMatch(waterfallCss, /\.waterfall-card\s*\{[^}]*translate3d\(0,\s*14px/s,
+  'vertical card translation fights the paging scroll');
+assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*transition:\s*opacity 120ms var\(--ease-out\), transform 140ms var\(--ease-out\)/s,
+  'class changes need a short settle, not a long trailing scale');
+assert.match(waterfallCss, /\.waterfall-card\.is-active,[\s\S]*?transform:\s*none/s,
+  'the current card must drop ancestor transforms so in-card iframes can play');
 assert.doesNotMatch(waterfallCss, /\.waterfall-reader-hotzone\s*\{/);
 assert.doesNotMatch(waterfallJs, /data-waterfall-reader-hotzone/);
 assert.match(waterfallCss, /\.waterfall-reader-head\s*\{[^}]*opacity:\s*1/s);
 assert.match(waterfallCss, /\.waterfall-reader-head\s*\{[^}]*left:\s*0[^}]*right:\s*0[^}]*background:\s*#eef0f2[^}]*border-bottom:/s,
   'detail controls must stay in an opaque persistent top bar while content scrolls');
+assert.match(waterfallCss,
+  /\.waterfall-reader-signals\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/s,
+  'seven detail metrics must fit in two rows at normal phone widths');
+assert.match(waterfallCss,
+  /@media \(max-width:\s*360px\)[\s\S]*?\.waterfall-reader-signals\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/,
+  'very narrow detail views must keep metrics within three rows');
 assert.match(waterfallCss, /\.waterfall-reader\.active\.closing\s*\{[^}]*pointer-events:\s*auto/s,
   'the closing reader must keep the leftover press until it is actually hidden');
 assert.doesNotMatch(waterfallCss, /\.waterfall-reader\.active\.closing \.waterfall-reader-body\s*\{[^}]*opacity:\s*0/s,
   'the detail body must remain visible for the shared-card return animation');
+assert.match(waterfallCss, /\.waterfall-edge-fade--bottom\s*\{[^}]*bottom:\s*0/s,
+  'the feed bottom must fade into the voice control instead of a hard chrome edge');
+assert.match(waterfallCss,
+  /\.waterfall-track\s*\{[^}]*padding:\s*calc\(64px \+ env\(safe-area-inset-top\) \+ 12px\) 0/s,
+  'the first card must sit below the discovery toolbar, not a 12dvh empty band');
+assert.doesNotMatch(waterfallCss, /padding-bottom:\s*18dvh/,
+  'a viewport-sized bottom pad makes the feed feel empty and breaks the last snap');
 assert.match(waterfallCss, /\.waterfall-card\s*\{[^}]*scroll-snap-stop:\s*always/s,
   'discovery paging must stop on the next card like Douyin, not skip through a fling');
+assert.match(appScope, /"bundleName"\s*:\s*"com\.jiuwen\.appless"/,
+  'the only build target must be the canonical Appless bundle');
+assert.doesNotMatch(appScope, /com\.example\.aiphonedemo/,
+  'the historical example bundle must never return to the active build');
+assert.doesNotMatch(waterfallJs, /function applyCardMotion/,
+  'per-frame opacity writes stall ArkWeb; paging must stay on CSS snap and class transitions');
+assert.match(waterfallJs, /return 'media'/,
+  'video play must keep the user activation instead of canceling the tap');
+assert.match(waterfallJs, /preferencesFeedScrollTop/,
+  'closing source settings must restore the exact feed position');
 assert.doesNotMatch(waterfallCss, /\.waterfall-card\.is-active \.waterfall-card-shell\s*\{/,
   'active-card shadow pulses make repeated fast swipes look like card refreshes');
 assert.match(waterfallCss, /\.waterfall-overlay\s*\{[^}]*display:\s*none[^}]*background:\s*var\(--paper\)[^}]*opacity:\s*0/s);
@@ -216,10 +496,19 @@ assert.match(waterfallCss, /\.waterfall-cinema-copy\s*\{[^}]*overflow:\s*hidden/
 assert.match(waterfallCss, /\n\.waterfall-cinema-copy\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/s);
 assert.match(waterfallCss, /\n\.waterfall-copy-actions\s*\{[^}]*margin-top:\s*auto/s);
 assert.match(waterfallCss, /\.waterfall-reader-body\s*\{[^}]*overflow-y:\s*auto/s);
-assert.match(waterfallCss, /\.waterfall-reader\s*\{[^}]*opacity:\s*0[^}]*scale\(0\.985\)[^}]*transform 180ms var\(--ease-out\)/s,
-  'opening details must ease up from a slightly smaller card, using literal transforms');
-assert.match(waterfallCss, /\.waterfall-reader\.active\s*\{[^}]*opacity:\s*1[^}]*scale\(1\)/s,
-  'the open detail view must finish at full size');
+assert.match(waterfallCss,
+  /\.waterfall-reader-signal b\s*\{[^}]*grid-column:\s*2[^}]*grid-row:\s*1[^}]*overflow-wrap:\s*anywhere/s,
+  'detail metrics must use the value column and wrap instead of truncating');
+assert.match(waterfallCss,
+  /\.waterfall-reader-source \.waterfall-author-name\s*\{[^}]*max-width:\s*none[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip[^}]*white-space:\s*normal/s,
+  'detail author data must wrap instead of inheriting card ellipsis');
+assert.match(waterfallCss,
+  /@media \(max-width:\s*480px\)[\s\S]*?\.waterfall-reader-context\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*gap:\s*6px/s,
+  'phone details must place metadata on full-width rows instead of squeezing source, author, and date together');
+assert.match(waterfallCss, /\.waterfall-reader\s*\{[^}]*opacity:\s*0[^}]*scale\(0\.985\)[^}]*transform-origin:\s*center[^}]*transform 180ms var\(--ease-out\)/s,
+  'opening details uses a short center fade, not a full-screen scale from the card');
+assert.match(waterfallCss, /\.waterfall-reader\.active\s*\{[^}]*opacity:\s*1[^}]*transform:\s*none/s,
+  'the open detail view must drop its transform so the Bilibili iframe can play');
 assert.match(waterfallCss, /\.waterfall-reader\.active\.closing\s*\{[^}]*opacity:\s*0[^}]*scale\(0\.99\)/s,
   'returning must ease back into the feed instead of cutting');
 assert.match(waterfallCss, /\n\.waterfall-reader-layout \{ width: min\(100%, 640px\); margin: 0 auto; \}/,
@@ -235,13 +524,31 @@ assert.match(aggregateCss, /--ease-out:\s*cubic-bezier\(0\.23, 1, 0\.32, 1\)/);
 assert.match(aggregateCss, /--ease-drawer:\s*cubic-bezier\(0\.32, 0\.72, 0, 1\)/);
 assert.match(waterfallCss, /\.waterfall-reader\s*\{[^}]*visibility:\s*hidden[^}]*visibility 0s linear 180ms/s);
 assert.match(waterfallCss, /\.waterfall-reader\.active\s*\{[^}]*transition-delay:\s*0s/s);
+const videoPlayCss = waterfallCss.slice(
+  waterfallCss.indexOf('\n.waterfall-reader-video-play {'),
+  waterfallCss.indexOf('\n.waterfall-reader-video-stage.is-playing')
+);
+assert.match(videoPlayCss, /background:\s*transparent/,
+  'the play affordance must not tint the whole poster');
+assert.match(videoPlayCss, /width:\s*44px[^}]*background:\s*rgba\(24, 28, 32, 0\.52\)/s,
+  'the play affordance must be a quiet neutral control instead of a large colored badge');
+assert.match(videoPlayCss, /\.waterfall-reader-video-play span\s*\{\s*display:\s*none/,
+  'the visible play label must not compete with the video poster');
+assert.doesNotMatch(videoPlayCss, /125, 75, 59/,
+  'the video play affordance must not use the brown accent');
 assert.doesNotMatch(waterfallJs, /querySelector\('\[data-waterfall-reader-close\]'\)/,
   'reopening a card must not stack another tap binder on the close button');
-assert.match(waterfallCss, /\.waterfall-preferences\s*\{[^}]*transform:\s*none[^}]*opacity:\s*0[^}]*visibility 0s linear 140ms/s);
-assert.match(waterfallCss, /\.waterfall-preferences\.active\s*\{[^}]*transition-delay:\s*0s/s);
+assert.match(waterfallCss,
+  /\.waterfall-preferences\s*\{[^}]*transform:\s*translate3d\(0, 24px, 0\)[^}]*opacity:\s*0/s,
+  'the source sheet must enter with a short slide and fade');
+assert.match(waterfallCss,
+  /\.waterfall-preferences\.active\s*\{[^}]*transform:\s*translate3d\(0, 0, 0\)[^}]*transition-delay:\s*0s/s);
 assert.match(waterfallCss,
   /\.waterfall-preferences:not\(\.active\),\s*\.waterfall-preferences:not\(\.active\) \*\s*\{[^}]*pointer-events:\s*none !important/s,
   'every descendant of the hidden source sheet must stop intercepting Twitch controls');
+assert.match(waterfallCss,
+  /\.waterfall-preferences:not\(\.active\)\s*\{[^}]*opacity 100ms var\(--ease-out\)[^}]*transform 100ms var\(--ease-out\)[^}]*visibility 0s linear 100ms !important/s,
+  'closing source settings must keep one short visible motion without restoring the delayed close phase');
 assert.match(waterfallCss, /\.waterfall-video-fullscreen-toggle\s*\{[^}]*min-height:\s*44px[^}]*cursor:\s*pointer[^}]*transform 140ms var\(--ease-out\)/s);
 assert.match(waterfallCss, /\.waterfall-cinema-card a, \.waterfall-read-button\s*\{[^}]*transform 140ms var\(--ease-out\)/s);
 assert.match(waterfallCss, /\.waterfall-reader-head button\s*\{[^}]*transform 140ms var\(--ease-out\)/s);
@@ -255,7 +562,17 @@ assert.match(reducedMotionCss, /\.waterfall-overlay\.active\s*\{[^}]*animation:\
 assert.match(waterfallCss, /\.waterfall-cinema-card p\s*\{[^}]*-webkit-line-clamp:\s*3/s);
 assert.match(waterfallCss, /\.waterfall-cinema-card h2\s*\{[^}]*-webkit-line-clamp:\s*4/s);
 assert.match(waterfallCss, /\.waterfall-card--text h2\s*\{[^}]*-webkit-line-clamp:\s*6/s);
-assert.match(waterfallCss, /\.waterfall-preferences label\s*\{[^}]*border:\s*1px solid/s);
+assert.match(waterfallCss,
+  /\.waterfall-preferences label\s*\{[^}]*border:\s*0[^}]*border-bottom:\s*1px solid[^}]*border-radius:\s*0[^}]*background:\s*transparent/s,
+  'source rows must stay compact and flat instead of becoming rounded cards');
+assert.match(waterfallCss,
+  /\.waterfall-source-name\s*\{[^}]*overflow:\s*visible[^}]*white-space:\s*normal/s,
+  'source names must remain fully readable as the registry grows');
+assert.match(waterfallJs, /sourceStateIsUnavailable[\s\S]*?needs_auth[\s\S]*?missing.*credential/i,
+  'only definite unavailable sources may be disabled');
+assert.doesNotMatch(renderer,
+  /选择参与发现与搜索的来源|暂时失败的来源仍可使用|只有确定不可用的来源会被停用/,
+  'the compact source sheet must not add an explanatory paragraph');
 assert.doesNotMatch(waterfallCss, /\.waterfall-preferences > div:last-child > button/,
   'the source sheet must not end in an oversized full-width done button');
 assert.match(waterfallCss, /\.waterfall-toolbar-secondary\s*\{[^}]*border:\s*0/s);
@@ -280,6 +597,8 @@ assert.doesNotMatch(waterfallCss, /\.waterfall-track\.(reader-open|sheet-open)/,
 assert.match(waterfallCss,
   /\.waterfall-overlay\.reading \.waterfall-track,\s*\.waterfall-overlay\.sheet-open \.waterfall-track\s*\{[^}]*pointer-events:\s*none[^}]*touch-action:\s*none/s,
   'open details and the source sheet must freeze the hidden feed without changing overflow');
+assert.match(waterfallCss, /\.waterfall-reader\.active\.closing\s*\{[^}]*pointer-events:\s*auto/s,
+  'the closing reader must keep the leftover press until it is actually hidden');
 assert.match(waterfallCss, /\.waterfall-preferences\s*\{[^}]*z-index:\s*(?:3\d|4\d)/s,
   'the source sheet must stack above the persistent discovery chrome');
 assert.doesNotMatch(waterfallJs, /--reader-card-/,
@@ -303,6 +622,15 @@ assert.match(surfaceView, /asyncMethodList:\s*\['postAction'/,
   'a synchronous javaScriptProxy call blocks the page JS thread on a cross-process round trip');
 assert.doesNotMatch(surfaceView, /methodList:\s*\[[^\]]*'postAction'/,
   'the action bridge must stay off the synchronous proxy list');
+assert.match(waterfallJs,
+  /Object\.defineProperty\(window, '__arkWebDomTree'/,
+  'Waterfall must intercept ArkWeb DOM instrumentation when it is injected after page JS');
+assert.match(waterfallJs,
+  /scanner\.addDomTreeReportedAsync = function \(\) \{\};/,
+  'Waterfall must prevent ArkWeb from starting the full-DOM scanner');
+assert.match(waterfallJs,
+  /disableArkWebDomTree[\s\S]*scanner\.removeDomTreeReported\(\)/,
+  'Waterfall must also detach an ArkWeb scanner that was injected first');
 assert.match(waterfallJs, /function syncCardsAfterPaint/,
   'layout reads must wait for the paint that follows a card append');
 const afterPaintSource = waterfallJs.slice(
@@ -325,20 +653,99 @@ const closeReaderSource = waterfallJs.slice(
 );
 assert.doesNotMatch(closeReaderSource, /reader\.innerHTML\s*=\s*['"]{2}/,
   'closing details must not tear down the reader DOM; ArkWeb walks the whole tree on large mutations');
+assert.match(closeReaderSource, /stopReaderMedia\(\)/,
+  'returning must tear down the player before the feed is shown again');
+assert.ok(
+  closeReaderSource.indexOf("reader.classList.add('closing')") <
+    closeReaderSource.indexOf('stopReaderMedia()'),
+  'the close motion must start before player teardown'
+);
+assert.ok(
+  closeReaderSource.indexOf('setFullscreen(false)') <
+    closeReaderSource.indexOf('= setTimeout'),
+  'native chrome must restore while the reader still covers the feed'
+);
+assert.ok(
+  closeReaderSource.indexOf("overlay.classList.remove('reading')") <
+    closeReaderSource.indexOf('= setTimeout'),
+  'the feed must accept scrolls as soon as the reader starts closing'
+);
+assert.match(closeReaderSource, /setTimeout\(function \(\) \{[\s\S]*stopReaderMedia\(\)/,
+  'player teardown must wait a turn so the close motion can paint');
+assert.match(closeReaderSource, /reader\.style\.pointerEvents = 'none'/,
+  'after the leftover close click, the fading reader must stop eating feed scrolls');
+assert.ok(
+  closeReaderSource.indexOf("reader.classList.remove('active')") <
+    closeReaderSource.indexOf('track.scrollTop = readerFeedScrollTop'),
+  'feed realignment must wait until the reader layer is gone'
+);
+assert.doesNotMatch(closeReaderSource, /requestAnimationFrame\(restoreFeed\)/,
+  'writing scrollTop on the same frame as close fights native snap');
+assert.doesNotMatch(closeReaderSource, /updateCardPresentation\(true\)/,
+  'returning to the feed must not force a synchronous card layout pass');
+assert.match(waterfallJs, /function scheduleIdleFlush/,
+  'deferred payloads must wait for an idle feed instead of rebuilding on reveal');
+const applyWaterfallUpdateSource = waterfallJs.slice(
+  waterfallJs.indexOf('window.__aiphoneApplyWaterfallUpdate'),
+  waterfallJs.indexOf('function flushPendingPayload')
+);
+assert.match(applyWaterfallUpdateSource, /mode === 'reading'/,
+  'live provider updates must wait until details close instead of mutating the hidden feed');
+assert.match(applyWaterfallUpdateSource, /mode === 'reader_closing'/,
+  'the close motion still defers feed mutations until the reader layer is gone');
+assert.match(waterfallJs, /createElement\('iframe'\)/,
+  'ArkWeb innerHTML iframes do not start Bilibili playback');
+assert.match(waterfallJs, /referrerpolicy', 'origin-when-cross-origin'/,
+  'Bilibili player.html needs the same referrer policy as the working media renderer');
+assert.match(waterfallJs, /function realignPresentedCard/,
+  'sheet close must refresh card presentation after chrome returns');
+const realignSource = waterfallJs.slice(
+  waterfallJs.indexOf('function realignPresentedCard'),
+  waterfallJs.indexOf('function freezeFeedMotion')
+);
+assert.match(realignSource, /if \(cardMetrics\.length === 0\) refreshCardMetrics/,
+  'returning to the feed must not remeasure every card when snap metrics already exist');
+assert.match(waterfallJs.slice(
+  waterfallJs.indexOf('function closePreferences'),
+  waterfallJs.indexOf('function render()')
+), /realignPresentedCard/,
+  'closing the source sheet must refresh the current card without walking the feed');
+const closePreferencesSource = waterfallJs.slice(
+  waterfallJs.indexOf('function closePreferences'),
+  waterfallJs.indexOf('function render()')
+);
+assert.match(closePreferencesSource, /changed[\s\S]*?(?:flushPendingPayload\(selectedSources\)|render\(\))/,
+  'source changes must update the local feed before the sheet returns control');
+assert.ok(
+  closePreferencesSource.indexOf('realignPresentedCard(changed)') <
+    closePreferencesSource.indexOf('setFullscreen(false)'),
+  'sheet close must restore the visible card before returning control'
+);
+assert.match(waterfallJs, /snapToCard && track\) track\.scrollTop = scrollTopForCard\(visibleCardIndex\(\)\)/,
+  'a changed source list must align the rebuilt feed to a real card before the next swipe');
 assert.match(waterfallJs, /readerMountedId/,
   'reopening the same card must reuse the already-built reader layer');
 const renderPreferencesSource = waterfallJs.slice(
   waterfallJs.indexOf('function renderPreferences'),
   waterfallJs.indexOf('function closePreferences')
 );
-assert.match(renderPreferencesSource, /if \(!preferences\.innerHTML\)/,
-  'reopening source settings must not rebuild the sheet');
+assert.match(renderPreferencesSource,
+  /if \(!preferences\.innerHTML \|\| preferenceStatusKey !== nextStatusKey\)/,
+  'reopening source settings rebuilds only when hard availability changes');
 assert.doesNotMatch(waterfallJs, /CARD_MOUNT_RADIUS/,
   'virtualizing offscreen cards as empty placeholders blanks the feed and breaks snap');
 assert.doesNotMatch(waterfallJs, /waterfall-card--placeholder/,
   'every ranked card must keep its real markup so the next page is already painted');
-assert.match(waterfallJs, /pageAnchorIndex/,
-  'a paging gesture may only travel to the adjacent card');
+const visibleCardSource = waterfallJs.slice(
+  waterfallJs.indexOf('function visibleCardIndex'),
+  waterfallJs.indexOf('function snapTopForNode')
+);
+assert.doesNotMatch(visibleCardSource, /Math\.abs\(bestIndex - presentedIndex\) > 1/,
+  'clamping highlight to ±1 makes the current card lag a full page behind the finger');
+assert.doesNotMatch(visibleCardSource, /pageAnchorIndex >= 0/,
+  'a paging anchor must not freeze is-active until settle');
+assert.match(waterfallJs, /visibleId:/,
+  'one advance must tell native which card is actually on screen');
 assert.match(waterfallJs, /shell\.hidden/,
   'the hidden aggregate search page must leave the accessibility tree while discovery is open');
 assert.match(waterfallJs, /window\.__aiphoneHandleWaterfallBack\s*=\s*function/);
@@ -346,23 +753,88 @@ assert.match(surfaceView, /waterfallBackRequestTick/);
 assert.match(surfaceView, /__aiphoneHandleWaterfallBack/);
 assert.match(homePage, /waterfallBackRequestTick/);
 assert.match(indexPage, /onBackPress\(\): boolean[\s\S]*waterfallBackRequestTick/);
+assert.match(indexPage,
+  /onBackPress\(\): boolean[\s\S]*if \(this\.showConfigPage\) \{[\s\S]*this\.showConfigPage = false;[\s\S]*return true;/,
+  'system Back must return from the conditionally rendered settings page');
 const scrollHandlerSource = waterfallJs.slice(
   waterfallJs.indexOf("track.addEventListener('scroll'"),
   waterfallJs.indexOf("track.addEventListener('error'")
 );
-assert.match(scrollHandlerSource, /if \(mode !== 'discovering'\) return;/,
-  'the hidden discovery feed must ignore scroll work while details are open');
-assert.match(scrollHandlerSource, /scheduleAdvance/);
+assert.doesNotMatch(scrollHandlerSource, /scheduleAdvance/,
+  'scroll frames must only paint presentation; advancing waits for the settled page');
 assert.doesNotMatch(scrollHandlerSource, /postAdvanceIfNeeded\(updateCardPresentation\(\)\)/,
   'native bridge work must not run inside the scrolling animation frame');
+assert.doesNotMatch(scrollHandlerSource, /track\.scrollTop\s*=/,
+  'writing scrollTop during scroll fights the finger and flashes neighboring cards');
+assert.doesNotMatch(waterfallJs, /function clampPagingScroll/,
+  'live paging clamps retrigger opacity and scale transitions on every frame');
+assert.doesNotMatch(waterfallCss, /\.waterfall-track\.is-scrolling/,
+  'native scroll snap must remain the single position owner throughout inertia');
+assert.doesNotMatch(waterfallCss, /\.waterfall-overlay\.reading \.waterfall-card[\s\S]{0,80}transition:\s*none/,
+  'killing card transitions under the reader makes the return snap instead of settle');
+assert.doesNotMatch(
+  waterfallCss,
+  /\.waterfall-overlay\.reading \.waterfall-track,[^}]*scroll-snap-type:\s*none/s,
+  'turning snap off under details hitchs the feed when snap comes back'
+);
+assert.doesNotMatch(waterfallJs, /pagingMoved|feedSnapping|snapPagingCard|pagingStartTop/,
+  'touch completion must never compete with native momentum or mandatory snap');
+assert.match(waterfallJs, /function freezeFeedMotion/,
+  'opening or closing details must cancel in-flight feed presentation');
+const freezeFeedSource = waterfallJs.slice(
+  waterfallJs.indexOf('function freezeFeedMotion'),
+  waterfallJs.indexOf('function beginPagingGesture')
+);
+assert.match(freezeFeedSource, /payloadSettleTimer/,
+  'opening details must cancel the delayed feed settle or cards flash behind the reader');
+const openReaderSource = waterfallJs.slice(
+  waterfallJs.indexOf('function openReader'),
+  waterfallJs.indexOf('function toggleVideoFullscreen')
+);
+assert.doesNotMatch(openReaderSource, /classList\.remove\('active'\)/,
+  'reopening during the close transition must reverse from the current visual state');
+assert.match(openReaderSource, /requestAnimationFrame\(reveal\)/,
+  'first entry must paint the mounted detail at its resting origin before starting the transition');
+const settleSource = waterfallJs.slice(
+  waterfallJs.indexOf('function settleInteraction'),
+  waterfallJs.indexOf("document.addEventListener('touchstart'")
+);
+assert.match(settleSource, /scheduleAdvance\(settledIndex\)/,
+  'the settled page must still advance the native feed once scrolling stops');
+assert.doesNotMatch(settleSource, /is-scrolling|scrollTop\s*=/,
+  'settling deferred payloads must not restart snap or rewrite the scroll position');
+const touchCompletionSource = waterfallJs.slice(
+  waterfallJs.indexOf("document.addEventListener('touchend'"),
+  waterfallJs.indexOf("track.addEventListener('scroll'")
+);
+assert.doesNotMatch(touchCompletionSource, /scrollTop\s*=|snapPagingCard/,
+  'touchend and touchcancel must leave momentum and native snap untouched');
 const presentationSource = waterfallJs.slice(
   waterfallJs.indexOf('function updateCardPresentation'),
   waterfallJs.indexOf('function refreshMetricsAfterSettle')
 );
+assert.doesNotMatch(presentationSource, /scrollActive && !force/,
+  'freezing opacity classes until settle pops the incoming card from faded to solid');
 assert.doesNotMatch(presentationSource, /innerHTML\s*=/,
   'player DOM teardown must not run in the presentation frame');
 assert.doesNotMatch(waterfallJs, /data-waterfall-video-direct/,
   'Bilibili iframes must mount only after an explicit play action');
+const mediaErrorSource = waterfallJs.slice(
+  waterfallJs.indexOf("track.addEventListener('error'"),
+  waterfallJs.indexOf("track.addEventListener('ended'")
+);
+assert.match(mediaErrorSource, /image\.hidden\s*=\s*true/,
+  'a failed cover must hide only the broken image');
+assert.doesNotMatch(mediaErrorSource, /stage\.hidden|refreshMetricsAfterSettle/,
+  'a failed cover must not collapse card geometry or invalidate offsets');
+assert.doesNotMatch(waterfallJs, /onerror="this\.parentElement\.hidden=true"/,
+  'inline cover fallback must preserve the media stage');
+assert.match(renderer, /body\.waterfall-direct\s*\{\s*background:\s*transparent/,
+  'direct discovery must let the native aurora show through the Web document');
+assert.match(renderer, /body\.waterfall-direct \.waterfall-overlay,[\s\S]*body\.waterfall-direct \.waterfall-track\s*\{\s*background:\s*transparent/,
+  'direct discovery must keep the aurora visible between cards instead of a paper wash');
+assert.match(renderer, /startInDiscovery \? ' class="waterfall-direct"' : ''/,
+  'ordinary aggregate documents must keep their existing opaque body');
 assert.doesNotMatch(waterfallJs, /target=\"_blank\"/,
   'source actions must use only the native source-page bridge');
 const preferenceChangeSource = waterfallJs.slice(
@@ -382,6 +854,15 @@ assert.match(waterfallJs, /document\.createElement\('audio'\)/);
 assert.match(waterfallJs, /audio\.setAttribute\('preload', 'none'\)/);
 assert.match(waterfallJs, /coverFailure = sourceOnly \? 'this\.hidden=true' : 'this\.parentElement\.hidden=true'/,
   'an inline source cover failure must not hide its playback controls');
+assert.match(waterfallJs, /id: 'waterfall\.comments\.load'/,
+  'detail comments must load through the bounded native action bridge');
+assert.match(waterfallJs, /data-waterfall-comments-slot/);
+assert.match(waterfallJs, /data-waterfall-comment-toggle/);
+assert.match(waterfallCss, /\.waterfall-comment-skeleton/);
+assert.match(waterfallCss, /@keyframes waterfall-comment-shimmer/);
+assert.match(waterfallCss,
+  /\.waterfall-comment-text\s*\{[^}]*-webkit-line-clamp:\s*2/s,
+  'comment previews must stay compact until the row is expanded');
 assert.match(waterfallJs, /youtube\.com\/embed\/.*\?playsinline=1/);
 assert.match(waterfallJs, /player\.bilibili\.com\/player\.html\?bvid=.*&autoplay=0&poster=true&danmaku=0&isOutside=true/);
 assert.doesNotMatch(waterfallJs, /TWITCH_CLIENT_(?:ID|SECRET)|access_token/i);
@@ -389,6 +870,7 @@ assert.doesNotMatch(waterfallJs, /TWITCH_CLIENT_(?:ID|SECRET)|access_token/i);
 function element() {
   const classes = new Set();
   const listeners = {};
+  const children = [];
   let html = '';
   let htmlWrites = 0;
   let appendedHtmlWrites = 0;
@@ -406,13 +888,29 @@ function element() {
       setProperty(name, value) { this.values[name] = value; }
     },
     get innerHTML() { return html; },
-    set innerHTML(value) { html = value; htmlWrites += 1; },
+    set innerHTML(value) {
+      html = value;
+      htmlWrites += 1;
+      if (value === '') children.length = 0;
+    },
     get outerHTML() { return html; },
     set outerHTML(value) { html = value; outerHtmlWrites += 1; },
     get innerHTMLWrites() { return htmlWrites; },
     get outerHTMLWrites() { return outerHtmlWrites; },
     get appendedHtmlWrites() { return appendedHtmlWrites; },
     get classToggleWrites() { return classToggleWrites; },
+    get firstChild() { return children[0] || null; },
+    appendChild: (child) => {
+      children.push(child);
+      const tag = String(child.tagName || 'div').toLowerCase();
+      const cls = child.className ? ` class="${child.className}"` : '';
+      const src = child.src ? ` src="${child.src}"` : '';
+      const extra = Object.entries(child.attrs || {})
+        .map(([key, value]) => ` ${key}="${value}"`).join('');
+      html += `<${tag}${cls}${src}${extra}></${tag}>`;
+      return child;
+    },
+    contains: () => false,
     insertAdjacentHTML: (_position, value) => { html += value; appendedHtmlWrites += 1; },
     classList: {
       add: (name) => { classToggleWrites += 1; classes.add(name); },
@@ -447,16 +945,22 @@ const overlay = element();
 const track = element();
 const preferences = element();
 const reader = element();
+const collection = element();
 const readerHead = element();
 reader.querySelector = (selector) => selector === '.waterfall-reader-head' ? readerHead : null;
 const toolbar = element();
 const toast = element();
 const backButton = element();
 const preferencesButton = element();
+const collectionButton = element();
 const preferenceBackButton = element();
 const preferenceDoneButton = element();
+const preferenceAllButton = element();
+const preferenceNoneButton = element();
 preferenceBackButton.closest = (selector) => selector.includes('[data-waterfall-close-preferences]') ? preferenceBackButton : null;
 preferenceDoneButton.closest = (selector) => selector.includes('[data-waterfall-apply-preferences]') ? preferenceDoneButton : null;
+preferenceAllButton.closest = (selector) => selector.includes('[data-waterfall-sources-all]') ? preferenceAllButton : null;
+preferenceNoneButton.closest = (selector) => selector.includes('[data-waterfall-sources-none]') ? preferenceNoneButton : null;
 const sourceInput = (name, checked) => {
   const input = element();
   input.checked = checked;
@@ -471,6 +975,7 @@ const sourceInputs = [
   sourceInput('reddit', true),
   sourceInput('zhihu', true)
 ];
+sourceInputs.at(-1).disabled = true;
 preferences.querySelectorAll = (selector) => ({
   '[data-waterfall-source]': sourceInputs,
   '[data-waterfall-source]:checked': sourceInputs.filter((input) => input.checked)
@@ -520,18 +1025,31 @@ const openFeedCard = (openTarget) => {
 };
 const document = {
   hidden: false,
+  createElement: (tag) => {
+    const attrs = {};
+    return {
+      tagName: String(tag).toUpperCase(),
+      className: '',
+      title: '',
+      src: '',
+      attrs,
+      setAttribute(name, value) { attrs[name] = value; }
+    };
+  },
   getElementById: (id) => ({
     'waterfall-discovery': overlay,
     'waterfall-track': track,
     'waterfall-preferences': preferences,
     'waterfall-reader': reader,
+    'waterfall-collection': collection,
     'waterfall-toolbar': toolbar,
     'waterfall-toast': toast
   })[id] ?? null,
   querySelector: () => null,
   querySelectorAll: (selector) => ({
     '[data-waterfall-back]': [backButton],
-    '[data-waterfall-preferences]': [preferencesButton]
+    '[data-waterfall-preferences]': [preferencesButton],
+    '[data-waterfall-collection-open]': [collectionButton]
   })[selector] ?? [],
   createElement: (tagName) => {
     assert.ok(tagName === 'iframe' || tagName === 'audio');
@@ -583,7 +1101,7 @@ const textCandidate = {
   source: 'hackernews',
   mediaType: 'post',
   coverUrl: '',
-  summary: 'A long text summary for the dedicated reader',
+  summary: 'A long text summary for the dedicated reader. '.repeat(40) + 'DETAIL_BODY_END',
   reason: '补充 HN 来源'
 };
 const noCoverImageCandidate = {
@@ -593,12 +1111,50 @@ const noCoverImageCandidate = {
   coverUrl: '',
   summary: 'A Reddit post without a cover should stay a compact text card'
 };
+const cnNewsCandidate = {
+  ...candidate('cnnews-current'),
+  source: 'cnnews',
+  provider: 'IT 之家',
+  mediaType: 'post'
+};
+const globalNewsCandidate = {
+  ...candidate('globalnews-current'),
+  source: 'globalnews',
+  provider: 'The Guardian',
+  mediaType: 'post'
+};
+const githubCandidate = {
+  ...candidate('github-current'),
+  source: 'github',
+  provider: 'GitHub',
+  mediaType: 'post',
+  authorName: 'openai',
+  metrics: [{ kind: 'star', value: 1200 }, { kind: 'fork', value: 88 }]
+};
+const steamCandidate = {
+  ...candidate('steam-current'),
+  source: 'steam',
+  provider: 'Steam',
+  mediaType: 'post',
+  authorName: 'Valve'
+};
 const portraitCandidate = {
   ...candidate('portrait-current'),
   source: 'bilibili',
   format: 'portrait_video',
   coverUrl: '',
-  url: 'https://www.bilibili.com/video/BV1xx411c7mD'
+  url: 'https://www.bilibili.com/video/BV1xx411c7mD',
+  authorName: '影像实验室',
+  authorAvatarUrl: 'https://example.test/avatar.jpg',
+  metrics: [
+    { kind: 'view', value: 98659 },
+    { kind: 'like', value: 361 },
+    { kind: 'favorite', value: 178 },
+    { kind: 'comment', value: 186 },
+    { kind: 'coin', value: 34 },
+    { kind: 'danmaku', value: 148 },
+    { kind: 'share', value: 28 }
+  ]
 };
 const testUiIcon = '<span class="waterfall-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h16" /></svg></span>';
 const window = {
@@ -609,15 +1165,22 @@ const window = {
   __aiphoneWaterfallInitial: {
     surfaceId: 'surface-1',
     currentId: 'current',
-    enabledSources: ['youtube', 'bilibili', 'reddit', 'zhihu', 'hackernews', 'x', 'unknown'],
+    enabledSources: ['youtube', 'bilibili', 'reddit', 'zhihu', 'hackernews', 'x', 'github', 'steam',
+      'cnnews', 'globalnews', 'unknown'],
     aggregateHtml: '',
     candidates: [candidate('current'), imageCandidate, textCandidate, portraitCandidate, noCoverImageCandidate,
-      { ...candidate('x-current'), source: 'x', mediaType: 'post' },
+      { ...candidate('x-current'), source: 'x', mediaType: 'post' }, githubCandidate, steamCandidate,
+      cnNewsCandidate, globalNewsCandidate,
       { ...candidate('unknown-current'), source: 'unknown', mediaType: 'post' }],
     mediaEmbeds: {
       'https://www.youtube.com/watch?v=abc123': 'https://www.youtube.com/embed/abc123?playsinline=1'
     },
-    sources: [{ source: 'youtube', phase: 'success' }]
+    sources: [
+      { source: 'youtube', phase: 'success' },
+      { source: 'twitch', phase: 'needs_auth', message: '未授权' }
+    ]
+    ,cardStates: [{ candidateId: 'current', reaction: 'like', saved: true }]
+    ,savedCards: [{ ...candidate('current'), savedAt: 1000 }]
   },
   __aiphoneWaterfallSourceLogos: { youtube: 'data:image/png;base64,logo', reddit: 'data:image/png;base64,reddit' },
   __aiphoneWaterfallUiIcons: {
@@ -625,7 +1188,21 @@ const window = {
     external: testUiIcon,
     expand: testUiIcon,
     play: testUiIcon,
-    sources: testUiIcon
+    sources: testUiIcon,
+    heart: testUiIcon,
+    star: testUiIcon,
+    comment: testUiIcon,
+    eye: testUiIcon,
+    thumbsUp: testUiIcon,
+    thumbsDown: testUiIcon,
+    bookmark: testUiIcon,
+    search: testUiIcon,
+    upvote: testUiIcon,
+    repost: testUiIcon,
+    quote: testUiIcon,
+    coin: testUiIcon,
+    danmaku: testUiIcon,
+    share: testUiIcon
   },
   AIPhoneHome: {
     postAction: (value) => actions.push(JSON.parse(value)),
@@ -660,6 +1237,16 @@ assert.doesNotMatch(track.innerHTML, /class="waterfall-card-ambient"/,
 assert.doesNotMatch(track.innerHTML, /waterfall-card-shell--ambient/);
 assert.match(track.innerHTML, /waterfall-tone--youtube[^"\n]*" data-waterfall-id="current"/);
 assert.match(track.innerHTML, /waterfall-tone--zhihu[^"\n]*" data-waterfall-id="image-current"/);
+assert.match(track.innerHTML, />CNNews · IT 之家</,
+  'CNNews cards must retain the internal publisher without exposing a second settings source');
+assert.match(track.innerHTML, />GlobalNews · The Guardian</,
+  'GlobalNews cards must retain the publisher returned by the adapter');
+assert.match(track.innerHTML, /data-waterfall-id="github-current"/);
+assert.match(track.innerHTML, /data-waterfall-id="steam-current"/);
+assert.match(track.innerHTML, /data-waterfall-metric="star" aria-label="星标 1,200"/,
+  'GitHub stars must use their provider meaning instead of a generic heat score');
+assert.match(track.innerHTML, /data-waterfall-metric="fork" aria-label="Fork 88"/,
+  'GitHub forks must survive the shared card renderer');
 assert.match(track.innerHTML,
   /<article[^>]*data-waterfall-id="image-current"[^>]*><div class="waterfall-card-shell waterfall-card-shell--interactive" role="button" tabindex="0" data-waterfall-open="image-current">/,
   'ordinary image-text cards such as Zhihu must retain their whole-card reader action');
@@ -680,9 +1267,67 @@ assert.match(track.innerHTML, /data-waterfall-video-play/);
 assert.doesNotMatch(track.innerHTML, /data-waterfall-read/);
 assert.match(track.innerHTML, /data-waterfall-open="image-current"/);
 assert.match(track.innerHTML, /data-waterfall-open="text-current"/);
+assert.equal(track.innerHTML.match(/data-waterfall-open="image-current"/g)?.length, 1,
+  'an image-text card must expose one keyboard entry into details');
+assert.equal(track.innerHTML.match(/data-waterfall-open="text-current"/g)?.length, 1,
+  'a text card must expose one keyboard entry into details');
 assert.match(track.innerHTML, /class="waterfall-source-action"/);
+assert.match(track.innerHTML,
+  /waterfall-card-action--like is-selected"[^>]*data-waterfall-candidate-id="current"[^>]*aria-pressed="true"/,
+  'persisted product feedback must render independently from platform metrics');
+assert.match(track.innerHTML,
+  /waterfall-card-action--save is-selected"[^>]*data-waterfall-candidate-id="current"[^>]*aria-pressed="true"/);
+const advanceBeforeDislike = actionCount('waterfall.feed.advance');
+const dislikeControl = {
+  getAttribute: (name) => ({
+    'data-waterfall-card-action': 'dislike',
+    'data-waterfall-candidate-id': 'current'
+  })[name] ?? ''
+};
+track.emit('click', {
+  preventDefault: () => {},
+  target: { closest: (selector) => selector === '[data-waterfall-card-action]' ? dislikeControl : null }
+});
+assert.equal(actions.at(-1)?.id, 'waterfall.card.action');
+assert.deepEqual(actions.at(-1)?.args, {
+  surfaceId: 'surface-1', candidateId: 'current', action: 'dislike', active: true
+});
+assert.equal(actionCount('waterfall.feed.advance'), advanceBeforeDislike,
+  'dislike must not hide or advance the current card');
+collectionButton.emit('click', { preventDefault: () => {}, target: collectionButton });
+assert.equal(collection.classList.contains('active'), true);
+assert.match(collection.innerHTML, /data-waterfall-collection-search/);
+assert.match(collection.innerHTML, /data-waterfall-collection-source="youtube"/);
+assert.match(collection.innerHTML, /data-waterfall-collection-row="current"/);
+const collectionSaveControl = {
+  getAttribute: (name) => ({
+    'data-waterfall-card-action': 'save',
+    'data-waterfall-candidate-id': 'current'
+  })[name] ?? ''
+};
+collection.emit('click', {
+  preventDefault: () => {},
+  target: { closest: (selector) => selector === '[data-waterfall-card-action]' ? collectionSaveControl : null }
+});
+assert.equal(actions.at(-1)?.id, 'waterfall.card.action');
+assert.equal(actions.at(-1)?.args?.active, false);
+assert.doesNotMatch(collection.innerHTML, /data-waterfall-collection-row="current"/);
+assert.match(toast.innerHTML, /data-waterfall-collection-undo/);
+toast.emit('click', {
+  preventDefault: () => {},
+  target: { closest: (selector) => selector === '[data-waterfall-collection-undo]' ? {} : null }
+});
+assert.equal(actions.at(-1)?.args?.active, true);
+assert.equal(actions.at(-1)?.args?.restoreSavedAt, true);
+assert.match(collection.innerHTML, /data-waterfall-collection-row="current"/);
+collection.emit('click', {
+  preventDefault: () => {},
+  target: { closest: (selector) => selector === '[data-waterfall-collection-close]' ? {} : null }
+});
+runLatestTimer(160);
+assert.equal(collection.classList.contains('active'), false);
 assert.match(track.innerHTML, /referrerpolicy="no-referrer"/);
-assert.match(track.innerHTML, /onerror="this\.parentElement\.hidden=true"/);
+assert.match(track.innerHTML, /onerror="this\.hidden=true"/);
 assert.doesNotMatch(track.innerHTML, />查看来源</);
 assert.doesNotMatch(track.innerHTML, /src="https:\/\/www\.youtube\.com\/embed\/abc123/,
   'non-Bilibili players stay lazy until the user asks to play');
@@ -697,6 +1342,14 @@ assert.doesNotMatch(track.innerHTML, /B 站视频搜索结果：/);
 assert.match(track.innerHTML, /waterfall-recommendation/);
 assert.match(track.innerHTML, /标题命中查询/);
 assert.match(track.innerHTML, /data-waterfall-reason/);
+assert.match(track.innerHTML, /class="waterfall-author-avatar"[^>]*avatar\.jpg/);
+assert.match(track.innerHTML, /class="waterfall-author-name">影像实验室</);
+assert.match(track.innerHTML, /class="waterfall-signal-rail"/);
+assert.match(track.innerHTML, /data-waterfall-metric="like"/);
+assert.match(track.innerHTML, /data-waterfall-metric="favorite"/);
+assert.match(track.innerHTML, /aria-label="播放 98,659"/);
+assert.doesNotMatch(track.innerHTML, /waterfall-signal-label/,
+  'feed cards must use icon and value only instead of adding metric labels');
 assert.doesNotMatch(track.innerHTML, /data-waterfall-media-fallback/);
 assert.doesNotMatch(track.innerHTML, /data-waterfall-video-fullscreen/);
 assert.match(track.innerHTML, /<svg[^>]*viewBox="0 0 24 24"/);
@@ -708,15 +1361,54 @@ const compactCardNodes = [
 ];
 const gestureCardNodes = window.__aiphoneWaterfallInitial.candidates.map((_, index) =>
   Object.assign(element(), { offsetTop: 18 + index * 728, offsetHeight: 700 }));
+const currentMetricSlot = element();
+gestureCardNodes[0].getAttribute = (name) => name === 'data-waterfall-id' ? 'current' : '';
+gestureCardNodes[0].querySelector = (selector) =>
+  selector === '[data-waterfall-card-metrics]' ? currentMetricSlot : null;
 track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? gestureCardNodes : [];
+const likeControl = {
+  getAttribute: (name) => ({
+    'data-waterfall-card-action': 'like',
+    'data-waterfall-candidate-id': 'current'
+  })[name] ?? ''
+};
+track.emit('click', {
+  preventDefault: () => {},
+  target: { closest: (selector) => selector === '[data-waterfall-card-action]' ? likeControl : null }
+});
+assert.deepEqual(actions.at(-1)?.args, {
+  surfaceId: 'surface-1', candidateId: 'current', action: 'like', active: true
+});
+const writesBeforeCardActionAck = track.innerHTMLWrites;
+const initialCandidates = window.__aiphoneWaterfallInitial.candidates;
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  candidates: [{ ...initialCandidates[0], metrics: [{ kind: 'like', value: 4321 }] },
+    initialCandidates[1], initialCandidates[3], initialCandidates[2],
+    ...initialCandidates.slice(4)],
+  cardStates: [{ candidateId: 'current', reaction: 'like', saved: true }]
+});
+assert.equal(track.innerHTMLWrites, writesBeforeCardActionAck,
+  'a card-action acknowledgement must not rebuild and flash the loaded card tree');
+assert.match(currentMetricSlot.innerHTML, /data-waterfall-metric="like"[^>]*aria-label="\u70b9\u8d5e 4,321"/,
+  'a card-action acknowledgement must not discard platform metrics arriving in the same payload');
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  candidates: [{ ...initialCandidates[0], metrics: [{ kind: 'like', value: 4321 }] },
+    initialCandidates[1], initialCandidates[3], initialCandidates[2],
+    ...initialCandidates.slice(4)],
+  cardStates: [{ candidateId: 'current', reaction: 'like', saved: true }]
+});
+assert.equal(track.innerHTMLWrites, writesBeforeCardActionAck,
+  'the next provider update must keep action-reranked loaded cards stable too');
 documentListeners.touchstart({ touches: [{ clientX: 200, clientY: 700 }] });
 documentListeners.touchmove?.({ touches: [{ clientX: 202, clientY: 560 }] });
 const writesBeforeGesturePayload = track.innerHTMLWrites;
 const appendsBeforeGesturePayload = track.appendedHtmlWrites;
-const initialCandidates = window.__aiphoneWaterfallInitial.candidates;
 window.__aiphoneApplyWaterfallUpdate({
   ...window.__aiphoneWaterfallInitial,
-  candidates: [initialCandidates[0], initialCandidates[1], candidate('reranked-during-swipe'),
+  candidates: [initialCandidates[0], initialCandidates[1], candidate('reranked-during-swipe-a'),
+    candidate('reranked-during-swipe-b'),
     ...initialCandidates.slice(2)]
 });
 assert.equal(track.innerHTMLWrites, writesBeforeGesturePayload,
@@ -726,8 +1418,16 @@ track.emit('click', { preventDefault: () => {}, target: { closest: () => null } 
 runLatestTimer(96);
 assert.equal(track.innerHTMLWrites, writesBeforeGesturePayload,
   'a settled provider update must not replace the visible card tree and reload its media');
-assert.equal(track.appendedHtmlWrites, appendsBeforeGesturePayload + 1,
-  'newly ranked cards may append after the stable rendered cards without flashing them');
+assert.equal(track.appendedHtmlWrites, appendsBeforeGesturePayload,
+  'a mid-list late card must not rebuild the track by appending at the end');
+assert.equal(gestureCardNodes.some((node) => node.appendedHtmlWrites > 0), true,
+  'newly ranked cards must slot in beside existing nodes without flashing them');
+const sharedAnchorHtml = gestureCardNodes[2].innerHTML;
+assert.ok(sharedAnchorHtml.indexOf('reranked-during-swipe-a') < sharedAnchorHtml.indexOf('reranked-during-swipe-b'),
+  'multiple late cards inserted before one existing card must keep payload order');
+track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? gestureCardNodes : [];
+track.innerHTML = '';
+window.__aiphoneApplyWaterfallUpdate(window.__aiphoneWaterfallInitial);
 track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? compactCardNodes : [];
 window.__aiphoneApplyWaterfallUpdate(window.__aiphoneWaterfallInitial);
 const actionCountBeforePassiveUpdate = actionCount('waterfall.feed.advance');
@@ -774,9 +1474,13 @@ assert.equal(videoCard.classList.contains('waterfall-card--video-fullscreen'), f
 assert.equal(track.classList.contains('video-open'), false);
 assert.equal(videoFullscreenButton.ariaLabel, '全屏播放');
 
+let videoOpenLayoutReads = 0;
 const videoOpen = {
   getAttribute: (name) => name === 'data-waterfall-open' ? 'current' : '',
-  getBoundingClientRect: () => ({ top: 80, right: 380, bottom: 760, left: 20, width: 360, height: 680 }),
+  getBoundingClientRect: () => {
+    videoOpenLayoutReads += 1;
+    return { top: 80, right: 380, bottom: 760, left: 20, width: 360, height: 680 };
+  },
   closest: (selector) => selector === '.waterfall-card--video' ? videoCard : null
 };
 const sourceLink = { href: 'https://www.youtube.com/watch?v=abc123' };
@@ -797,6 +1501,27 @@ const mediaTarget = {
 track.emit('click', { target: mediaTarget });
 assert.equal(videoCard.classList.contains('waterfall-card--video-fullscreen'), false,
   'embedded media must not activate its parent card');
+const feedPlayFrame = element();
+const feedPlayStage = element();
+feedPlayStage.getAttribute = (name) => name === 'data-waterfall-video-url' ?
+  'https://www.youtube.com/embed/abc123?playsinline=1' :
+  (name === 'data-waterfall-video-kind' ? 'iframe' : '');
+feedPlayStage.querySelector = (selector) => selector === '.waterfall-reader-video-frame' ?
+  feedPlayFrame : null;
+feedPlayStage.closest = (selector) => selector === '.waterfall-reader-video-stage' ? feedPlayStage : null;
+feedPlayStage.closest = (selector) => selector === '.waterfall-reader-video-stage' ?
+  feedPlayStage : null;
+track.emit('click', {
+  target: {
+    closest: (selector) => selector === '.waterfall-reader-video-stage' ? feedPlayStage :
+      (selector === '[data-waterfall-open]' ? videoOpen : null)
+  }
+});
+assert.equal(reader.classList.contains('active'), false,
+  'tapping the video stage must play in place instead of opening details');
+assert.match(feedPlayFrame.innerHTML, /<iframe class="waterfall-media-frame"/,
+  'the first tap on a video cover must start playback');
+assert.equal(feedPlayStage.classList.contains('is-playing'), true);
 documentListeners.touchstart({ touches: [{ clientX: 200, clientY: 700 }] });
 documentListeners.touchmove?.({ touches: [{ clientX: 202, clientY: 560 }] });
 let swipeReleasePrevented = false;
@@ -832,10 +1557,10 @@ window.__aiphoneApplyWaterfallUpdate({
 assert.equal(track.innerHTMLWrites, writesBeforeReaderUpdate,
   'live provider updates must not rebuild the feed behind an open reader');
 assert.match(reader.innerHTML, /waterfall-reader--video/);
-assert.match(reader.innerHTML, /waterfall-reader-video-card/);
+assert.match(reader.innerHTML, /class="waterfall-reader-copy"/);
+assert.doesNotMatch(reader.innerHTML, /waterfall-reader-video-card|waterfall-reader-video-copy/);
 assert.match(reader.innerHTML, /waterfall-reader-head-label">返回</);
 assert.match(reader.innerHTML, /waterfall-reader-head-title">详情</);
-assert.match(reader.innerHTML, /waterfall-reader-video-copy/);
 assert.doesNotMatch(reader.innerHTML, /<iframe class="waterfall-media-frame"/,
   'opening video details must not load the remote player before a deliberate play press');
 assert.match(reader.innerHTML, /waterfall-reader-video-frame/);
@@ -844,22 +1569,21 @@ assert.match(reader.innerHTML, /waterfall-reader-video-fallback/);
 assert.match(reader.innerHTML, /current summary tail/);
 assert.equal(track.classList.contains('reader-open'), false,
   'opening details must not flip overflow on the underlying snap scroller');
-assert.deepEqual(reader.style.values, {},
-  'opening details must not pin a card-sized transform on the reader shell');
-const videoDetail = element();
+assert.equal(videoOpenLayoutReads, 0,
+  'opening details must not synchronously read card geometry that no reader style consumes');
+assert.deepEqual(reader.style.values, {});
 const videoFrame = element();
 const videoStage = element();
 videoStage.getAttribute = (name) => name === 'data-waterfall-video-url' ?
   'https://www.youtube.com/embed/abc123?playsinline=1' : (name === 'data-waterfall-video-kind' ? 'iframe' : '');
 videoStage.querySelector = (selector) => selector === '.waterfall-reader-video-frame' ? videoFrame : null;
 const playControl = {
-  closest: (selector) => selector === '.waterfall-reader-video-card' ? videoDetail :
-    (selector === '.waterfall-reader-video-stage' ? videoStage : null)
+  closest: (selector) => selector === '.waterfall-reader-video-stage' ? videoStage : null
 };
 reader.emit('click', {
   target: { closest: (selector) => selector === '[data-waterfall-video-play]' ? playControl : null }
 });
-assert.equal(videoDetail.classList.contains('is-playing'), true,
+assert.equal(videoStage.classList.contains('is-playing'), true,
   'video details must reveal the player only after the play control is pressed');
 assert.match(videoFrame.innerHTML, /<iframe class="waterfall-media-frame"/);
 const readCompleteCountBeforeClose = actions.filter((action) => action.args?.behavior === 'read_complete').length;
@@ -929,23 +1653,37 @@ assert.equal(timers.filter((timer) => timer.delay === 180 && !timer.canceled).le
   'the delayed synthetic click must not close the reader twice');
 assert.equal(actions.filter((action) => action.args?.behavior === 'read_complete').length, readCompleteCountBeforeClose,
   'the native behavior bridge must not block the first frame of the return transition');
+const returnScrollSettleCount = timers.filter((timer) => timer.delay === 96 && !timer.canceled).length;
+track.scrollTop = 640;
+track.emit('scroll');
+assert.equal(timers.filter((timer) => timer.delay === 96 && !timer.canceled).length,
+  returnScrollSettleCount + 1,
+  'the feed must accept a new scroll while the reader is finishing its visual close');
 finishReaderClose();
+assert.equal(track.scrollTop, 640,
+  'closing details must not rewind a return gesture that already moved the feed');
 assert.equal(overlay.classList.contains('reading'), false,
   'the feed must be tappable again as soon as details hide');
 assert.equal(track.innerHTMLWrites, writesBeforeReaderUpdate,
   'returning from details must not synchronously rebuild the discovery feed');
 track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? readerFeedNodes : [];
 runLatestTimer(96);
+assert.equal(timers.filter((timer) => timer.delay === 240 && !timer.canceled).length, 0,
+  'reader return must not add a second fixed wait before applying a deferred payload');
 assert.equal(track.innerHTMLWrites, writesBeforeReaderUpdate,
   'the latest deferred provider update must preserve the revealed card DOM');
-assert.equal(track.appendedHtmlWrites, appendsBeforeReaderUpdate + 1,
-  'the deferred provider update may append its new card after the return animation settles');
-assert.equal(track.scrollTop, 0,
-  'a deferred rerank must keep the returned card at its stable rendered position');
+assert.equal(
+  track.appendedHtmlWrites > appendsBeforeReaderUpdate ||
+    readerFeedNodes.some((node) => node.appendedHtmlWrites > 0),
+  true,
+  'the deferred provider update may insert its new card without rebuilding the revealed card'
+);
+assert.equal(track.scrollTop, 640,
+  'a deferred rerank must keep the position reached by the return gesture');
 assert.doesNotMatch(waterfallCss, /\.waterfall-reader\s*\{[^}]*will-change:\s*transform/s,
   'a long scrolling reader must not stay promoted as one transformed layer');
-assert.match(waterfallCss, /\.waterfall-reader\.active\s*\{[^}]*scale\(1\)/s,
-  'the open reader must settle at identity scale after the enter motion');
+assert.match(waterfallCss, /\.waterfall-reader\.active\s*\{[^}]*transform:\s*none/s,
+  'the open reader must drop its transform so nested Bilibili iframes can play');
 const readerBodyCss = waterfallCss.slice(
   waterfallCss.indexOf('\n.waterfall-reader-body {'),
   waterfallCss.indexOf('\n.waterfall-reader.active .waterfall-reader-body')
@@ -982,24 +1720,38 @@ window.__aiphoneApplyWaterfallUpdate({
   candidates: [candidate('new-late'), candidate('late-before-current'),
     ...window.__aiphoneWaterfallInitial.candidates]
 });
+const idleReturnAppendsBeforeClose = track.appendedHtmlWrites +
+  oldReturnNodes.reduce((total, node) => total + node.appendedHtmlWrites, 0);
 documentListeners.keydown({ key: 'Escape' });
 finishReaderClose();
-const newReturnNodes = Array.from({ length: 9 }, (_, index) =>
-  Object.assign(element(), { offsetTop: index * 1000, offsetHeight: 1000 }));
-track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? newReturnNodes : [];
-runLatestTimer(96);
+assert.equal(track.appendedHtmlWrites + oldReturnNodes.reduce((total, node) => total + node.appendedHtmlWrites, 0),
+  idleReturnAppendsBeforeClose,
+  'the close task must yield the first feed frame before applying a deferred payload');
+assert.equal(timers.filter((timer) => timer.delay === 240 && !timer.canceled).length, 0,
+  'an idle reader return must apply the latest payload without a delayed second refresh');
+runLatestTimer(0);
 assert.equal(track.scrollTop, 3000,
   'returning after a deferred update must preserve the exact captured feed position');
 
 const bilibiliOpen = { getAttribute: (name) => name === 'data-waterfall-open' ? 'portrait-current' : '' };
 leftoverFeedClickMustNotOpen(bilibiliOpen);
 openFeedCard(bilibiliOpen);
-assert.match(reader.innerHTML, /waterfall-reader-video-card/);
+assert.match(reader.innerHTML, /class="waterfall-reader-copy"/);
+assert.doesNotMatch(reader.innerHTML, /waterfall-reader-video-card|waterfall-reader-video-copy/);
 assert.match(reader.innerHTML, /player\.bilibili\.com\/player\.html\?bvid=BV1xx411c7mD/);
 assert.doesNotMatch(reader.innerHTML, /<iframe class="waterfall-media-frame"/);
 assert.match(reader.innerHTML, /data-waterfall-video-play/,
   'Bilibili detail must defer its iframe until playback is explicitly requested');
 assert.match(reader.innerHTML, />B 站</);
+assert.match(reader.innerHTML, /class="waterfall-author-avatar"[^>]*avatar\.jpg/);
+assert.match(reader.innerHTML, /class="waterfall-reader-signals"/);
+assert.match(reader.innerHTML, />9\.9万</,
+  'detail metrics must use the card-like compact value with one decimal');
+assert.doesNotMatch(reader.innerHTML, />98,659</,
+  'detail metrics must not expose exact large counts');
+assert.match(reader.innerHTML, />投币</);
+assert.match(reader.innerHTML, />弹幕</);
+assert.match(reader.innerHTML, />分享</);
 documentListeners.keydown({ key: 'Escape' });
 finishReaderClose();
 assert.equal(reader.classList.contains('active'), false);
@@ -1034,7 +1786,10 @@ assert.equal(track.classList.contains('reader-open'), false);
 assert.equal(overlay.classList.contains('reading'), true);
 assert.match(reader.innerHTML, /waterfall-reader--text/);
 assert.doesNotMatch(reader.innerHTML, /waterfall-reader-media/);
+assert.match(reader.innerHTML, /class="waterfall-reader-copy"/);
 assert.match(reader.innerHTML, /A long text summary for the dedicated reader/);
+assert.match(reader.innerHTML, /DETAIL_BODY_END/,
+  'detail paragraph layout must preserve the complete body tail');
 assert.equal(track.scrollTop, 320, 'opening the reader must preserve the feed position');
 assert.doesNotMatch(reader.innerHTML, /data-waterfall-reader-hotzone/);
 reader.emit('click', {
@@ -1075,8 +1830,9 @@ assert.equal(prevented, true);
 assert.equal(reader.classList.contains('active'), true);
 assert.match(reader.innerHTML, /waterfall-reader--image-text/);
 assert.match(reader.innerHTML, /class="waterfall-reader-media"/);
+assert.match(reader.innerHTML, /class="waterfall-reader-copy"/);
 assert.match(reader.innerHTML, /https:\/\/example\.test\/image\.jpg/);
-assert.match(reader.innerHTML, /onerror="this\.parentElement\.hidden=true"/);
+assert.match(reader.innerHTML, /onerror="this\.hidden=true"/);
 documentListeners.keydown({ key: 'Escape' });
 finishReaderClose();
 assert.equal(reader.classList.contains('active'), false);
@@ -1130,25 +1886,27 @@ const actionCountBeforeHalfScroll = actionCount('waterfall.feed.advance');
 track.scrollTop = 180;
 track.emit('scroll');
 assert.equal(actionCount('waterfall.feed.advance'), actionCountBeforeHalfScroll);
-track.scrollTop = 200;
+track.scrollTop = 728;
 track.emit('scroll');
 assert.equal(actionCount('waterfall.feed.advance'), actionCountBeforeHalfScroll,
   'the native advance bridge must wait until scrolling settles');
+runLatestTimer(96);
 runLatestTimer(72);
 assert.equal(actions.at(-1)?.id, 'waterfall.feed.advance');
 assert.equal(actions.at(-1)?.args?.currentId, 'current');
+assert.equal(actions.at(-1)?.args?.visibleId, 'image-current',
+  'a settled page must report the visible card so native can catch up in one step');
 
 const actionCountBeforeCatchUp = actionCount('waterfall.feed.advance');
 const writesBeforeCurrentAdvance = track.innerHTMLWrites;
-track.scrollTop = 900;
+track.scrollTop = 1200;
 window.__aiphoneApplyWaterfallUpdate({
   ...window.__aiphoneWaterfallInitial,
   currentId: 'image-current',
   candidates: [candidate('current'), imageCandidate, textCandidate, candidate('late')]
 });
-runLatestTimer(96);
 runLatestTimer(72);
-assert.equal(track.scrollTop, 900, 'server updates must not snap the user back to the first card');
+assert.equal(track.scrollTop, 1200, 'server updates must not snap the user back to the first card');
 assert.equal(track.innerHTMLWrites, writesBeforeCurrentAdvance, 'advancing must keep loaded media nodes alive');
 assert.equal(actionCount('waterfall.feed.advance'), actionCountBeforeCatchUp + 1,
   'a rapid multi-card swipe should continue advancing');
@@ -1174,6 +1932,7 @@ assert.equal(track.scrollTop, 0, 'source filtering must align to the enabled cur
 const actionCountBeforeFilteredAdvance = actionCount('waterfall.feed.advance');
 track.scrollTop = 960;
 track.emit('scroll');
+runLatestTimer(96);
 runLatestTimer(72);
 assert.equal(actionCount('waterfall.feed.advance'), actionCountBeforeFilteredAdvance + 1,
   'advance indices must use the filtered card list');
@@ -1186,13 +1945,12 @@ window.__aiphoneApplyWaterfallUpdate({
   replenishing: false,
   exhausted: false
 });
-runLatestTimer(96);
 assert.doesNotMatch(track.innerHTML, /waterfall-tail-status/, 'a continuable feed must not render a fake end card');
 const actionCountBeforeLastCard = actionCount('waterfall.feed.advance');
 track.scrollTop = 960;
 track.emit('scroll');
-runLatestTimer(72);
 runLatestTimer(96);
+runLatestTimer(72);
 assert.equal(actionCount('waterfall.feed.advance'), actionCountBeforeLastCard + 1);
 assert.equal(actions.at(-1)?.args?.currentId, 'last');
 
@@ -1207,6 +1965,7 @@ window.__aiphoneApplyWaterfallUpdate({
   candidates: stressCandidates
 });
 const classWritesBeforeFastScroll = stressNodes.reduce((sum, node) => sum + node.classToggleWrites, 0);
+const pagingTimerCountBeforeFastScroll = timers.filter((timer) => timer.delay === 72 || timer.delay === 180).length;
 for (let index = 1; index <= 20; index += 1) {
   track.scrollTop = index * 1000;
   track.emit('scroll');
@@ -1214,6 +1973,11 @@ for (let index = 1; index <= 20; index += 1) {
 const classWritesAfterFastScroll = stressNodes.reduce((sum, node) => sum + node.classToggleWrites, 0);
 assert.ok(classWritesAfterFastScroll - classWritesBeforeFastScroll <= 160,
   'fast scrolling must update only the current card and its neighbors, not all cards per frame');
+assert.equal(
+  timers.filter((timer) => timer.delay === 72 || timer.delay === 180).length,
+  pagingTimerCountBeforeFastScroll,
+  'scroll frames must not churn advance and media-cleanup timers before the page settles'
+);
 timers.filter((timer) => !timer.canceled && (timer.delay === 72 || timer.delay === 180))
   .forEach((timer) => { timer.canceled = true; });
 runLatestTimer(96);
@@ -1224,30 +1988,87 @@ assert.equal(overlay.classList.contains('sheet-open'), true,
   'the source sheet must freeze the feed through the overlay, not overflow');
 const preferenceWritesAfterFirstOpen = preferences.innerHTMLWrites;
 const sourceSelectionCountBeforeToggle = actionCount('waterfall.sources.select');
+assert.match(preferences.innerHTML, /data-waterfall-sources-all/);
+assert.match(preferences.innerHTML, /data-waterfall-sources-none/);
+assert.match(preferences.innerHTML,
+  /<div class="waterfall-toolbar">[\s\S]*?<div class="waterfall-source-bulk"[\s\S]*?data-waterfall-sources-none[\s\S]*?data-waterfall-apply-preferences[\s\S]*?<div class="waterfall-source-grid">/,
+  'bulk source actions must stay inside the source sheet toolbar');
+preferences.emit('click', { preventDefault: () => {}, target: preferenceNoneButton });
+assert.equal(sourceInputs.every((input) => !input.checked), true,
+  'select none must clear every available source locally');
+preferences.emit('click', { preventDefault: () => {}, target: preferenceAllButton });
+assert.equal(sourceInputs.filter((input) => !input.disabled).every((input) => input.checked), true,
+  'select all must enable every available source');
+assert.equal(sourceInputs.filter((input) => input.disabled).every((input) => !input.checked), true,
+  'select all must leave unavailable sources disabled');
+assert.equal(actionCount('waterfall.sources.select'), sourceSelectionCountBeforeToggle,
+  'bulk selection must wait for Done before crossing the native bridge');
 sourceInputs[0].checked = false;
 sourceInputs[0].emit('change');
 assert.equal(actionCount('waterfall.sources.select'), sourceSelectionCountBeforeToggle,
   'toggling a source must stay local so the control responds immediately');
-let preferenceTapPrevented = false;
-preferences.emit('click', {
-  cancelable: true,
-  preventDefault: () => { preferenceTapPrevented = true; },
-  target: preferenceDoneButton
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  currentId: 'queued-preference-payload',
+  candidates: [{ ...candidate('queued-preference-payload'), source: 'bilibili' }],
+  enabledSources: sourceInputs.map((input) => input.getAttribute('data-waterfall-source'))
 });
+const preferenceTouch = { clientX: 120, clientY: 120 };
+documentListeners.touchstart({ touches: [preferenceTouch], target: preferenceDoneButton });
+preferences.emit('touchstart', { touches: [preferenceTouch], target: preferenceDoneButton });
+let preferenceTapPrevented = false;
+let preferenceTouchStopped = false;
+const preferenceTouchEnd = {
+  cancelable: true,
+  changedTouches: [preferenceTouch],
+  preventDefault: () => { preferenceTapPrevented = true; },
+  stopPropagation: () => { preferenceTouchStopped = true; },
+  target: preferenceDoneButton
+};
+preferences.emit('touchend', preferenceTouchEnd);
+assert.match(track.innerHTML, /queued-preference-payload/,
+  'closing source settings must apply the selected sources before an immediate swipe can start');
+if (!preferenceTouchStopped) {
+  documentListeners.touchend?.(preferenceTouchEnd);
+  runLatestTimer(96);
+} else {
+  const deferredPreferenceTimer = timers.filter((timer) => timer.delay === 240 && !timer.canceled).at(-1);
+  if (deferredPreferenceTimer) {
+    deferredPreferenceTimer.canceled = true;
+    deferredPreferenceTimer.callback();
+  }
+}
+assert.match(track.innerHTML, /queued-preference-payload/,
+  'closing source settings must let the queued payload flush after the exit motion');
 assert.equal(preferences.classList.contains('active'), false);
-assert.equal(overlay.classList.contains('sheet-open'), true,
-  'the source sheet must keep the feed inert until the release click can no longer fall through');
-assert.equal(preferenceTapPrevented, true, 'source done must use the single native click path');
-preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
-assert.equal(actionCount('waterfall.sources.select'), sourceSelectionCountBeforeToggle,
-  'closing the sheet must paint before applying the heavier feed update');
-runLatestTimer(140);
 assert.equal(overlay.classList.contains('sheet-open'), false,
-  'the feed must unlock after the source sheet close transition');
+  'the source sheet and feed lock must close in the same interaction');
+assert.equal(preferenceTapPrevented, true, 'source done must use the single native click path');
+assert.equal(preferenceTouchStopped, true,
+  'source settings must consume the closing touchend before the document settles a queued stale payload');
+assert.equal(actionCount('waterfall.sources.select'), sourceSelectionCountBeforeToggle + 1,
+  'source selection must commit without a delayed close phase');
+preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
 assert.equal(actionCount('waterfall.sources.select'), sourceSelectionCountBeforeToggle + 1);
 preferencesButton.emit('click');
+assert.equal(sourceInputs[0].checked, false,
+  'a queued payload must not revert the source selection made before closing');
 assert.equal(preferences.innerHTMLWrites, preferenceWritesAfterFirstOpen,
   'reopening source settings must not rebuild the sheet');
+sourceInputs[1].checked = false;
+sourceInputs[1].emit('change');
+preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  currentId: 'late-preference-payload',
+  candidates: [{ ...candidate('late-preference-payload'), source: 'x' }],
+  enabledSources: sourceInputs.map((input) => input.getAttribute('data-waterfall-source'))
+});
+assert.match(track.innerHTML, /late-preference-payload/,
+  'a source response after close must apply immediately instead of waiting on an exit timer');
+preferencesButton.emit('click');
+assert.equal(sourceInputs[1].checked, false,
+  'a payload arriving during the exit motion must not revert the source selection');
 let preferenceBackPrevented = false;
 preferences.emit('click', {
   preventDefault: () => { preferenceBackPrevented = true; },
@@ -1255,12 +2076,25 @@ preferences.emit('click', {
 });
 assert.equal(preferences.classList.contains('active'), false);
 assert.equal(preferenceBackPrevented, true, 'source back must use the delegated native click path');
-runLatestTimer(140);
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  sources: [{ source: 'youtube', phase: 'success' }]
+});
+preferencesButton.emit('click');
+assert.match(preferences.innerHTML, /data-waterfall-source="twitch" disabled/,
+  'a later partial source update must not re-enable a known unavailable source');
+preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  currentId: 'late-preference-payload',
+  candidates: [{ ...candidate('late-preference-payload'), source: 'x' }],
+  enabledSources: sourceInputs.filter((input) => input.checked)
+    .map((input) => input.getAttribute('data-waterfall-source'))
+});
 preferencesButton.emit('click');
 backButton.emit('click');
 assert.deepEqual(fullscreenStates, ['true']);
 assert.equal(preferences.classList.contains('active'), false);
-runLatestTimer(140);
 backButton.emit('click');
 assert.deepEqual(fullscreenStates, ['true', 'false']);
 assert.equal(overlay.classList.contains('active'), true, 'the overlay must remain mounted while it fades out');
@@ -1326,7 +2160,6 @@ sourceInputs.forEach((input) => { input.checked = false; });
 sourceInputs[0].checked = true;
 sourceInputs[0].emit('change');
 preferences.emit('click', { preventDefault: () => {}, target: preferenceBackButton });
-runLatestTimer(140);
 assert.match(track.innerHTML, /本轮内容已结束/);
 assert.doesNotMatch(track.innerHTML, /至少开启一个来源/);
 assert.match(track.innerHTML, /data-waterfall-empty-sources[^>]*>调整内容来源<\/button>/);
@@ -1340,7 +2173,6 @@ assert.equal(preferences.classList.contains('active'), true,
   'terminal empty state must allow reopening source preferences');
 assert.match(preferences.innerHTML, /data-waterfall-source="youtube"/);
 preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
-runLatestTimer(140);
 
 window.__aiphoneApplyWaterfallUpdate({
   surfaceId: 'surface-1',
@@ -1408,14 +2240,40 @@ assert.doesNotMatch(track.innerHTML, /本轮内容已结束/);
 track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? compactCardNodes : [];
 window.__aiphoneApplyWaterfallUpdate(window.__aiphoneWaterfallInitial);
 documentListeners.touchstart({ touches: [{ clientX: 200, clientY: 700 }] });
+track.scrollTop = 596;
+track.emit('scroll');
+assert.equal(track.scrollTop, 596,
+  'live scroll must follow the finger instead of snapping mid-gesture');
+assert.equal(track.classList.contains('is-scrolling'), false,
+  'native snap and card transitions must remain enabled while the feed moves');
+assert.equal(compactCardNodes[1].classList.contains('is-active'), true,
+  'the incoming card must highlight on the scroll frame, not after settle');
+assert.equal(compactCardNodes[0].classList.contains('is-active'), false,
+  'the outgoing card must not stay fully opaque under the moving feed');
+documentListeners.touchend?.();
+assert.equal(track.scrollTop, 596,
+  'touchend must not overwrite the native inertial position');
 track.scrollTop = 1324;
 track.emit('scroll');
-assert.ok(track.scrollTop <= 596,
-  'a paging fling must stop on the next card instead of skipping through empty space');
-assert.equal(compactCardNodes[1].classList.contains('is-active'), true,
-  'one gesture may only promote the adjacent card');
-assert.equal(compactCardNodes[2].classList.contains('is-active'), false,
-  'the card after next must stay unselected until a new gesture');
+assert.equal(track.scrollTop, 1324,
+  'post-touchend inertia must continue without a JavaScript snap-back');
+assert.equal(compactCardNodes[2].classList.contains('is-active'), true,
+  'highlight must follow the nearest snap during inertia without waiting for settle');
+assert.equal(compactCardNodes[1].classList.contains('is-active'), false,
+  'the previous card must dim as soon as the next snap is closer');
+
+const mediaStage = { hidden: false };
+const failedCover = {
+  hidden: false,
+  classList: { contains: (name) => name === 'waterfall-media-cover' },
+  closest: (selector) => selector === '.waterfall-cinema-stage' ? mediaStage : null
+};
+const timerCountBeforeCoverError = timers.length;
+track.emit('error', { target: failedCover });
+assert.equal(failedCover.hidden, true, 'a broken cover image must hide itself');
+assert.equal(mediaStage.hidden, false, 'the fixed media stage must keep its geometry');
+assert.equal(timers.length, timerCountBeforeCoverError,
+  'preserving the stage means a cover error must not schedule a metric refresh');
 
 documentListeners.touchend?.();
 runLatestTimer(96);
@@ -1449,6 +2307,78 @@ assert.equal(droppedFeedNodes[0].removed, undefined,
 assert.equal(track.appendedHtmlWrites, appendsBeforeDrop + 1,
   'newly ranked cards must still append after the surviving cards');
 assert.doesNotMatch(track.innerHTML, /\\u672c\\u8f6e\\u5185\\u5bb9\\u5df2\\u7ed3\\u675f/);
+
+const commentsCandidate = {
+  ...candidate('comments-current'),
+  providerItemId: 'youtube-comments-video'
+};
+const commentsPayload = (overrides = {}) => ({
+  surfaceId: 'surface-1',
+  currentId: 'comments-current',
+  enabledSources: ['youtube'],
+  aggregateHtml: '',
+  candidates: [{ ...commentsCandidate, ...overrides }],
+  mediaEmbeds: {},
+  sources: [{ source: 'youtube', phase: 'success' }],
+  replenishing: false,
+  exhausted: false
+});
+window.__aiphoneApplyWaterfallUpdate(commentsPayload());
+const commentsOpen = { getAttribute: (name) => name === 'data-waterfall-open' ? 'comments-current' : '' };
+const commentActionsBeforeOpen = actionCount('waterfall.comments.load');
+openFeedCard(commentsOpen);
+assert.equal(reader.classList.contains('active'), true,
+  'detail content must open before comment data is available');
+assert.match(reader.innerHTML, /评论精选/);
+assert.match(reader.innerHTML, /waterfall-comment-skeleton/,
+  'supported details must paint a compact loading state immediately');
+assert.equal(actionCount('waterfall.comments.load'), commentActionsBeforeOpen,
+  'opening details must return before the native comment request is dispatched');
+runLatestTimer(0);
+assert.equal(actionCount('waterfall.comments.load'), commentActionsBeforeOpen + 1);
+assert.deepEqual(Object.keys(actions.at(-1)?.args ?? {}).sort(), ['candidateId', 'surfaceId']);
+assert.equal(actions.at(-1)?.args?.candidateId, 'comments-current');
+
+const commentsSlot = element();
+const readerMetricSlot = element();
+reader.querySelector = (selector) => selector === '.waterfall-reader-head' ? readerHead :
+  (selector === '[data-waterfall-comments-slot]' ? commentsSlot :
+    (selector === '[data-waterfall-reader-metrics]' ? readerMetricSlot : null));
+window.__aiphoneApplyWaterfallUpdate(commentsPayload({
+  commentLoadState: 'ready',
+  metrics: [{ kind: 'like', value: 9876 }],
+  comments: Array.from({ length: 6 }, (_, index) => ({
+    text: index === 0 ? '<b>第一条评论</b>' : `第 ${index + 1} 条评论`,
+    authorName: index === 0 ? '评论者' : '',
+    authorAvatarUrl: index === 0 ? 'https://img.example/avatar.png' : '',
+    publishedAt: index === 0 ? '2026-08-24T00:00:00.000Z' : '',
+    likeCount: index === 0 ? 12 : undefined,
+    replyCount: index === 0 ? 3 : undefined
+  }))
+}));
+assert.equal((commentsSlot.innerHTML.match(/data-waterfall-comment-toggle/g) ?? []).length, 5,
+  'detail comments must show at most five rows');
+assert.match(readerMetricSlot.innerHTML, /data-waterfall-metric="like"/,
+  'detail metrics must update alongside an asynchronous comment payload');
+assert.match(commentsSlot.innerHTML, /&lt;b&gt;第一条评论&lt;\/b&gt;/);
+assert.doesNotMatch(commentsSlot.innerHTML, /第 6 条评论/);
+let commentExpanded = 'false';
+const commentRow = {
+  getAttribute: (name) => name === 'aria-expanded' ? commentExpanded : '',
+  setAttribute: (name, value) => { if (name === 'aria-expanded') commentExpanded = value; },
+  closest: (selector) => selector === '[data-waterfall-comment-toggle]' ? commentRow : null
+};
+reader.emit('click', { target: commentRow });
+assert.equal(commentExpanded, 'true', 'tapping a comment row must expand its two-line preview');
+reader.emit('click', { target: commentRow });
+assert.equal(commentExpanded, 'false', 'tapping the expanded row must collapse it');
+window.__aiphoneApplyWaterfallUpdate(commentsPayload({ commentLoadState: 'empty', comments: [] }));
+assert.equal(commentsSlot.innerHTML, '', 'empty or unavailable comments must occupy no detail space');
+reader.emit('click', {
+  target: { closest: (selector) => selector === '[data-waterfall-reader-close]' ? {} : null }
+});
+finishReaderClose();
+reader.querySelector = (selector) => selector === '.waterfall-reader-head' ? readerHead : null;
 
 function inlinePlayerFixture(source, id) {
   const card = element();
@@ -1516,6 +2446,12 @@ assert.match(track.innerHTML,
 assert.match(track.innerHTML,
   /<article[^>]*data-waterfall-id="twitch-channel-1"[^>]*><div class="waterfall-card-shell">/,
   'Twitch source-only cards must use a non-interactive shell');
+assert.match(track.innerHTML,
+  /data-waterfall-id="apple-podcast-1"[\s\S]*?class="waterfall-cinema-copy" role="button" tabindex="0" data-waterfall-open="apple-podcast-1"/,
+  'Apple Podcasts card copy must open details without swallowing inline playback');
+assert.match(track.innerHTML,
+  /data-waterfall-id="twitch-channel-1"[\s\S]*?class="waterfall-cinema-copy" role="button" tabindex="0" data-waterfall-open="twitch-channel-1"/,
+  'Twitch card copy must open details without swallowing inline playback');
 assert.doesNotMatch(track.innerHTML,
   /<article[^>]*data-waterfall-id="(?:apple-podcast-1|twitch-channel-1)"[^>]*><div class="[^"]*waterfall-card-shell--interactive/,
   'source-only media cards must not inherit whole-card press feedback');
@@ -1573,6 +2509,7 @@ track.emit('click', { target: twitchPlayer.button });
 const offscreenFrame = createdFrames.at(-1);
 twitchPlayer.card.rect = { top: 1001, bottom: 2001 };
 track.emit('scroll');
+runLatestTimer(96);
 runLatestTimer(180);
 assert.equal(offscreenFrame.removed, true, 'scrolling the active card outside the viewport must destroy its iframe');
 twitchPlayer.card.rect = { top: 0, bottom: 1000 };
@@ -1590,7 +2527,6 @@ const preferencesFrame = createdFrames.at(-1);
 preferencesButton.emit('click');
 assert.equal(preferencesFrame.removed, true, 'opening source preferences must destroy the inline player');
 preferences.emit('click', { preventDefault: () => {}, target: preferenceDoneButton });
-runLatestTimer(140);
 
 track.emit('click', { target: twitchPlayer.button });
 const readerFrame = createdFrames.at(-1);
@@ -1659,3 +2595,97 @@ assert.doesNotMatch(applePlayer.card.outerHTML, /data-waterfall-apple-play="appl
 assert.match(applePlayer.card.outerHTML, /该节目仅提供 HTTP 音频，请在来源页收听/);
 assert.equal(toast.textContent, '该节目仅提供 HTTP 音频，请在来源页收听');
 assert.equal(toast.classList.contains('active'), true);
+
+const lateCoverWithoutImage = {
+  ...imageCandidate,
+  id: 'late-cover',
+  coverUrl: ''
+};
+track.querySelectorAll = () => [];
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  currentId: 'late-cover',
+  enabledSources: ['zhihu'],
+  candidates: [lateCoverWithoutImage]
+});
+const lateCoverNode = Object.assign(element(), { offsetTop: 18, offsetHeight: 880 });
+track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? [lateCoverNode] : [];
+const writesBeforeLateCover = track.innerHTMLWrites;
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  currentId: 'late-cover',
+  enabledSources: ['zhihu'],
+  candidates: [{ ...lateCoverWithoutImage, coverUrl: 'https://example.test/late-cover.jpg' }]
+});
+assert.equal(track.innerHTMLWrites, writesBeforeLateCover,
+  'same-ID media enrichment must not rebuild the whole feed');
+assert.equal(lateCoverNode.appendedHtmlWrites, 0,
+  'same-ID media enrichment must preserve the card node under the user');
+assert.equal(lateCoverNode.removed, undefined,
+  'same-ID media enrichment must not detach the visible card');
+
+const lateCoverLiveNode = Object.assign(element(), { offsetTop: 18, offsetHeight: 880 });
+lateCoverLiveNode.classList.add('is-active');
+track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? [lateCoverLiveNode] : [];
+timers.filter((timer) => !timer.canceled && timer.delay === 96)
+  .forEach((timer) => { timer.canceled = true; });
+const writesBeforeGestureCover = track.innerHTMLWrites;
+const appendsBeforeGestureCover = lateCoverLiveNode.appendedHtmlWrites;
+documentListeners.touchstart({ touches: [{ clientX: 200, clientY: 640 }] });
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  currentId: 'late-cover',
+  enabledSources: ['zhihu'],
+  candidates: [{ ...lateCoverWithoutImage, coverUrl: 'https://example.test/late-cover-2.jpg' }]
+});
+assert.equal(track.innerHTMLWrites, writesBeforeGestureCover,
+  'same-ID cover enrichment must wait until the paging gesture settles');
+assert.equal(lateCoverLiveNode.appendedHtmlWrites, appendsBeforeGestureCover,
+  'a finger-down gesture must not replace the card under the user');
+documentListeners.touchend?.();
+runLatestTimer(96);
+assert.equal(lateCoverLiveNode.appendedHtmlWrites, appendsBeforeGestureCover,
+  'settling the gesture must not replace the card afterward');
+assert.equal(lateCoverLiveNode.removed, undefined);
+
+const readerCoverNode = Object.assign(element(), { offsetTop: 18, offsetHeight: 880 });
+track.querySelectorAll = (selector) => selector === '[data-waterfall-id]' ? [readerCoverNode] : [];
+const readerCoverOpen = {
+  getAttribute: (name) => name === 'data-waterfall-open' ? 'late-cover' : '',
+  getBoundingClientRect: () => ({ top: 120, right: 360, bottom: 640, left: 40, width: 320, height: 520 })
+};
+openFeedCard(readerCoverOpen);
+assert.equal(reader.classList.contains('active'), true);
+const writesBeforeReaderCover = track.innerHTMLWrites;
+const appendsBeforeReaderCover = readerCoverNode.appendedHtmlWrites;
+window.__aiphoneApplyWaterfallUpdate({
+  ...window.__aiphoneWaterfallInitial,
+  currentId: 'late-cover',
+  enabledSources: ['zhihu'],
+  candidates: [{ ...lateCoverWithoutImage, coverUrl: 'https://example.test/late-cover-3.jpg' }]
+});
+assert.equal(track.innerHTMLWrites, writesBeforeReaderCover);
+assert.equal(readerCoverNode.appendedHtmlWrites, appendsBeforeReaderCover,
+  'same-ID cover enrichment must preserve the feed card while details are open');
+documentListeners.keydown({ key: 'Escape' });
+assert.equal(reader.classList.contains('closing'), true);
+assert.equal(reader.classList.contains('active'), true);
+const reopenCoverOpen = {
+  getAttribute: (name) => name === 'data-waterfall-open' ? 'late-cover' : '',
+  getBoundingClientRect: () => ({ top: 40, right: 300, bottom: 480, left: 20, width: 280, height: 440 })
+};
+openFeedCard(reopenCoverOpen);
+assert.equal(reader.classList.contains('closing'), false,
+  'reopening during the close motion must reverse from the current visual state');
+assert.equal(reader.classList.contains('active'), true);
+assert.deepEqual(reader.style.values, {});
+assert.equal(timers.filter((timer) => timer.delay === 180 && !timer.canceled).length, 0,
+  'reopening must cancel the close timer so the layer cannot hide mid-reverse');
+assert.equal(readerCoverNode.appendedHtmlWrites, appendsBeforeReaderCover,
+  'an interrupted reopen must preserve the feed card node');
+documentListeners.keydown({ key: 'Escape' });
+finishReaderClose();
+assert.equal(timers.filter((timer) => timer.delay === 240 && !timer.canceled).length, 0);
+runLatestTimer(0);
+assert.equal(readerCoverNode.appendedHtmlWrites, appendsBeforeReaderCover,
+  'returning from details must preserve the existing feed card node');

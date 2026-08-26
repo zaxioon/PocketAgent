@@ -2,16 +2,27 @@ import { http } from '@kit.NetworkKit';
 import util from '@ohos.util';
 import { A2uiLabelValueData } from './A2uiTypes';
 import { DynamicGenericToolResult } from './DynamicToolTypes';
+import { WaterfallComment } from './WaterfallAnythingCore';
 
 const BILIBILI_SEARCH_URL: string = 'https://search.bilibili.com/video';
 const BILIBILI_API_SEARCH_URL: string = 'https://api.bilibili.com/x/web-interface/search/all/v2';
 const BILIBILI_SEARCH_MARKER: string = 'http:\\u002F\\u002Fwww.bilibili.com\\u002Fvideo\\u002Fav';
+const BILIBILI_REPLY_URL: string = 'https://api.bilibili.com/x/v2/reply';
 
 interface BilibiliVideoItem {
   bvid: string;
   title: string;
   description: string;
   cover: string;
+  author?: string;
+  avatar?: string;
+  views?: string;
+  likes?: string;
+  favorites?: string;
+  comments?: string;
+  coins?: string;
+  danmaku?: string;
+  shares?: string;
 }
 
 interface JsonStringValue {
@@ -44,6 +55,13 @@ interface BilibiliSearchApiItem {
   title?: string;
   description?: string;
   pic?: string;
+  author?: string;
+  upic?: string;
+  play?: string | number;
+  like?: string | number;
+  favorites?: string | number;
+  review?: string | number;
+  video_review?: string | number;
 }
 
 interface BilibiliViewResponse {
@@ -57,6 +75,50 @@ interface BilibiliViewData {
   aid?: number;
   cid?: number;
   desc?: string;
+  owner?: BilibiliViewOwner;
+  stat?: BilibiliViewStat;
+}
+
+interface BilibiliViewOwner {
+  name?: string;
+  face?: string;
+}
+
+interface BilibiliViewStat {
+  view?: number;
+  like?: number;
+  favorite?: number;
+  reply?: number;
+  coin?: number;
+  danmaku?: number;
+  share?: number;
+}
+
+interface BilibiliReplyResponse {
+  code?: number;
+  message?: string;
+  data?: BilibiliReplyData;
+}
+
+interface BilibiliReplyData {
+  replies?: BilibiliReply[];
+}
+
+interface BilibiliReply {
+  ctime?: number;
+  like?: number;
+  rcount?: number;
+  member?: BilibiliReplyMember;
+  content?: BilibiliReplyContent;
+}
+
+interface BilibiliReplyMember {
+  uname?: string;
+  avatar?: string;
+}
+
+interface BilibiliReplyContent {
+  message?: string;
 }
 
 function textOf(value: Object | string | number | boolean | null | undefined): string {
@@ -93,6 +155,35 @@ function bilibiliViewUrl(bvid: string): string {
 
 export function bilibiliPlayerUrl(bvid: string): string {
   return 'https://www.bilibili.com/video/' + encodeURIComponent(bvid.trim());
+}
+
+export function bilibiliReplyUrl(aid: string): string {
+  const params: string[][] = [
+    ['type', '1'], ['oid', aid.trim()], ['pn', '1'], ['ps', '5'], ['sort', '2']
+  ];
+  return BILIBILI_REPLY_URL + '?' + params.map((pair: string[]): string =>
+    encodeURIComponent(pair[0]) + '=' + encodeURIComponent(pair[1])).join('&');
+}
+
+export function bilibiliCommentsFromReplyPayload(rawJson: string): WaterfallComment[] {
+  const payload = JSON.parse(rawJson) as BilibiliReplyResponse;
+  if (payload.code !== undefined && payload.code !== 0) throw new Error(textOf(payload.message));
+  const replies = payload.data !== undefined && Array.isArray(payload.data.replies) ? payload.data.replies : [];
+  const comments: WaterfallComment[] = [];
+  for (let index = 0; index < replies.length && comments.length < 5; index++) {
+    const reply = replies[index];
+    const content = textOf(reply.content?.message).trim();
+    if (content.length === 0 || comments.some((comment: WaterfallComment): boolean => comment.text === content)) continue;
+    comments.push({
+      text: content,
+      authorName: textOf(reply.member?.uname).trim() || undefined,
+      authorAvatarUrl: normalizeImageUrl(textOf(reply.member?.avatar)) || undefined,
+      publishedAt: reply.ctime !== undefined && reply.ctime > 0 ? new Date(reply.ctime * 1000).toISOString() : undefined,
+      likeCount: reply.like,
+      replyCount: reply.rcount
+    });
+  }
+  return comments;
 }
 
 function responseText(result: Object | string | number | boolean | ArrayBuffer): string {
@@ -356,6 +447,15 @@ function resultFromItem(item: BilibiliVideoItem, query: string): DynamicGenericT
   if (item.description.length > 0) {
     rows.push({ label: 'Description', value: item.description });
   }
+  appendRowIfMissing(rows, 'Author', item.author ?? '');
+  appendRowIfMissing(rows, 'Author Avatar', item.avatar ?? '');
+  appendRowIfMissing(rows, 'Views', item.views ?? '');
+  appendRowIfMissing(rows, 'Likes', item.likes ?? '');
+  appendRowIfMissing(rows, 'Favorites', item.favorites ?? '');
+  appendRowIfMissing(rows, 'Comments', item.comments ?? '');
+  appendRowIfMissing(rows, 'Coins', item.coins ?? '');
+  appendRowIfMissing(rows, 'Danmaku', item.danmaku ?? '');
+  appendRowIfMissing(rows, 'Shares', item.shares ?? '');
   return {
     sourceTag: '哔哩哔哩',
     toolName: 'media.video.search',
@@ -421,6 +521,19 @@ async function hydrateBilibiliViewRows(results: DynamicGenericToolResult[]): Pro
       }
       appendRowIfMissing(result.rows, 'AID', textOf(payload.data.aid));
       appendRowIfMissing(result.rows, 'CID', textOf(payload.data.cid));
+      if (payload.data.owner !== undefined) {
+        appendRowIfMissing(result.rows, 'Author', textOf(payload.data.owner.name));
+        appendRowIfMissing(result.rows, 'Author Avatar', textOf(payload.data.owner.face));
+      }
+      if (payload.data.stat !== undefined) {
+        appendRowIfMissing(result.rows, 'Views', textOf(payload.data.stat.view));
+        appendRowIfMissing(result.rows, 'Likes', textOf(payload.data.stat.like));
+        appendRowIfMissing(result.rows, 'Favorites', textOf(payload.data.stat.favorite));
+        appendRowIfMissing(result.rows, 'Comments', textOf(payload.data.stat.reply));
+        appendRowIfMissing(result.rows, 'Coins', textOf(payload.data.stat.coin));
+        appendRowIfMissing(result.rows, 'Danmaku', textOf(payload.data.stat.danmaku));
+        appendRowIfMissing(result.rows, 'Shares', textOf(payload.data.stat.share));
+      }
       const description = textOf(payload.data.desc).trim();
       if (description.length > 0) {
         appendRowIfMissing(result.rows, 'Description', description);
@@ -499,7 +612,14 @@ export function bilibiliVideoResultsFromSearchPayload(rawJson: string, query: st
       bvid: bvid,
       title: title,
       description: stripHtmlTags(textOf(item.description)).trim(),
-      cover: normalizeImageUrl(textOf(item.pic))
+      cover: normalizeImageUrl(textOf(item.pic)),
+      author: textOf(item.author),
+      avatar: normalizeImageUrl(textOf(item.upic)),
+      views: textOf(item.play),
+      likes: textOf(item.like),
+      favorites: textOf(item.favorites),
+      comments: textOf(item.review),
+      danmaku: textOf(item.video_review)
     }, query));
   }
   if (results.length > 0) {
@@ -581,6 +701,31 @@ export async function callBilibiliVideoSearch(query: string, page: number = 1): 
     return bilibiliErrorResult('B 站搜索调用失败', lastError, query);
   } catch (_) {
     return bilibiliErrorResult('B 站搜索调用失败', lastError, query);
+  } finally {
+    request.destroy();
+  }
+}
+
+export async function callBilibiliVideoComments(aid: string): Promise<WaterfallComment[]> {
+  if (aid.trim().length === 0) throw new Error('Missing Bilibili aid.');
+  const request = http.createHttp();
+  try {
+    const response = await request.request(bilibiliReplyUrl(aid), {
+      method: http.RequestMethod.GET,
+      header: {
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': 'https://www.bilibili.com/',
+        'User-Agent': 'Mozilla/5.0 AIPhoneDemo/0.1'
+      },
+      usingProtocol: http.HttpProtocol.HTTP1_1,
+      connectTimeout: 8000,
+      readTimeout: 10000
+    });
+    const text = responseText(response.result);
+    if (response.responseCode < 200 || response.responseCode >= 300) {
+      throw new Error('HTTP ' + response.responseCode.toString() + ': ' + text.substring(0, 240));
+    }
+    return bilibiliCommentsFromReplyPayload(text);
   } finally {
     request.destroy();
   }

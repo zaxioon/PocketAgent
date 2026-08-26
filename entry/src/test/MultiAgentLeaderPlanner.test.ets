@@ -2520,6 +2520,34 @@ export default function multiAgentLeaderPlannerTest() {
       expect(model.prompts.length).assertEqual(1);
     });
 
+    it('accepts one redundant trailing quote after a streamed Leader JSON object', 0, async () => {
+      const model = new QueueLocalModel([LIVE_ANSWER_WITHOUT_REASON_CODE + '"']);
+
+      const decision = await new MultiAgentLeaderPlanner(model).plan(
+        inputMessage(),
+        { text: '你好' },
+        planningContext(),
+        1
+      );
+
+      expect(decision.answer).assertEqual('LIVE_PRIVATE_MARKER');
+      expect(model.prompts.length).assertEqual(1);
+    });
+
+    it('accepts one trailing pseudo-wrapper closure after a streamed Leader JSON object', 0, async () => {
+      const model = new QueueLocalModel([LIVE_ANSWER_WITHOUT_REASON_CODE + '"}']);
+
+      const decision = await new MultiAgentLeaderPlanner(model).plan(
+        inputMessage(),
+        { text: '你好' },
+        planningContext(),
+        1
+      );
+
+      expect(decision.answer).assertEqual('LIVE_PRIVATE_MARKER');
+      expect(model.prompts.length).assertEqual(1);
+    });
+
     it('preserves the locked first-round persona and skill in later-round prompt and decision', 0, async () => {
       const model = new LockedSelectionPromptAwareModel();
       const context = planningContext();
@@ -2603,7 +2631,7 @@ export default function multiAgentLeaderPlannerTest() {
       expect(model.systemPrompts[0].indexOf('Preserve originQuery exactly') >= 0).assertTrue();
     });
 
-    it('keeps aggregate media and dependent Maps rounds explicit in the Leader prompt', 0, async () => {
+    it('keeps discovery-only media and dependent Maps rounds explicit in the Leader prompt', 0, async () => {
       const model: QueueLocalModel = new QueueLocalModel([PARALLEL_DECISION]);
       await new MultiAgentLeaderPlanner(model).plan(
         inputMessage(),
@@ -2613,7 +2641,7 @@ export default function multiAgentLeaderPlannerTest() {
       );
 
       expect(model.systemPrompts[0].indexOf(
-        'A request for both 新闻 and 讨论 about the same topic uses exactly media.aggregate.search'
+        'Aggregate media search is discovery-only. Never name or schedule media.aggregate.search.'
       ) >= 0).assertTrue();
       expect(model.systemPrompts[0].indexOf(
         'In round 1 requestedCapabilityIds is exactly ["maps.place.search"]'

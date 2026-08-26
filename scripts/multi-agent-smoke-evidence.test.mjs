@@ -267,8 +267,12 @@ test('admits only one prompt while the model chooses the focused release route',
   const start = index.indexOf('  private async submitPrompt(');
   const submit = index.slice(start, index.indexOf('\n  private async submitBimPrompt(', start));
   assert.ok(submit.indexOf('this.isBusy = true;') < submit.indexOf('this.canaryModel().complete('));
+  assert.match(submit, /else if \(!hasAggregateSearchIntent\(trimmed\)\) \{/);
+  assert.match(readFileSync('entry/src/main/ets/pages/A2uiHome/render/A2uiHomeToolRequest.ets', 'utf8'),
+    /containsAny\(prompt, \['查证', '事实核验', '核验事实', '官方来源'\]\)/);
   assert.doesNotMatch(submit, /Promise\.race<string>/);
-  assert.match(submit, /result\.surfaceId === 'none'[\s\S]*this\.showHistory = true/);
+  assert.match(submit, /this\.appendMessage\('assistant', readyMessage\)/);
+  assert.doesNotMatch(submit, /this\.showHistory = true/);
 });
 
 test('does not mount Composio authorization in focused release settings', () => {
@@ -1211,6 +1215,32 @@ test('accepts the current roleless plain-chat reply exposed by ArkWeb', () => {
     plainChatLayout('', '你好！有什么可以帮助你的吗？'),
     '你好'
   );
+  assert.equal(evidence.ok, true);
+  assert.equal(evidence.replyText, '你好！有什么可以帮助你的吗？');
+});
+
+test('accepts the labeled plain-chat reply exposed by the current ArkWeb DOM', () => {
+  const baseline = directTextLayout([]);
+  baseline.children.push(textNode('TextArea', '你好'));
+  const final = {
+    attributes: { type: 'root', text: '' },
+    children: [
+      textNode('heading', '和 Appless 聊聊'),
+      messageArticle('', '你好'),
+      {
+        attributes: { type: 'article', text: '' },
+        children: [
+          textNode('staticText', 'A'),
+          textNode('staticText', 'Appless'),
+          textNode('paragraph', '你好！有什么可以帮助你的吗？')
+        ]
+      },
+      textNode('disclosureTriangle', '上下文 1 条 +'),
+      textNode('TextArea', '')
+    ]
+  };
+
+  const evidence = directTextVisibleEvidence(cloudStreamTurn, baseline, final, '你好');
   assert.equal(evidence.ok, true);
   assert.equal(evidence.replyText, '你好！有什么可以帮助你的吗？');
 });

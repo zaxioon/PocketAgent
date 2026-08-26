@@ -229,8 +229,11 @@ function hasMediaAggregationIntent(prompt: string): boolean {
     (prompt.indexOf('聚合') >= 0 && containsAny(prompt, ['视频', '短视频', '媒体']));
 }
 
-function hasAggregateSearchIntent(prompt: string): boolean {
+export function hasAggregateSearchIntent(prompt: string): boolean {
   if (hasSocialHubContext(prompt)) {
+    return false;
+  }
+  if (containsAny(prompt, ['查证', '事实核验', '核验事实', '官方来源'])) {
     return false;
   }
   const lowerPrompt = prompt.toLowerCase();
@@ -1085,6 +1088,16 @@ export function resolveA2uiHomeToolRequest(
     if (toolId.length > 0 && actionId.length === 0) {
       actionId = 'client_intent_fallback';
     }
+  }
+  if (toolId === 'media.aggregate.search') {
+    return {
+      hasTool: false,
+      toolId: '',
+      prompt: prompt,
+      actionId: '',
+      args: null,
+      modelPromptChars: prompt.length
+    };
   }
   let args = mergeArgs(fallbackArgs, request.args === undefined || request.args === null ? null : request.args);
   if (forcedDailyBriefRequest !== null) {

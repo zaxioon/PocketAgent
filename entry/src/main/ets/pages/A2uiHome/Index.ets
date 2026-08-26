@@ -16,6 +16,7 @@ import {
   defaultLocalModelSettings,
   deepSeekModelSettings,
   resolvedCloudChatModel,
+  rideAmapWebKeyForUi,
   summarizeAppliedA2uiSurface
 } from '@loop/agent-core';
 import { isRollingGoHotelBookingUrl, validHotelBookingOpenArgs } from '@loop/agent-core';
@@ -27,6 +28,7 @@ import {
   applyWaterfallExpandedQuery,
   applyWaterfallSourceSelection,
   callConfiguredAggregateSearchContinuation,
+  callConfiguredWaterfallComments,
   callConfiguredWaterfallInterestRecall,
   AggregateSearchSource,
   AggregateSearchSourceBatch,
@@ -45,6 +47,8 @@ import {
   planWaterfallContinuation,
   resolveApplePodcastEpisode,
   parseWaterfallExpandedQuery,
+  WaterfallCandidate,
+  WaterfallCommentsResult,
   WaterfallFeedState,
   WaterfallFeedUpdate,
   WaterfallInterestRecallRequest,
@@ -55,6 +59,7 @@ import {
   WaterfallRankedCandidate,
   WaterfallSourcePhase,
   WaterfallSourceState,
+  waterfallCommentSourceSupported,
   waterfallExpansionPrompt,
   waterfallSearchPolicyForRuntime
 } from '@loop/agent-core';
@@ -70,6 +75,7 @@ import { mapCommon, petalMaps } from '@kit.MapKit';
 import promptAction from '@ohos.promptAction';
 import fs from '@ohos.file.fs';
 import { geoLocationManager } from '@kit.LocationKit';
+import { inputMethod } from '@kit.IMEKit';
 import util from '@ohos.util';
 import {
   A2UI_COMPONENT_SOCIAL_HUB,
@@ -82,6 +88,7 @@ import {
   A2uiDynamicToolConnectData,
   A2uiFlightData,
   A2uiFoodData,
+  A2uiFoodSearchArea,
   A2uiGenericToolResultData,
   A2uiLabelValueData,
   A2uiMessage,
@@ -95,6 +102,7 @@ import {
 } from '@loop/agent-core';
 import { buildFoodPhoneUri, stripeReceivingAccount } from '@loop/agent-core';
 import {
+  awaitConnectionTest,
   callDirectModel,
   DirectModelCallResult
 } from '../../model/LocalModelClient';
@@ -299,8 +307,12 @@ import {
   emptyWaterfallPreferenceProfile,
   updateWaterfallPreferenceWeight,
   waterfallBehaviorDelta,
+  waterfallCandidateFromSavedCard,
+  waterfallReactionWeights,
   WaterfallBehaviorEvidence,
+  WaterfallCardRecord,
   WaterfallPreferenceProfile,
+  WaterfallReactionProjection,
   WaterfallPreferencesStore,
   WATERFALL_PREFERENCES_STORE_NAME
 } from './waterfall/WaterfallPreferencesStore';
@@ -359,18 +371,25 @@ import {
   renderAggregateSearchHomeDocument,
   waterfallApplePodcastCandidateFromAction,
   waterfallAdvanceCurrentFromAction,
+  waterfallAdvanceVisibleFromAction,
   waterfallBehaviorFromAction,
-  waterfallEnabledSourcesFromAction
+  waterfallCardActionFromAction,
+  waterfallCommentsCandidateFromAction,
+  waterfallEnabledSourcesFromAction,
+  waterfallSearchExitFromAction,
+  waterfallSearchQueryFromAction
 } from './html/HtmlAggregateSearchHomeRenderer';
 import { createFirecrawlPendingDocument, isFirecrawlToolId } from './html/HtmlFirecrawlHomeRenderer';
 import { FoodAddressBookStore, FoodSavedAddressViewModel } from './FoodAddressBookStore';
 import { FoodFavoritesStore, FoodFavoriteViewModel } from './FoodFavoritesStore';
+import { buildFoodStoreMapSnapshot } from './FoodStoreMapSnapshot';
 import { isHtmlHomeActionAllowed } from './html/HtmlHomeActionPolicy';
 import {
   HtmlHomeAction,
   HtmlHomeBlock,
   HtmlHomeDocument,
-  WaterfallBehaviorActionArgs
+  WaterfallBehaviorActionArgs,
+  WaterfallCardActionArgs
 } from './html/HtmlHomeTypes';
 import {
   ensureReminderNotificationEnabled,
@@ -425,6 +444,7 @@ import {
   A2uiHomeResolvedToolRequest,
   directPaymentToolIdForActionId,
   directRideToolIdForActionId,
+  hasAggregateSearchIntent,
   resolveA2uiHomeSubmitToolRequest,
   resolveA2uiHomeToolRequest
 } from './render/A2uiHomeToolRequest';
@@ -467,6 +487,11 @@ import {
   configureUiLabModelSettings
 } from './lab/UiLabRuntimeConfig';
 
+interface FoodStoreMapLocationActionArgs {
+  surfaceId: string;
+  searchArea: A2uiFoodSearchArea;
+}
+
 const CONNECTION_TEST_PROMPT: string = '连接检查：请返回 A2UI v0.9.1 setup surface，说明 Local API 已可用。';
 const TRAVEL_STAGE55_DEVICE_FIXTURE_PURPOSE: string = '阶段5.5恢复验收样例';
 const TRAVEL_STAGE55_DEVICE_FIXTURE_RESTORE_COMMAND: string = 'travel-stage55-restore-original';
@@ -496,6 +521,7 @@ const READ_CALENDAR_PERMISSION: Permissions = 'ohos.permission.READ_CALENDAR';
 const WRITE_CALENDAR_PERMISSION: Permissions = 'ohos.permission.WRITE_CALENDAR';
 const APPROX_LOCATION_PERMISSION: Permissions = 'ohos.permission.APPROXIMATELY_LOCATION';
 const PRECISE_LOCATION_PERMISSION: Permissions = 'ohos.permission.LOCATION';
+const LOCATION_SERVICE_DISABLED_NOTICE: string = '定位服务未开启，附近结果可能不够准确。';
 
 interface RegisteredPageToolObservation {
   result: A2uiCallResult | null;
@@ -1095,7 +1121,12 @@ struct Index {
   @State foodLocationRadiusMeters: number = 3000;
   @State foodLocationName: string = '坂田';
   @State foodLocationAddress: string = '深圳市龙岗区坂田街道';
+  @State locationServiceNotice: string = '';
   private foodLocationOwnerSurfaceId: string = '';
+  @State foodStoreMapOpen: boolean = false;
+  @State foodStoreMapSnapshotJson: string = '';
+  @State foodStoreMapSnapshotTick: number = 0;
+  private foodStoreMapOwnerSurfaceId: string = '';
   private foodSavedAddresses: FoodSavedAddressViewModel[] = [];
   private foodAddressBookStoreInstance: FoodAddressBookStore | null = null;
   private foodFavorites: FoodFavoriteViewModel[] = [];
@@ -1121,6 +1152,7 @@ struct Index {
   private dailyBriefCatchUpPending: boolean = false;
   private waterfallContinuationBatchIndex: number = 100;
   private interestWaterfallFeedState: WaterfallFeedState | null = null;
+  private interestWaterfallSearchSnapshot: WaterfallFeedState | null = null;
   private interestRecallStarted: boolean = false;
   private interestRecallRound: number = 0;
   private interestExplorationSources: string[] = [];
@@ -1129,6 +1161,10 @@ struct Index {
   private waterfallConversationState: WaterfallConversationState = { history: [], rules: [], summary: '' };
   private waterfallPreferencesStoreInstance: WaterfallPreferencesStore | null = null;
   private waterfallPreferenceProfile: WaterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
+  private waterfallCardRecords: WaterfallCardRecord[] = [];
+  private waterfallReactionProjection: WaterfallReactionProjection = {
+    topicWeights: [], sourceWeights: [], formatWeights: []
+  };
   private waterfallSessionTopicWeights: WaterfallPreferenceWeight[] = [];
   private waterfallSessionSourceWeights: WaterfallPreferenceWeight[] = [];
   private waterfallSessionFormatWeights: WaterfallPreferenceWeight[] = [];
@@ -1577,10 +1613,17 @@ struct Index {
   private syncFoodLocationOwner(surface: A2uiSurfaceState): void {
     if (surface.intent !== 'food' || surface.surfaceId.length === 0) {
       this.foodLocationOwnerSurfaceId = '';
+      this.foodStoreMapOwnerSurfaceId = '';
+      this.foodStoreMapOpen = false;
+      this.foodStoreMapSnapshotJson = '';
       return;
     }
     const sessionCreated = this.foodLocationOwnerSurfaceId !== surface.surfaceId;
     this.foodLocationOwnerSurfaceId = surface.surfaceId;
+    if (this.foodStoreMapOwnerSurfaceId !== surface.surfaceId) {
+      this.foodStoreMapOwnerSurfaceId = surface.surfaceId;
+      this.foodStoreMapOpen = false;
+    }
     let locationUpdated = false;
     try {
       const model = JSON.parse(surface.dataModelJson) as A2uiRuntimeDataModel;
@@ -1610,9 +1653,28 @@ struct Index {
     }
   }
 
+  private syncFoodStoreMapSnapshot(surface: A2uiSurfaceState): void {
+    if (surface.intent !== 'food' || surface.surfaceId !== this.foodStoreMapOwnerSurfaceId) {
+      return;
+    }
+    const snapshotJson = JSON.stringify(buildFoodStoreMapSnapshot(
+      surface,
+      this.foodLocationLongitude,
+      this.foodLocationLatitude,
+      this.foodLocationName,
+      this.foodLocationAddress
+    ));
+    if (snapshotJson === this.foodStoreMapSnapshotJson) {
+      return;
+    }
+    this.foodStoreMapSnapshotJson = snapshotJson;
+    this.foodStoreMapSnapshotTick = this.foodStoreMapSnapshotTick + 1;
+  }
+
   private storeSurfaceSilently(surface: A2uiSurfaceState): void {
     this.currentSurface = this.surfaceSnapshot(surface);
     this.syncFoodLocationOwner(this.currentSurface);
+    this.syncFoodStoreMapSnapshot(this.currentSurface);
     aiLogInfo('[AIPhone][A2uiHomeSurfaceSilentUpdate] surfaceId=' + surface.surfaceId +
       ' sequence=' + surface.sequence.toString());
   }
@@ -1682,12 +1744,13 @@ struct Index {
     if (this.waterfallShellHtml.length > 0 && this.waterfallShellSurfaceId === surfaceId) {
       return;
     }
-    this.waterfallShellHtml = renderHtmlHomeDocument(document, false);
+    this.waterfallShellHtml = renderAggregateSearchHomeDocument(document, false, false, true);
     this.waterfallShellSurfaceId = surfaceId;
   }
 
   private publishWaterfallPayload(document: HtmlHomeDocument): void {
-    const payload = buildWaterfallHomePayload(document, this.isBusy, this.waterfallFeedState);
+    const payload = buildWaterfallHomePayload(
+      document, this.isBusy, this.waterfallFeedState, this.waterfallCardRecords);
     this.waterfallPayloadJson = payload === null ? '' : JSON.stringify(payload);
     this.waterfallPayloadTick = this.waterfallPayloadTick + 1;
   }
@@ -1717,7 +1780,7 @@ struct Index {
 
   private publishInterestWaterfallPayload(): void {
     const payload = buildWaterfallHomePayload(
-      this.interestWaterfallDocument(), false, this.interestWaterfallFeedState);
+      this.interestWaterfallDocument(), false, this.interestWaterfallFeedState, this.waterfallCardRecords);
     this.interestWaterfallPayloadJson = payload === null ? '' : JSON.stringify(payload);
     this.interestWaterfallPayloadTick = this.interestWaterfallPayloadTick + 1;
   }
@@ -1763,6 +1826,10 @@ struct Index {
     this.interestWaterfallFeedState = update.state;
     this.publishInterestWaterfallPayload();
     if (update.loadRequests.length > 0) {
+      if (update.state.mode === 'search') {
+        this.runInterestSearchRequests(update.loadRequests);
+        return;
+      }
       const requests: WaterfallInterestRecallRequest[] = update.loadRequests.map(
         (request: WaterfallLoadRequest): WaterfallInterestRecallRequest => ({
           route: request.route ?? 'explore',
@@ -1774,19 +1841,41 @@ struct Index {
       this.runInterestRecallRequests(requests);
       return;
     }
+    if (update.expansionRequest !== undefined) {
+      this.runInterestWaterfallExpansion(update.expansionRequest);
+      return;
+    }
     this.runNextInterestExplorationIfNeeded();
+  }
+
+  private runInterestWaterfallExpansion(request: WaterfallQueryExpansionRequest): void {
+    const generation = this.interestWaterfallGeneration;
+    this.canaryModel().complete(waterfallExpansionPrompt(request)).then((raw: string): void => {
+      const state = this.interestWaterfallFeedState;
+      if (generation !== this.interestWaterfallGeneration || state === null || state.mode !== 'search') return;
+      const query = parseWaterfallExpandedQuery(raw, state.query);
+      this.applyInterestWaterfallUpdate(query.length > 0 ?
+        applyWaterfallExpandedQuery(state, request.stage, query, Date.now()) :
+        failWaterfallExpansion(state, request.stage));
+    }).catch((error: Error): void => {
+      const state = this.interestWaterfallFeedState;
+      if (generation !== this.interestWaterfallGeneration || state === null || state.mode !== 'search') return;
+      aiLogError('[AIPhone][WaterfallDiscoveryExpansionFailed] stage=' + request.stage +
+        ' error=' + error.message.substring(0, 240));
+      this.applyInterestWaterfallUpdate(failWaterfallExpansion(state, request.stage));
+    });
   }
 
   private runNextInterestExplorationIfNeeded(): void {
     const state = this.interestWaterfallFeedState;
-    if (state === null || this.interestRecallRound >= 3 || state.sources.some(
+    if (state === null || state.mode === 'search' || this.interestRecallRound >= 3 || state.sources.some(
       (source: WaterfallSourceState): boolean => source.inFlight || source.phase === 'loading')) return;
     let active = state.current !== null && state.enabledSources.indexOf(state.current.source) >= 0 ? 1 : 0;
     active += state.stable.filter((candidate: WaterfallRankedCandidate): boolean =>
       state.enabledSources.indexOf(candidate.source) >= 0).length;
     active += state.tail.filter((candidate: WaterfallRankedCandidate): boolean =>
       state.enabledSources.indexOf(candidate.source) >= 0).length;
-    if (active > 3) return;
+    if (active > 8) return;
     const sources = this.interestExplorationSources.filter((source: string): boolean =>
       state.enabledSources.indexOf(source) >= 0);
     if (sources.length > 0) this.runInterestRecall(sources);
@@ -1824,6 +1913,10 @@ struct Index {
       } else if (result.batch.status.status !== 'success' && explorationIndex >= 0) {
         this.interestExplorationSources.splice(explorationIndex, 1);
       }
+      aiLogInfo('[AIPhone][WaterfallInterestRecallBatch] source=' + source +
+        ' status=' + result.batch.status.status +
+        ' count=' + result.candidates.length.toString() +
+        ' route=' + result.request.route + ' query=' + result.request.query);
       current = mergeWaterfallBatchDeferredRanking(
         current, result.candidates, this.interestSourceState(result)).state;
       this.interestWaterfallFeedState = current;
@@ -1883,6 +1976,97 @@ struct Index {
       this.currentWaterfallPreferenceProfile(), this.recentPositiveWaterfallCandidates(),
       enabledSources, this.interestRecallRound++);
     this.runInterestRecallRequests(requests);
+  }
+
+  private runInterestSearchRequests(requests: WaterfallLoadRequest[]): void {
+    const generation = this.interestWaterfallGeneration;
+    const query = this.interestWaterfallFeedState?.query ?? '';
+    callConfiguredAggregateSearchContinuation(query, requests, (batch: AggregateSearchSourceBatch): void => {
+      if (generation !== this.interestWaterfallGeneration || this.interestWaterfallFeedState?.mode !== 'search') {
+        return;
+      }
+      this.interestWaterfallFeedState = mergeAggregateSearchContinuationBatch(
+        this.interestWaterfallFeedState,
+        batch,
+        this.waterfallContinuationBatchIndex++,
+        Date.now()
+      );
+      this.publishInterestWaterfallPayload();
+    }).then((): void => {
+      if (generation !== this.interestWaterfallGeneration || this.interestWaterfallFeedState?.mode !== 'search') {
+        return;
+      }
+      this.applyInterestWaterfallUpdate(planWaterfallContinuation(this.interestWaterfallFeedState));
+    }).catch((error: Error): void => {
+      aiLogError('[AIPhone][WaterfallDiscoverySearchFailed] generation=' + generation.toString() +
+        ' error=' + error.message.substring(0, 240));
+    });
+  }
+
+  private startInterestWaterfallSearch(query: string): void {
+    const current = this.interestWaterfallFeedState;
+    if (current === null) return;
+    if (this.interestWaterfallSearchSnapshot === null) this.interestWaterfallSearchSnapshot = current;
+    this.interestWaterfallGeneration += 1;
+    const allSources = aggregateSearchSearchSourceIds();
+    const enabledSources = waterfallSourcesForContext(current.enabledSources, allSources);
+    this.interestWaterfallFeedState = {
+      mode: 'search',
+      query,
+      originalQuery: query,
+      queryStage: 'original',
+      queryHistory: [query],
+      consecutiveEmptyRounds: 0,
+      roundNewItemCount: 0,
+      roundActive: true,
+      expansionInFlight: false,
+      enabledSources,
+      preferenceDescription: '',
+      profile: this.currentWaterfallPreferenceProfile(),
+      shown: [],
+      current: null,
+      stable: [],
+      tail: [],
+      reserve: [],
+      sources: allSources.map((source: string): WaterfallSourceState => ({
+        source,
+        phase: enabledSources.indexOf(source) >= 0 ? 'loading' : 'exhausted',
+        continuation: null,
+        inFlight: enabledSources.indexOf(source) >= 0,
+        reservedCount: enabledSources.indexOf(source) >= 0 ? 10 : 0,
+        message: enabledSources.indexOf(source) >= 0 ? '正在搜索' : ''
+      }))
+    };
+    this.publishInterestWaterfallPayload();
+    this.runInterestSearchRequests(enabledSources.map((source: string): WaterfallLoadRequest => ({
+      source,
+      continuation: null,
+      limit: 10,
+      phase: 'loading',
+      message: '正在搜索',
+      mode: 'search'
+    })));
+  }
+
+  private exitInterestWaterfallSearch(): void {
+    if (this.interestWaterfallSearchSnapshot === null) return;
+    this.interestWaterfallGeneration += 1;
+    const snapshot = this.interestWaterfallSearchSnapshot;
+    this.interestWaterfallSearchSnapshot = null;
+    const enabledSources = waterfallSourcesForContext(
+      this.waterfallPreferenceProfile.discoveryEnabledSources, aggregateSearchInterestSourceIds());
+    const restored = applyWaterfallSourceSelection(snapshot, enabledSources, Date.now()).state;
+    restored.profile = this.currentWaterfallPreferenceProfile();
+    this.interestWaterfallFeedState = restored;
+    this.publishInterestWaterfallPayload();
+    const recallSources = enabledSources.filter((source: string): boolean =>
+      snapshot.enabledSources.indexOf(source) < 0);
+    restored.sources.filter((source: WaterfallSourceState): boolean =>
+      restored.enabledSources.indexOf(source.source) >= 0 && (source.inFlight || source.phase === 'loading'))
+      .forEach((source: WaterfallSourceState): void => {
+        if (recallSources.indexOf(source.source) < 0) recallSources.push(source.source);
+      });
+    if (recallSources.length > 0) this.runInterestRecall(recallSources);
   }
 
   private ensureInterestWaterfall(): void {
@@ -2027,7 +2211,8 @@ struct Index {
 
   private handleWaterfallClientAction(action: A2uiAction): boolean {
     if (action.id !== 'waterfall.sources.select' && action.id !== 'waterfall.feed.advance' &&
-      action.id !== 'waterfall.behavior.record' && action.id !== 'waterfall.applepodcasts.resolve') {
+      action.id !== 'waterfall.behavior.record' && action.id !== 'waterfall.card.action' &&
+      action.id !== 'waterfall.applepodcasts.resolve' && action.id !== 'waterfall.comments.load') {
       return false;
     }
     const document = this.currentHtmlHomeDocument();
@@ -2040,6 +2225,17 @@ struct Index {
       this.waterfallFeedState = document.waterfall;
       this.waterfallFeedSurfaceId = surfaceId;
     }
+    if (action.id === 'waterfall.card.action') {
+      const cardAction = waterfallCardActionFromAction(action, surfaceId);
+      const candidate = cardAction === null ? null : this.waterfallActionCandidate(
+        cardAction.candidateId, this.waterfallFeedState);
+      if (cardAction === null || candidate === null) {
+        this.logHtmlHomeActionError(action, 'invalid_waterfall_card_action');
+        return true;
+      }
+      this.applyWaterfallCardAction(candidate, cardAction);
+      return true;
+    }
     if (action.id === 'waterfall.applepodcasts.resolve') {
       const candidateId = waterfallApplePodcastCandidateFromAction(action, surfaceId);
       const candidate = candidateId === null ? null : this.waterfallCandidate(candidateId, this.waterfallFeedState);
@@ -2049,6 +2245,18 @@ struct Index {
         return true;
       }
       this.resolveApplePodcastCandidate('search', surfaceId, candidate);
+      return true;
+    }
+    if (action.id === 'waterfall.comments.load') {
+      const candidateId = waterfallCommentsCandidateFromAction(action, surfaceId);
+      const candidate = candidateId === null ? null : this.waterfallActionCandidate(
+        candidateId, this.waterfallFeedState);
+      if (candidate === null || !waterfallCommentSourceSupported(candidate.source) ||
+        (candidate.providerItemId ?? '').trim().length === 0 || candidate.commentLoadState !== undefined) {
+        this.logHtmlHomeActionError(action, 'invalid_waterfall_comments_candidate');
+        return true;
+      }
+      this.resolveWaterfallComments('search', surfaceId, candidate);
       return true;
     }
     if (action.id === 'waterfall.sources.select') {
@@ -2079,12 +2287,14 @@ struct Index {
       return true;
     }
     const currentId = waterfallAdvanceCurrentFromAction(action, surfaceId);
+    const visibleId = waterfallAdvanceVisibleFromAction(action, surfaceId);
     const current = this.waterfallFeedState.current;
-    if (currentId === null || current === null || current.id !== currentId) {
+    const targetId = visibleId ?? '';
+    if (current === null || (currentId !== null && current.id !== currentId && targetId.length === 0)) {
       this.logHtmlHomeActionError(action, 'stale_waterfall_current');
       return true;
     }
-    this.applyWaterfallUpdate(document, advanceWaterfallFeed(this.waterfallFeedState, Date.now()));
+    this.applyWaterfallUpdate(document, advanceWaterfallFeed(this.waterfallFeedState, Date.now(), targetId));
     return true;
   }
 
@@ -2099,7 +2309,30 @@ struct Index {
       if (action.kind === 'client') this.submitWaterfallConversationTypedTest(action.prompt);
       return;
     }
+    if (action.id === 'waterfall.search.submit') {
+      const query = waterfallSearchQueryFromAction(action, surfaceId);
+      if (query === null || state === null) {
+        this.logHtmlHomeActionError(action, 'invalid_waterfall_search');
+      } else {
+        this.startInterestWaterfallSearch(query);
+      }
+      return;
+    }
+    if (action.id === 'waterfall.search.exit') {
+      if (!waterfallSearchExitFromAction(action, surfaceId)) {
+        this.logHtmlHomeActionError(action, 'invalid_waterfall_search_exit');
+      } else {
+        this.exitInterestWaterfallSearch();
+      }
+      return;
+    }
     if (state === null) return;
+    if (action.id === 'waterfall.card.action') {
+      const cardAction = waterfallCardActionFromAction(action, surfaceId);
+      const candidate = cardAction === null ? null : this.waterfallActionCandidate(cardAction.candidateId, state);
+      if (cardAction !== null && candidate !== null) this.applyWaterfallCardAction(candidate, cardAction);
+      return;
+    }
     if (action.id === 'waterfall.applepodcasts.resolve') {
       const candidateId = waterfallApplePodcastCandidateFromAction(action, surfaceId);
       const candidate = candidateId === null ? null : this.waterfallCandidate(candidateId, state);
@@ -2108,6 +2341,17 @@ struct Index {
         this.resolveApplePodcastCandidate('interest', surfaceId, candidate);
       } else {
         this.logHtmlHomeActionError(action, 'invalid_apple_podcast_candidate');
+      }
+      return;
+    }
+    if (action.id === 'waterfall.comments.load') {
+      const candidateId = waterfallCommentsCandidateFromAction(action, surfaceId);
+      const candidate = candidateId === null ? null : this.waterfallActionCandidate(candidateId, state);
+      if (candidate !== null && waterfallCommentSourceSupported(candidate.source) &&
+        (candidate.providerItemId ?? '').trim().length > 0 && candidate.commentLoadState === undefined) {
+        this.resolveWaterfallComments('interest', surfaceId, candidate);
+      } else {
+        this.logHtmlHomeActionError(action, 'invalid_waterfall_comments_candidate');
       }
       return;
     }
@@ -2136,9 +2380,11 @@ struct Index {
     }
     if (action.id === 'waterfall.feed.advance') {
       const currentId = waterfallAdvanceCurrentFromAction(action, surfaceId);
-      if (currentId !== null && state.current !== null && state.current.id === currentId) {
-        this.applyInterestWaterfallUpdate(advanceWaterfallFeed(state, Date.now()));
-      }
+      const visibleId = waterfallAdvanceVisibleFromAction(action, surfaceId);
+      if (state.current === null) return;
+      const targetId = visibleId ?? '';
+      if (currentId !== null && state.current.id !== currentId && targetId.length === 0) return;
+      this.applyInterestWaterfallUpdate(advanceWaterfallFeed(state, Date.now(), targetId));
     }
   }
 
@@ -2167,15 +2413,48 @@ struct Index {
     return null;
   }
 
-  private activeApplePodcastCandidate(
+  private waterfallActionCandidate(candidateId: string, state: WaterfallFeedState | null): WaterfallCandidate | null {
+    const active = this.waterfallCandidate(candidateId, state);
+    if (active !== null) return active;
+    for (let index = 0; index < this.waterfallCardRecords.length; index += 1) {
+      if (this.waterfallCardRecords[index].candidateId === candidateId) {
+        return waterfallCandidateFromSavedCard(this.waterfallCardRecords[index].snapshot);
+      }
+    }
+    return null;
+  }
+
+  private applyWaterfallCardAction(candidate: WaterfallCandidate, args: WaterfallCardActionArgs): void {
+    this.waterfallCardRecords = this.waterfallPreferencesStore().applyCardAction(
+      candidate, args.action, args.active, Date.now(), args.restoreSavedAt);
+    this.waterfallReactionProjection = waterfallReactionWeights(this.waterfallCardRecords);
+    const current = this.currentHtmlHomeDocument();
+    if (args.action === 'save') {
+      if (this.waterfallFeedState !== null && current.kind === 'aggregate-search' &&
+        (current.surfaceId ?? '') === this.waterfallFeedSurfaceId) this.publishWaterfallPayload(current);
+      if (this.interestWaterfallFeedState !== null) this.publishInterestWaterfallPayload();
+      return;
+    }
+    configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile(false));
+    if (this.waterfallFeedState !== null && current.kind === 'aggregate-search' &&
+      (current.surfaceId ?? '') === this.waterfallFeedSurfaceId) {
+      this.applyWaterfallUpdate(current, applyWaterfallProfile(
+        this.waterfallFeedState, this.currentWaterfallPreferenceProfile(false), Date.now()));
+    }
+    if (this.interestWaterfallFeedState !== null) {
+      this.applyInterestWaterfallUpdate(applyWaterfallProfile(
+        this.interestWaterfallFeedState, this.currentWaterfallPreferenceProfile(), Date.now()));
+    }
+  }
+
+  private activeWaterfallCandidate(
     target: 'search' | 'interest',
     surfaceId: string,
     candidateId: string,
-    feedUrl: string,
     runtimeOwner: RuntimeOwner,
     runtimeGeneration: number,
     interestGeneration: number
-  ): WaterfallRankedCandidate | null {
+  ): WaterfallCandidate | null {
     if (target === 'search') {
       if (!runtimeCallbackIsCurrent(
         this.activeRuntimeOwner, this.runtimeGeneration, runtimeOwner, runtimeGeneration)) return null;
@@ -2187,14 +2466,25 @@ struct Index {
       return null;
     }
     const state = target === 'search' ? this.waterfallFeedState : this.interestWaterfallFeedState;
-    const candidate = this.waterfallCandidate(candidateId, state);
-    if (candidate === null || candidate.source !== 'applepodcasts' || (candidate.feedUrl ?? '').trim() !== feedUrl) {
-      return null;
-    }
-    return candidate;
+    return this.waterfallActionCandidate(candidateId, state);
   }
 
-  private publishApplePodcastCandidate(target: 'search' | 'interest', surfaceId: string): void {
+  private activeApplePodcastCandidate(
+    target: 'search' | 'interest',
+    surfaceId: string,
+    candidateId: string,
+    feedUrl: string,
+    runtimeOwner: RuntimeOwner,
+    runtimeGeneration: number,
+    interestGeneration: number
+  ): WaterfallCandidate | null {
+    const candidate = this.activeWaterfallCandidate(
+      target, surfaceId, candidateId, runtimeOwner, runtimeGeneration, interestGeneration);
+    return candidate !== null && candidate.source === 'applepodcasts' &&
+      (candidate.feedUrl ?? '').trim() === feedUrl ? candidate : null;
+  }
+
+  private publishWaterfallCandidate(target: 'search' | 'interest', surfaceId: string): void {
     if (target === 'interest') {
       if (surfaceId === 'waterfall-interest-home') this.publishInterestWaterfallPayload();
       return;
@@ -2218,7 +2508,7 @@ struct Index {
     candidate.audioLoadState = 'loading';
     candidate.audioError = '';
     candidate.audioRetryable = true;
-    this.publishApplePodcastCandidate(target, surfaceId);
+    this.publishWaterfallCandidate(target, surfaceId);
     aiLogInfo('[AIPhone][ApplePodcastResolve] phase=loading surface=' + surfaceId + ' candidate=' + candidateId);
     resolveApplePodcastEpisode(feedUrl).then((episode: ApplePodcastEpisodeAudio): void => {
       const current = this.activeApplePodcastCandidate(
@@ -2235,7 +2525,7 @@ struct Index {
       current.audioLoadState = 'ready';
       current.audioError = '';
       current.audioRetryable = false;
-      this.publishApplePodcastCandidate(target, surfaceId);
+      this.publishWaterfallCandidate(target, surfaceId);
       aiLogInfo('[AIPhone][ApplePodcastResolve] phase=ready surface=' + surfaceId + ' candidate=' + candidateId);
     }).catch((error: Error): void => {
       const current = this.activeApplePodcastCandidate(
@@ -2245,10 +2535,55 @@ struct Index {
       current.audioLoadState = 'error';
       current.audioError = failure.message;
       current.audioRetryable = failure.retryable;
-      this.publishApplePodcastCandidate(target, surfaceId);
+      this.publishWaterfallCandidate(target, surfaceId);
       aiLogError('[AIPhone][ApplePodcastResolve] phase=error surface=' + surfaceId + ' candidate=' + candidateId +
         ' code=' + failure.code);
     });
+  }
+
+  private resolveWaterfallComments(
+    target: 'search' | 'interest',
+    surfaceId: string,
+    candidate: WaterfallCandidate
+  ): void {
+    const providerItemId = (candidate.providerItemId ?? '').trim();
+    if (providerItemId.length === 0 || candidate.commentLoadState !== undefined) return;
+    const candidateId = candidate.id;
+    const source = candidate.source as AggregateSearchSource;
+    const runtimeOwner = this.activeRuntimeOwner;
+    const runtimeGeneration = this.runtimeGeneration;
+    const interestGeneration = this.interestWaterfallGeneration;
+    candidate.commentLoadState = 'loading';
+    this.persistSavedWaterfallCandidate(candidate);
+    this.publishWaterfallCandidate(target, surfaceId);
+    callConfiguredWaterfallComments(source, providerItemId).then((result: WaterfallCommentsResult): void => {
+      const current = this.activeWaterfallCandidate(
+        target, surfaceId, candidateId, runtimeOwner, runtimeGeneration, interestGeneration);
+      if (current === null || current.source !== source ||
+        (current.providerItemId ?? '').trim() !== providerItemId) return;
+      current.comments = result.comments.slice(0, 5);
+      current.commentLoadState = current.comments.length > 0 ? 'ready' :
+        (result.state === 'error' ? 'error' : 'empty');
+      this.persistSavedWaterfallCandidate(current);
+      this.publishWaterfallCandidate(target, surfaceId);
+    }).catch((_error: Error): void => {
+      const current = this.activeWaterfallCandidate(
+        target, surfaceId, candidateId, runtimeOwner, runtimeGeneration, interestGeneration);
+      if (current === null || current.source !== source ||
+        (current.providerItemId ?? '').trim() !== providerItemId) return;
+      current.comments = [];
+      current.commentLoadState = 'error';
+      this.persistSavedWaterfallCandidate(current);
+      this.publishWaterfallCandidate(target, surfaceId);
+    });
+  }
+
+  private persistSavedWaterfallCandidate(candidate: WaterfallCandidate): void {
+    const saved = this.waterfallCardRecords.find((record: WaterfallCardRecord): boolean =>
+      record.candidateId === candidate.id && record.saved);
+    if (saved === undefined) return;
+    this.waterfallCardRecords = this.waterfallPreferencesStore().applyCardAction(
+      candidate, 'save', true, Date.now(), true);
   }
 
   private recordWaterfallBehavior(
@@ -2435,7 +2770,6 @@ struct Index {
     this.loadWaterfallPreferences();
     this.loadFoodAddressBook();
     this.loadFoodFavorites();
-    void this.requestLocationPermissionOnLaunch();
     this.subscribeTrainPresaleHandoff();
     this.subscribeWaterfallConversationTypedTest();
     this.requestPendingTrainPresaleResume();
@@ -3399,9 +3733,12 @@ struct Index {
     return {
       version: 2,
       sourceRegistryVersion: this.waterfallPreferenceProfile.sourceRegistryVersion,
-      topicWeights: this.waterfallPreferenceProfile.topicWeights.slice(),
-      sourceWeights: this.waterfallPreferenceProfile.sourceWeights.slice(),
-      formatWeights: this.waterfallPreferenceProfile.formatWeights.slice(),
+      topicWeights: this.waterfallPreferenceProfile.topicWeights.concat(
+        this.waterfallReactionProjection.topicWeights),
+      sourceWeights: this.waterfallPreferenceProfile.sourceWeights.concat(
+        this.waterfallReactionProjection.sourceWeights),
+      formatWeights: this.waterfallPreferenceProfile.formatWeights.concat(
+        this.waterfallReactionProjection.formatWeights),
       explicitRules: this.waterfallPreferenceProfile.explicitRules.concat(
         includeConversation ? this.waterfallConversationState.rules : []),
       recentEvidence: this.waterfallPreferenceProfile.recentEvidence.slice(),
@@ -3417,8 +3754,12 @@ struct Index {
   private loadWaterfallPreferences(): void {
     try {
       this.waterfallPreferenceProfile = this.waterfallPreferencesStore().loadForNewSession();
+      this.waterfallCardRecords = this.waterfallPreferencesStore().loadCardRecords();
+      this.waterfallReactionProjection = waterfallReactionWeights(this.waterfallCardRecords);
     } catch (_error) {
       this.waterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
+      this.waterfallCardRecords = [];
+      this.waterfallReactionProjection = { topicWeights: [], sourceWeights: [], formatWeights: [] };
     }
     configureWaterfallEnabledSourcesForRuntime(
       this.waterfallPreferenceProfile.discoveryEnabledSources as AggregateSearchSource[]);
@@ -3989,11 +4330,20 @@ struct Index {
         inputText: this.inputText
       });
     }
-    return createHtmlHomeDocument({
+    const document = createHtmlHomeDocument({
       surface: this.currentSurface,
       messages: this.messages,
       isBusy: this.isBusy,
       isAwaitingFirstSurface: this.isAwaitingFirstSurface
+    });
+    if (document.kind !== 'aggregate-search') {
+      return document;
+    }
+    return createHtmlHomeDocument({
+      messages: this.messages,
+      isBusy: this.isBusy,
+      isAwaitingFirstSurface: this.isAwaitingFirstSurface,
+      inputText: this.inputText
     });
   }
 
@@ -4148,6 +4498,7 @@ struct Index {
     }
     this.currentSurface = next;
     this.syncFoodLocationOwner(next);
+    this.syncFoodStoreMapSnapshot(next);
     this.surfaceRenderTick = this.surfaceRenderTick + 1;
     this.clearLuckinInlinePatchState();
     this.syncHtmlHomeStableHtml();
@@ -4180,6 +4531,7 @@ struct Index {
     }
     this.currentSurface = next;
     this.syncFoodLocationOwner(next);
+    this.syncFoodStoreMapSnapshot(next);
     this.surfaceRenderTick = this.surfaceRenderTick + 1;
     this.clearLuckinInlinePatchState();
     this.syncHtmlHomeStableHtml();
@@ -4590,6 +4942,7 @@ struct Index {
     this.interestExplorationSources = [];
     this.interestSourceRequestSeq.clear();
     this.interestWaterfallFeedState = null;
+    this.interestWaterfallSearchSnapshot = null;
     this.interestWaterfallHtml = '';
     this.interestWaterfallPayloadJson = '';
     configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile(false));
@@ -5166,7 +5519,7 @@ struct Index {
       const explicitDecision = explicitDeepSearchRouteDecision(trimmed);
       if (explicitDecision !== null) {
         autoDeep = explicitDecision === 'deepsearch';
-      } else {
+      } else if (!hasAggregateSearchIntent(trimmed)) {
         try {
           const decision = await this.canaryModel().complete(deepSearchRouteDecisionPrompt(trimmed));
           autoDeep = deepSearchRouteDecisionFromModelText(decision) === 'deepsearch';
@@ -6401,18 +6754,13 @@ struct Index {
     }
   }
 
-  private async requestLocationPermissionOnLaunch(): Promise<void> {
-    try {
-      await this.ensureLocationPermission();
-      aiLogInfo('[AIPhone][LocationPermissionLaunch] ok=true');
-    } catch (error) {
-      aiLogError('[AIPhone][LocationPermissionLaunch] ok=false reason=' +
-        (error instanceof Error ? error.message : JSON.stringify(error)));
-    }
-  }
-
   private async currentDeviceCoordinates(): Promise<DeviceCoordinates> {
     await this.ensureLocationPermission();
+    if (!geoLocationManager.isLocationEnabled()) {
+      this.locationServiceNotice = LOCATION_SERVICE_DISABLED_NOTICE;
+      throw new Error(LOCATION_SERVICE_DISABLED_NOTICE);
+    }
+    this.locationServiceNotice = '';
     const current = await geoLocationManager.getCurrentLocation();
     const longitude = current.longitude;
     const latitude = current.latitude;
@@ -7462,6 +7810,16 @@ struct Index {
 
   private async handleClientAction(action: A2uiAction): Promise<void> {
     aiLogInfo('[AIPhone][A2uiHomeClientAction] id=' + action.id);
+    if (action.id === 'food_store_map_open') {
+      const args = action.args as Record<string, Object | string | number | boolean | null | undefined> | undefined;
+      if (args !== undefined && this.actionText(args['surfaceId']) === this.currentSurface.surfaceId &&
+        this.currentSurface.intent === 'food') {
+        this.foodStoreMapOpen = true;
+        this.syncFoodStoreMapSnapshot(this.currentSurface);
+        aiLogInfo('[AIPhone][FoodStoreMapOpen] surfaceId=' + this.currentSurface.surfaceId);
+      }
+      return;
+    }
     if (await this.handleStoredFoodFavoriteAction(action)) {
       return;
     }
@@ -8494,7 +8852,9 @@ struct Index {
     } catch (error) {
       const reason = error instanceof Error ? error.message : JSON.stringify(error);
       aiLogError('[AIPhone][FoodCurrentLocation] phase=failed reason=' + reason);
-      this.getUIContext().getPromptAction().showToast({ message: '重新定位失败，请检查定位权限后重试。' });
+      if (reason !== LOCATION_SERVICE_DISABLED_NOTICE) {
+        this.getUIContext().getPromptAction().showToast({ message: '重新定位失败，请检查定位权限后重试。' });
+      }
     }
   }
 
@@ -9425,11 +9785,11 @@ struct Index {
     aiLogInfo('[AIPhone][A2uiHomeConnectionTest] model=' + this.selectedModel + ' baseUrl=' + this.baseUrl);
     this.markChecking('正在向模型发起连接检查...');
     try {
-      const result: DirectModelCallResult = await callDirectModel(
+      const result: DirectModelCallResult = await awaitConnectionTest(callDirectModel(
         this.getSettings(),
         CONNECTION_TEST_PROMPT,
         this.recentMessages()
-      );
+      ));
       aiLogInfo('[AIPhone][A2uiHomeConnectionResult] ok=' + (result.ok ? 'true' : 'false') +
         ' errorChars=' + result.error.length.toString() +
         ' rawChars=' + result.raw.length.toString() +
@@ -9460,7 +9820,11 @@ struct Index {
   }
 
   onBackPress(): boolean {
-    if (!this.showConfigPage && !this.showComposioAuthPage) {
+    if (this.showConfigPage) {
+      this.showConfigPage = false;
+      return true;
+    }
+    if (!this.showComposioAuthPage) {
       if (this.bimRootIndex === 1) {
         this.interestWaterfallBackRequestTick = this.interestWaterfallBackRequestTick + 1;
         return true;
@@ -9471,6 +9835,77 @@ struct Index {
       }
     }
     return false;
+  }
+
+  @Builder
+  private ConfigPageContent() {
+    ConfigPage({
+      baseUrl: $baseUrl,
+      apiKey: $apiKey,
+      selectedModel: $selectedModel,
+      customParametersJson: $customParametersJson,
+      aggregateDomesticOnly: $aggregateDomesticOnly,
+      aggregateMultilingual: $aggregateMultilingual,
+      foodProviderDelayEnabled: $foodProviderDelayEnabled,
+      foodProviderDelayMs: $foodProviderDelayMs,
+      foodPartialThrottleMs: $foodPartialThrottleMs,
+      ignoreToolSurfaceUpdates: $ignoreToolSurfaceUpdates,
+      htmlHomeDebugExportEnabled: $htmlHomeDebugExportEnabled,
+      htmlHomeDebugExportPath: this.htmlHomeDebugExportPath,
+      didiMcpSandboxEnabled: $didiMcpSandboxEnabled,
+      showAdvancedSettings: $showAdvancedSettings,
+      connectionStatus: this.connectionStatus,
+      connectionMessage: this.connectionMessage,
+      isBusy: this.isBusy,
+      lastModelRequest: this.lastModelRequest,
+      lastModelOutput: this.lastModelOutput,
+      lastError: this.lastError,
+      refreshTick: this.refreshTick,
+      personaPacks: this.personaPacks,
+      selectedPersonaId: $selectedPersonaId,
+      personaSoulDraft: $personaSoulDraft,
+      personaMemoryDraft: $personaMemoryDraft,
+      personaSaveMessage: this.personaSaveMessage,
+      composioUserId: this.composioUserId,
+      composioAuthItems: this.composioAuthItems,
+      composioAuthMessage: this.composioAuthMessage,
+      composioAuthBusy: this.composioAuthBusy,
+      onBack: () => {
+        this.showConfigPage = false;
+      },
+      onSelectModelPreset: (preset: string) => {
+        this.saveModelPreset(preset);
+      },
+      onOpenUiAgentLab: () => {
+        this.openUiAgentLab();
+      },
+      onTestConnection: () => {
+        this.testConnection();
+      },
+      onSelectPersona: (personaId: string) => {
+        this.selectPersonaForEdit(personaId);
+      },
+      onSavePersona: () => {
+        this.savePersonaDraft();
+      },
+      onResetPersona: () => {
+        this.resetPersonaDraft();
+      },
+      onExportHtmlHomeDocument: () => {
+        this.exportCurrentHtmlHomeDocument();
+      },
+      onToggleDidiMcpSandbox: (isOn: boolean) => {
+        this.configureDidiMcpSandboxRuntime(isOn);
+      },
+      onToggleAggregateDomesticOnly: (isOn: boolean) => {
+        this.aggregateDomesticOnly = isOn;
+        this.saveAggregateSearchPolicy();
+      },
+      onToggleAggregateMultilingual: (isOn: boolean) => {
+        this.aggregateMultilingual = isOn;
+        this.saveAggregateSearchPolicy();
+      }
+    })
   }
 
   @Builder
@@ -9554,73 +9989,7 @@ struct Index {
         }
       })
     } else if (this.showConfigPage) {
-      ConfigPage({
-        baseUrl: $baseUrl,
-        apiKey: $apiKey,
-        selectedModel: $selectedModel,
-        customParametersJson: $customParametersJson,
-        aggregateDomesticOnly: $aggregateDomesticOnly,
-        aggregateMultilingual: $aggregateMultilingual,
-        foodProviderDelayEnabled: $foodProviderDelayEnabled,
-        foodProviderDelayMs: $foodProviderDelayMs,
-        foodPartialThrottleMs: $foodPartialThrottleMs,
-        ignoreToolSurfaceUpdates: $ignoreToolSurfaceUpdates,
-        htmlHomeDebugExportEnabled: $htmlHomeDebugExportEnabled,
-        htmlHomeDebugExportPath: this.htmlHomeDebugExportPath,
-        didiMcpSandboxEnabled: $didiMcpSandboxEnabled,
-        showAdvancedSettings: $showAdvancedSettings,
-        connectionStatus: this.connectionStatus,
-        connectionMessage: this.connectionMessage,
-        isBusy: this.isBusy,
-        lastModelRequest: this.lastModelRequest,
-        lastModelOutput: this.lastModelOutput,
-        lastError: this.lastError,
-        refreshTick: this.refreshTick,
-        personaPacks: this.personaPacks,
-        selectedPersonaId: $selectedPersonaId,
-        personaSoulDraft: $personaSoulDraft,
-        personaMemoryDraft: $personaMemoryDraft,
-        personaSaveMessage: this.personaSaveMessage,
-        composioUserId: this.composioUserId,
-        composioAuthItems: this.composioAuthItems,
-        composioAuthMessage: this.composioAuthMessage,
-        composioAuthBusy: this.composioAuthBusy,
-        onBack: () => {
-          this.showConfigPage = false;
-        },
-        onSelectModelPreset: (preset: string) => {
-          this.saveModelPreset(preset);
-        },
-        onOpenUiAgentLab: () => {
-          this.openUiAgentLab();
-        },
-        onTestConnection: () => {
-          this.testConnection();
-        },
-        onSelectPersona: (personaId: string) => {
-          this.selectPersonaForEdit(personaId);
-        },
-        onSavePersona: () => {
-          this.savePersonaDraft();
-        },
-        onResetPersona: () => {
-          this.resetPersonaDraft();
-        },
-        onExportHtmlHomeDocument: () => {
-          this.exportCurrentHtmlHomeDocument();
-        },
-        onToggleDidiMcpSandbox: (isOn: boolean) => {
-          this.configureDidiMcpSandboxRuntime(isOn);
-        },
-        onToggleAggregateDomesticOnly: (isOn: boolean) => {
-          this.aggregateDomesticOnly = isOn;
-          this.saveAggregateSearchPolicy();
-        },
-        onToggleAggregateMultilingual: (isOn: boolean) => {
-          this.aggregateMultilingual = isOn;
-          this.saveAggregateSearchPolicy();
-        }
-      })
+      this.ConfigPageContent();
     } else {
       Swiper(this.bimRootController) {
       HomePage({
@@ -9630,6 +9999,10 @@ struct Index {
         messages: this.messages,
         currentSurface: this.currentSurface,
         htmlHomeHtml: this.htmlHomeHtmlForView(),
+        foodStoreMapOpen: this.foodStoreMapOpen,
+        foodStoreMapAmapKey: rideAmapWebKeyForUi(),
+        foodStoreMapSnapshotJson: this.foodStoreMapSnapshotJson,
+        foodStoreMapSnapshotTick: this.foodStoreMapSnapshotTick,
         multiTaskPayloadJson: this.multiTaskPayloadJson,
         multiTaskPayloadTick: this.multiTaskPayloadTick,
         waterfallPayloadJson: this.waterfallPayloadJson,
@@ -9656,6 +10029,7 @@ struct Index {
         deepSearchQuery: this.deepSearchQuery,
         deepSearchSettingsJson: this.deepSearchSettingsJson,
         deepSearchContextJson: this.deepSearchContextJson,
+        locationServiceNotice: this.locationServiceNotice,
         trainPresaleTrip: this.trainPresaleTrip,
         trainPresaleTask: this.trainPresaleTask,
         trainPresaleTaskState: this.trainPresaleTaskState,
@@ -9673,6 +10047,33 @@ struct Index {
         },
         onResetSession: () => {
           this.resetCurrentSession();
+        },
+        onCloseFoodStoreMap: () => {
+          this.foodStoreMapOpen = false;
+        },
+        onFoodStoreMapLocationConfirm: (longitude: number, latitude: number,
+          name: string, address: string): void => {
+          this.foodStoreMapOpen = false;
+          const searchArea: A2uiFoodSearchArea = {
+            longitude: longitude,
+            latitude: latitude,
+            radiusMeters: this.foodLocationRadiusMeters,
+            name: name,
+            address: address
+          };
+          const args: FoodStoreMapLocationActionArgs = {
+            surfaceId: this.currentSurface.surfaceId,
+            searchArea: searchArea
+          };
+          const action: A2uiAction = {
+            id: 'food_change_location',
+            label: '使用这个位置',
+            prompt: '在新位置重新搜索餐饮',
+            variant: 'secondary',
+            kind: 'client',
+            args: args
+          };
+          void this.refreshFoodSearchAtLocation(action);
         },
         onSendPrompt: () => {
           this.sendPrompt();
@@ -9739,7 +10140,14 @@ struct Index {
         }
       })
 
-      Column() {
+      Stack({ alignContent: Alignment.Bottom }) {
+        Image($r('app.media.home_light_aurora_background'))
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .hitTestBehavior(HitTestMode.Transparent)
+          .align(Alignment.TopStart)
+
         HtmlHomeSurfaceView({
           html: this.interestWaterfallHtml,
           waterfallPayloadJson: this.interestWaterfallPayloadJson,
@@ -9755,29 +10163,28 @@ struct Index {
           }
         })
         .width('100%')
-        .layoutWeight(1)
+        .height('100%')
+        .align(Alignment.TopStart)
+        .zIndex(1)
 
-        if (!this.interestWaterfallFullscreen) {
-          Row() {
-            WaterfallVoiceDock({
-              isListening: this.isVoiceListening && this.voiceTarget === 'waterfall',
-              isBusy: this.waterfallConversationBusy ||
-                (this.isVoiceListening && this.voiceTarget !== 'waterfall'),
-              reduceMotion: this.bimReduceMotion,
-              message: this.waterfallConversationMessage,
-              onStart: (): void => {
-                void this.startVoiceInput('waterfall');
-              },
-              onStop: (): void => {
-                this.stopVoiceInput();
-              }
-            })
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-          .padding({ left: 16, right: 16, top: 6, bottom: 8 })
-          .backgroundColor('#F3F2EE')
+        Column() {
+          WaterfallVoiceDock({
+            isListening: this.isVoiceListening && this.voiceTarget === 'waterfall',
+            isBusy: this.waterfallConversationBusy ||
+              (this.isVoiceListening && this.voiceTarget !== 'waterfall'),
+            reduceMotion: this.bimReduceMotion,
+            message: this.waterfallConversationMessage,
+            onStart: (): void => {
+              void this.startVoiceInput('waterfall');
+            },
+            onStop: (): void => {
+              this.stopVoiceInput();
+            }
+          })
         }
+        .width('100%')
+        .margin({ bottom: 20 })
+        .zIndex(this.interestWaterfallFullscreen ? 0 : 2)
       }
       .width('100%')
       .height('100%')
@@ -9787,12 +10194,13 @@ struct Index {
       .index(this.bimRootIndex)
       .loop(false)
       .indicator(false)
-      .disableSwipe(this.waterfallFullscreen || this.interestWaterfallFullscreen)
+      .disableSwipe(this.bimRootIndex === 1 || this.waterfallFullscreen)
       .duration(this.bimReduceMotion ? 0 : A2UI_MOTION_NORMAL_MS)
       .curve(A2UI_MOTION_MOVE_CURVE)
       .onChange((index: number) => {
         this.bimRootIndex = index;
         if (index === 1) this.ensureInterestWaterfall();
+        else inputMethod.getController().hideTextInput().catch((_error: BusinessError): void => {});
       })
     }
   }

@@ -29,6 +29,7 @@ import {
   configureWaterfallEnabledSourcesForRuntime,
   configureWaterfallPreferenceProfileForRuntime,
   configureWaterfallSearchPolicyForRuntime,
+  applyWaterfallProfile,
   applyWaterfallSourceSelection,
   applyWaterfallExpandedQuery,
   failWaterfallExpansion,
@@ -40,6 +41,7 @@ import {
   aggregateSearchRegistrySourceIds,
   aggregateSearchSearchSourceIds,
   aggregateYouTubeRelevanceLanguage,
+  aggregateVideoSourceBatchFromDynamicResults,
   aggregateMediaCandidates,
   aggregateXSearchQuery,
   streamAggregateSearchSourceBatches,
@@ -51,6 +53,7 @@ import {
   redditPostsFromComposioResult,
   unsupportedSourceStatus,
   xPostsFromComposioResult,
+  zhihuPostsFromHotListPayload,
   zhihuPostsFromSearchPayload,
   zhihuSearchUrl,
   mergeWaterfallBatch,
@@ -60,6 +63,7 @@ import {
   parseWaterfallExpandedQuery,
   planWaterfallInterestRecall,
   rankWaterfallCandidates,
+  waterfallCommentSourceSupported,
   waterfallSearchPolicyForRuntime
 } from '@loop/agent-core';
 
@@ -285,16 +289,19 @@ export default function aggregateSearchClientTest() {
     it('extracts query and source defaults', 0, () => {
       configureWaterfallEnabledSourcesForRuntime(aggregateSearchRegistrySourceIds());
       const args: QueryArgsFixture = { query: 'openai codex', sources: ['youtube', 'x'], limit: 3 };
+      const spacedIntentArgs: QueryArgsFixture = { query: 'OpenAI Codex 新闻 讨论' };
 
       expect(aggregateSearchQueryFromArgs('我想看看相关新闻', args)).assertEqual('openai codex');
       expect(aggregateSearchQueryFromArgs('我想看看有关 openai codex 的相关新闻和讨论', null)).assertEqual('openai codex');
       expect(aggregateSearchQueryFromArgs('openai codex 新闻讨论', null)).assertEqual('openai codex');
+      expect(aggregateSearchQueryFromArgs('', spacedIntentArgs)).assertEqual('OpenAI Codex');
       expect(aggregateSearchSourcesFromArgs(args).join(',')).assertEqual('');
-      expect(aggregateSearchSourcesFromArgs(null).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs(null).join(','))
+        .assertEqual('bilibili,zhihu,cnnews');
       expect(aggregateSearchSourcesFromArgs({
         query: 'ignored', sources: ['twitch'],
         onlyDomesticSources: false, includeMultilingualResults: true
-      } as QueryArgsFixture).join(',')).assertEqual(aggregateSearchSearchSourceIds().join(','));
+      } as QueryArgsFixture).join(',')).assertEqual('twitch');
     });
 
     it('applies all four deterministic aggregate source policy combinations', 0, () => {
@@ -310,10 +317,12 @@ export default function aggregateSearchClientTest() {
       const globalMultilingual: QueryArgsFixture = {
         query: 'codex', onlyDomesticSources: false, includeMultilingualResults: true
       };
-      expect(aggregateSearchSourcesFromArgs(domesticChinese).join(',')).assertEqual('bilibili,zhihu');
-      expect(aggregateSearchSourcesFromArgs(domesticMultilingual).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs(domesticChinese).join(','))
+        .assertEqual('bilibili,zhihu,cnnews');
+      expect(aggregateSearchSourcesFromArgs(domesticMultilingual).join(','))
+        .assertEqual('bilibili,zhihu,cnnews');
       expect(aggregateSearchSourcesFromArgs(globalChinese).join(','))
-        .assertEqual('youtube,bilibili,x,zhihu,applepodcasts');
+        .assertEqual('youtube,bilibili,x,zhihu,applepodcasts,twitch,cnnews');
       expect(aggregateSearchSourcesFromArgs(globalMultilingual).join(','))
         .assertEqual(aggregateSearchSearchSourceIds().join(','));
       expect(aggregateYouTubeRelevanceLanguage(aggregateSearchPolicyFromArgs(globalChinese))).assertEqual('zh-Hans');
@@ -363,7 +372,7 @@ export default function aggregateSearchClientTest() {
         onlyDomesticSources: true, includeMultilingualResults: false
       };
       expect(aggregateSearchSourcesFromArgs(blocked).join(',')).assertEqual('youtube,bilibili');
-      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.isExternal).length).assertEqual(6);
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.isExternal).length).assertEqual(9);
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'hackernews')[0].languages.join(','))
         .assertEqual('en');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'reddit')[0].languageFilterMode)
@@ -374,8 +383,10 @@ export default function aggregateSearchClientTest() {
         .assertEqual('regional');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'twitch')[0].languageFilterMode)
         .assertEqual('post_filter');
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'steam')[0].languageFilterMode)
+        .assertEqual('none');
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'twitch')[0]
-        .capabilities.search).assertFalse();
+        .capabilities.search).assertTrue();
       expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === 'twitch')[0]
         .capabilities.interest).assertTrue();
       expect(aggregateSearchSourcesFromArgs(emptyExplicitSources).join(','))
@@ -393,7 +404,8 @@ export default function aggregateSearchClientTest() {
         onlyDomesticSources: false, includeMultilingualResults: true
       };
 
-      expect(aggregateSearchSourcesFromArgs(firstQuery).join(',')).assertEqual('bilibili,zhihu');
+      expect(aggregateSearchSourcesFromArgs(firstQuery).join(','))
+        .assertEqual('bilibili,zhihu,cnnews');
       expect(aggregateSearchSourcesFromArgs(secondQuery).join(','))
         .assertEqual(aggregateSearchSearchSourceIds().join(','));
     });
@@ -478,8 +490,27 @@ export default function aggregateSearchClientTest() {
       expect(aggregateXPostSearchPrompt('openai codex')).assertEqual('X 公开 post 搜索关键词: openai codex');
     });
 
+    it('loads comments only for sources with a fitting public comment path', 0, () => {
+      expect(waterfallCommentSourceSupported('youtube')).assertTrue();
+      expect(waterfallCommentSourceSupported('bilibili')).assertTrue();
+      expect(waterfallCommentSourceSupported('x')).assertTrue();
+      expect(waterfallCommentSourceSupported('hackernews')).assertTrue();
+      expect(waterfallCommentSourceSupported('reddit')).assertTrue();
+      expect(waterfallCommentSourceSupported('zhihu')).assertFalse();
+      expect(waterfallCommentSourceSupported('applepodcasts')).assertFalse();
+      expect(waterfallCommentSourceSupported('twitch')).assertFalse();
+      expect(waterfallCommentSourceSupported('douban')).assertFalse();
+    });
+
     it('maps official Zhihu search payloads into post cards', 0, () => {
-      const posts = zhihuPostsFromSearchPayload('{"code":0,"data":{"Items":[{"Title":"OpenAI Codex 有哪些讨论","ContentText":"<em>Codex</em> 的开发者讨论摘要","Url":"https://www.zhihu.com/question/1","AuthorName":"知乎用户","AuthorAvatar":"https://pic.example.com/avatar.jpg","VoteUpCount":12,"CommentCount":3,"EditTime":1780000000}]}}');
+      const posts = zhihuPostsFromSearchPayload('{"code":0,"data":{"Items":[{"ContentID":"answer-1",' +
+        '"Title":"OpenAI Codex 有哪些讨论","ContentText":"<em>Codex</em> 的开发者讨论摘要",' +
+        '"Url":"https://www.zhihu.com/question/1","AuthorName":"知乎用户",' +
+        '"AuthorAvatar":"https://pic.example.com/avatar.jpg","VoteUpCount":12,"CommentCount":3,' +
+        '"EditTime":1780000000,"CommentInfoList":[{"Content":"第一条真实评论",' +
+        '"AuthorName":"评论者","AuthorAvatar":"https://pic.example.com/commenter.jpg",' +
+        '"LikeCount":7,"ReplyCount":2,"CreateTime":1780000100}] }]}}');
+      const candidate = aggregateMediaCandidates([], posts, 0)[0];
 
       expect(zhihuSearchUrl('openai codex').indexOf('/api/v1/content/zhihu_search')).assertLarger(-1);
       expect(posts.length).assertEqual(1);
@@ -490,7 +521,41 @@ export default function aggregateSearchClientTest() {
       expect(posts[0].score).assertEqual('12');
       expect(posts[0].commentCount).assertEqual('3');
       expect(JSON.stringify(posts[0].rows).indexOf('avatar.jpg')).assertLarger(-1);
-      expect(aggregateMediaCandidates([], posts, 0)[0].mediaType).assertEqual('post');
+      expect(candidate.mediaType).assertEqual('post');
+      expect(candidate.providerItemId).assertEqual('answer-1');
+      expect(candidate.comments?.length).assertEqual(1);
+      expect(candidate.comments?.[0].text).assertEqual('第一条真实评论');
+      expect(candidate.comments?.[0].authorName).assertEqual('评论者');
+      expect(candidate.comments?.[0].authorAvatarUrl).assertEqual('https://pic.example.com/commenter.jpg');
+      expect(candidate.comments?.[0].likeCount).assertEqual(7);
+      expect(candidate.comments?.[0].replyCount).assertEqual(2);
+    });
+
+    it('maps the official Zhihu hot-list envelope and rejects business errors', 0, () => {
+      const posts = zhihuPostsFromHotListPayload(
+        '{"Code":0,"Message":"success","Data":{"Total":2,"Items":[{"ContentID":"question-1","Title":"热点 1",' +
+        '"Url":"https://www.zhihu.com/question/1","ThumbnailUrl":"https://picx.zhimg.com/hot.jpg",' +
+        '"Summary":"摘要"},{"Title":"热点 2","Url":"https://www.zhihu.com/question/2","Summary":"摘要 2"}]}}'
+      );
+      const reordered = zhihuPostsFromHotListPayload(
+        '{"Code":0,"Message":"success","Data":{"Total":2,"Items":[' +
+        '{"Title":"热点 2","Url":"https://www.zhihu.com/question/2","Summary":"摘要 2"},' +
+        '{"ContentID":"question-1","Title":"热点 1","Url":"https://www.zhihu.com/question/1","Summary":"摘要"}]}}'
+      );
+
+      expect(posts.length).assertEqual(2);
+      expect(posts[0].title).assertEqual('热点 1');
+      expect(posts[0].rows[0].label).assertEqual('Cover');
+      expect(posts[0].id).assertEqual(reordered[1].id);
+      expect(posts[1].id).assertEqual(reordered[0].id);
+      expect(posts[0].id === posts[1].id).assertFalse();
+      let rejected: boolean = false;
+      try {
+        zhihuPostsFromHotListPayload('{"Code":20001,"Message":"Authorization failed","Data":null}');
+      } catch (_error) {
+        rejected = true;
+      }
+      expect(rejected).assertTrue();
     });
 
     it('preserves Twitch viewer count as the provider ranking score', 0, () => {
@@ -504,6 +569,44 @@ export default function aggregateSearchClientTest() {
       const candidate = aggregateMediaCandidates([], [twitchPost], 0)[0];
       expect(candidate.providerScore).assertEqual(321);
       expect(candidate.source).assertEqual('twitch');
+    });
+
+    it('normalizes public-source posts into the shared Waterfall card contract', 0, () => {
+      const posts: AggregateSearchPost[] = [
+        {
+          id: 'github-repo-1', source: 'github', provider: 'GitHub', title: 'openai/codex',
+          author: 'openai', handle: 'openai', text: 'Coding agent', url: 'https://github.com/openai/codex',
+          publishedAt: '2026-08-24T08:00:00Z', score: '1200', commentCount: '', status: 'success',
+          rows: [{ label: 'Stars', value: '1200' }, { label: 'Forks', value: '88' }]
+        },
+        {
+          id: 'steam-news-1', source: 'steam', provider: 'Steam', title: 'Game update',
+          author: 'Valve', handle: '', text: 'Update notes', url: 'https://store.steampowered.com/news/1',
+          publishedAt: '2026-08-24T09:00:00Z', score: '', commentCount: '', status: 'success', rows: []
+        },
+        {
+          id: 'cnnews-1', source: 'cnnews', provider: 'IT 之家', title: '国内科技新闻',
+          author: '编辑部', handle: '', text: '新闻摘要', url: 'https://www.ithome.com/0/1.htm',
+          publishedAt: '2026-08-24T10:00:00Z', score: '', commentCount: '', status: 'success', rows: []
+        },
+        {
+          id: 'globalnews-1', source: 'globalnews', provider: 'The Guardian', title: 'Global tech news',
+          author: 'Reporter', handle: '', text: 'News summary', url: 'https://www.theguardian.com/technology/1',
+          publishedAt: '2026-08-24T11:00:00Z', score: '', commentCount: '', status: 'success', rows: []
+        }
+      ];
+      const candidates = aggregateMediaCandidates([], posts, 0);
+
+      expect(candidates.map((candidate: WaterfallCandidate): string => candidate.source).join(','))
+        .assertEqual('github,steam,cnnews,globalnews');
+      expect(candidates.map((candidate: WaterfallCandidate): string => candidate.provider ?? '').join(','))
+        .assertEqual('GitHub,Steam,IT 之家,The Guardian');
+      expect(candidates.map((candidate: WaterfallCandidate): string => candidate.authorName ?? '').join(','))
+        .assertEqual('openai,Valve,编辑部,Reporter');
+      expect(candidates.map((candidate: WaterfallCandidate): string => candidate.summary).join(','))
+        .assertEqual('Coding agent,Update notes,新闻摘要,News summary');
+      expect(candidates[0].metrics?.map((metric): string => metric.kind + ':' + metric.value.toString()).join(','))
+        .assertEqual('star:1200,fork:88');
     });
 
     it('turns dynamic text rows into readable post cards with images', 0, () => {
@@ -551,6 +654,46 @@ export default function aggregateSearchClientTest() {
       expect(JSON.stringify(posts[0].rows).indexOf('reddit.png')).assertLarger(-1);
     });
 
+    it('uses decoded Reddit preview images instead of article links', 0, () => {
+      const posts = redditPostsFromComposioResult({
+        sourceTag: 'Composio',
+        toolName: 'REDDIT_SEARCH_POSTS',
+        title: 'Composio Reddit 结果',
+        status: 'success',
+        summary: '返回 1 条',
+        rows: [],
+        rawPreview: '{"data":{"children":[{"data":{"title":"Finally some good news in the IT industry!",' +
+          '"selftext":"","permalink":"/r/it/comments/1/news",' +
+          '"url":"https://example.com/article",' +
+          '"url_overridden_by_dest":"https://example.com/article","thumbnail":"default",' +
+          '"preview":{"images":[{"source":{"url":' +
+          '"https://preview.redd.it/cover.jpg?width=640&amp;format=pjpg&amp;auto=webp&s=abc"}}]}}}]}}'
+      });
+      const candidate = aggregateMediaCandidates([], posts, 0)[0];
+
+      expect(candidate.mediaType).assertEqual('image_text');
+      expect(candidate.coverUrl).assertEqual(
+        'https://wsrv.nl/?url=https%3A%2F%2Fpreview.redd.it%2Fcover.jpg%3Fwidth%3D640%26format%3Dpjpg%26auto%3Dwebp%26s%3Dabc&output=webp&w=1200');
+    });
+
+    it('uses the direct Reddit image URL returned by search', 0, () => {
+      const posts = redditPostsFromComposioResult({
+        sourceTag: 'Composio',
+        toolName: 'REDDIT_SEARCH_ACROSS_SUBREDDITS',
+        title: 'Composio Reddit results',
+        status: 'success',
+        summary: '1 result',
+        rows: [],
+        rawPreview: '{"data":{"children":[{"data":{"title":"Image post","permalink":' +
+          '"/r/OpenAI/comments/1/image","url":"https://i.redd.it/reddit-image.jpeg"}}]}}'
+      });
+      const candidate = aggregateMediaCandidates([], posts, 0)[0];
+
+      expect(candidate.mediaType).assertEqual('image_text');
+      expect(candidate.coverUrl).assertEqual(
+        'https://wsrv.nl/?url=https%3A%2F%2Fi.redd.it%2Freddit-image.jpeg&output=webp&w=1200');
+    });
+
     it('keeps distinct raw-preview posts through Waterfall ranking', 0, () => {
       const posts = redditPostsFromComposioResult({
         sourceTag: 'Composio',
@@ -571,7 +714,7 @@ export default function aggregateSearchClientTest() {
       expect(ranked.length).assertEqual(2);
     });
 
-    it('keeps real comment excerpts and direct video media from social results', 0, () => {
+    it('keeps real comments structured without appending them to the card summary', 0, () => {
       const posts = redditPostsFromComposioResult({
         sourceTag: 'Composio',
         toolName: 'REDDIT_SEARCH_POSTS',
@@ -590,7 +733,62 @@ export default function aggregateSearchClientTest() {
       expect(JSON.stringify(posts[0].rows).indexOf('Second useful reply')).assertLarger(-1);
       expect(candidates[0].mediaType).assertEqual('video');
       expect(candidates[0].mediaUrl).assertEqual('https://v.redd.it/demo/DASH_720.mp4');
-      expect(candidates[0].summary.indexOf('First useful reply')).assertLarger(-1);
+      expect(candidates[0].summary).assertEqual('Main post');
+      expect(candidates[0].providerItemId).assertEqual('3');
+      expect(candidates[0].comments?.length).assertEqual(2);
+      expect(candidates[0].comments?.[0].text).assertEqual('First useful reply');
+      expect(candidates[0].comments?.[1].text).assertEqual('Second useful reply');
+    });
+
+    it('preserves provider video ids for detail-only comment loading', 0, () => {
+      const youtube = video('youtube-video-123', 'https://www.youtube.com/watch?v=video-123');
+      youtube.rows.push({ label: 'Video ID', value: 'video-123' });
+      const bilibili: AggregateSearchVideo = {
+        id: 'bilibili-BV123', source: 'bilibili', provider: 'B 站', title: 'B 站视频', summary: '',
+        url: 'https://www.bilibili.com/video/BV123', thumbnail: '', publishedAt: '', duration: '',
+        status: 'success', rows: [{ label: 'BVID', value: 'BV123' }, { label: 'AID', value: '456' }]
+      };
+      const bilibiliWithoutAid: AggregateSearchVideo = {
+        id: 'bilibili-BV456', source: 'bilibili', provider: 'B 站', title: '缺少 AID 的 B 站视频', summary: '',
+        url: 'https://www.bilibili.com/video/BV456', thumbnail: '', publishedAt: '', duration: '', status: 'success',
+        rows: [{ label: 'BVID', value: 'BV456' }]
+      };
+      const candidates = aggregateMediaCandidates([youtube, bilibili, bilibiliWithoutAid], [], 0);
+
+      expect(candidates[0].providerItemId).assertEqual('video-123');
+      expect(candidates[1].providerItemId).assertEqual('456');
+      expect(candidates[2].providerItemId === undefined).assertTrue();
+    });
+
+    it('keeps detail comment fields through ranking and deferred reranking', 0, () => {
+      const candidate = waterfallCandidate(
+        'youtube-comments', 'youtube', 'OpenAI Codex', '',
+        'https://youtube.test/watch?v=comments', '2026-08-06T10:00:00.000Z', 0);
+      candidate.providerItemId = 'comments';
+      candidate.comments = [{ text: 'Useful comment' }];
+      candidate.commentLoadState = 'ready';
+      const ranked = rankWaterfallCandidates({
+        query: 'openai codex', candidates: [candidate], enabledSources: ['youtube'],
+        shownIds: [], stableIds: [], preferenceDescription: ''
+      }, WATERFALL_NOW_MS)[0];
+
+      expect(ranked.providerItemId).assertEqual('comments');
+      expect(ranked.comments?.[0].text).assertEqual('Useful comment');
+      expect(ranked.commentLoadState).assertEqual('ready');
+
+      const state = feedState(null, [], [ranked], [sourceState('youtube', null, 'exhausted')]);
+      const reranked = applyWaterfallProfile(state, emptyPreferenceProfile(), WATERFALL_NOW_MS).state.tail[0];
+      expect(reranked.providerItemId).assertEqual('comments');
+      expect(reranked.comments?.[0].text).assertEqual('Useful comment');
+      expect(reranked.commentLoadState).assertEqual('ready');
+
+      const deferred = mergeWaterfallBatchDeferredRanking(
+        feedState(null, [], [], [sourceState('youtube', null, 'loading', true, 10)]),
+        [candidate], sourceState('youtube', null, 'exhausted')
+      ).state.current as WaterfallRankedCandidate;
+      expect(deferred.providerItemId).assertEqual('comments');
+      expect(deferred.comments?.[0].text).assertEqual('Useful comment');
+      expect(deferred.commentLoadState).assertEqual('ready');
     });
 
     it('maps Reddit Composio preview wrappers into post cards', 0, () => {
@@ -860,6 +1058,77 @@ export default function aggregateSearchClientTest() {
       expect(candidates[2].providerScore === undefined).assertTrue();
     });
 
+    it('routes YouTube covers through the phone-direct image proxy', 0, () => {
+      const batch = aggregateVideoSourceBatchFromDynamicResults('youtube', [{
+        sourceTag: 'YouTube Data API', toolName: 'youtube.video.search', title: 'Video title',
+        status: 'success', summary: 'Video summary', rawPreview: '', rows: [
+          { label: 'Video ID', value: 'vHeDD9IluHc' },
+          { label: 'Watch URL', value: 'https://www.youtube.com/watch?v=vHeDD9IluHc' },
+          { label: 'Thumbnail', value: 'https://i.ytimg.com/vi/vHeDD9IluHc/mqdefault.jpg' }
+        ]
+      }, {
+        sourceTag: 'YouTube Data API', toolName: 'youtube.video.search', title: 'Invalid video',
+        status: 'success', summary: 'Invalid video summary', rawPreview: '', rows: [
+          { label: 'Video ID', value: 'vHeDD9IluH/' },
+          { label: 'Watch URL', value: 'https://www.youtube.com/watch?v=vHeDD9IluH/' },
+          { label: 'Thumbnail', value: 'https://example.com/fallback.jpg' }
+        ]
+      }], null, 10);
+
+      expect(batch.videos[0].thumbnail)
+        .assertEqual('https://wsrv.nl/?url=i.ytimg.com/vi/vHeDD9IluHc/mqdefault.jpg');
+      expect(batch.videos[1].thumbnail).assertEqual('https://example.com/fallback.jpg');
+    });
+
+    it('carries provider metrics and author identity into Waterfall candidates', 0, () => {
+      const videos: AggregateSearchVideo[] = [{
+        id: 'bilibili-BV1', source: 'bilibili', provider: 'Bilibili', title: 'Video title',
+        summary: 'Video summary', url: 'https://www.bilibili.com/video/BV1',
+        thumbnail: 'https://img.test/video.jpg', publishedAt: '2026-08-06T10:00:00.000Z',
+        duration: '1:00', status: 'success', rows: [
+          { label: 'Author', value: '影像实验室' },
+          { label: 'Author Avatar', value: 'https://img.test/avatar.jpg' },
+          { label: 'Views', value: '98,659' },
+          { label: 'Likes', value: '361' },
+          { label: 'Favorites', value: '178' },
+          { label: 'Comments', value: '186' },
+          { label: 'Coins', value: '34' },
+          { label: 'Danmaku', value: '148' },
+          { label: 'Shares', value: '28' }
+        ]
+      }];
+      const posts = xPostsFromComposioResult({
+        sourceTag: 'Composio', toolName: 'x.post.search', title: 'X results',
+        status: 'success', summary: '1 result', rows: [],
+        rawPreview: '{"data":[{"id":"x-1","text":"Design signals","author_id":"user-1",' +
+          '"public_metrics":{"impression_count":126408,"like_count":3912,"reply_count":184,' +
+          '"retweet_count":726,"quote_count":93,"bookmark_count":1284}}],"includes":{"users":[' +
+          '{"id":"user-1","name":"Ava Chen","username":"avachen",' +
+          '"profile_image_url":"https://pbs.twimg.com/profile_images/avatar.jpg"}]}}'
+      });
+      const candidates = aggregateMediaCandidates(videos, posts, 0);
+      const videoCandidate =
+        JSON.parse(JSON.stringify(candidates[0])) as Record<string, Object | string | number | boolean | null>;
+      const postCandidate =
+        JSON.parse(JSON.stringify(candidates[1])) as Record<string, Object | string | number | boolean | null>;
+
+      expect(videoCandidate['authorName'] as string).assertEqual('影像实验室');
+      expect(videoCandidate['authorAvatarUrl'] as string).assertEqual('https://img.test/avatar.jpg');
+      expect(JSON.stringify(videoCandidate['metrics'])).assertEqual(
+        '[{"kind":"view","value":98659},{"kind":"like","value":361},' +
+        '{"kind":"favorite","value":178},{"kind":"comment","value":186},' +
+        '{"kind":"coin","value":34},{"kind":"danmaku","value":148},{"kind":"share","value":28}]'
+      );
+      expect(postCandidate['authorName'] as string).assertEqual('Ava Chen');
+      expect(postCandidate['authorAvatarUrl'] as string)
+        .assertEqual('https://pbs.twimg.com/profile_images/avatar.jpg');
+      expect(JSON.stringify(postCandidate['metrics'])).assertEqual(
+        '[{"kind":"view","value":126408},{"kind":"like","value":3912},' +
+        '{"kind":"comment","value":184},{"kind":"repost","value":726},' +
+        '{"kind":"quote","value":93},{"kind":"favorite","value":1284}]'
+      );
+    });
+
     it('keeps provider rank score topics format and recall provenance on candidates', 0, () => {
       const videos: AggregateSearchVideo[] = [
         {
@@ -1040,49 +1309,70 @@ export default function aggregateSearchClientTest() {
       const requests: WaterfallInterestRecallRequest[] =
         planWaterfallInterestRecall(profile, recent, ['youtube', 'x', 'reddit']);
       expect(requests.every((request: WaterfallInterestRecallRequest): boolean =>
-        request.sources.every((source: string): boolean =>
-        ['youtube', 'x', 'reddit'].indexOf(source) >= 0))).assertTrue();
-      expect(requests.length <= 7).assertTrue();
-      expect(requests.every((request: WaterfallInterestRecallRequest): boolean =>
-        request.sources.indexOf('twitch') < 0)).assertTrue();
+        request.sources.length === 1 && request.weight === 1 && request.continuation === null &&
+        request.query.length <= 24)).assertTrue();
+      expect(requests.map((request: WaterfallInterestRecallRequest): string => request.sources[0]).join(','))
+        .assertEqual('youtube,x,reddit');
+      expect(requests.map((request: WaterfallInterestRecallRequest): string => request.route).join(','))
+        .assertEqual('popular,explore,explore');
+      expect(requests[0].query).assertEqual('');
+      expect(requests[1].query).assertEqual('tech news');
+      expect(requests[2].query).assertEqual('artificial intelligence');
     });
 
     it('uses provider discovery for Twitch plus technology exploration for an empty profile', 0, () => {
       const requests: WaterfallInterestRecallRequest[] =
         planWaterfallInterestRecall(emptyPreferenceProfile(), [], ['youtube', 'x', 'twitch']);
-      expect(requests[0].query).assertEqual('AI 科技');
-      expect(requests[0].sources.join(',')).assertEqual('youtube,x');
-      expect(requests[1].query).assertEqual('');
-      expect(requests[1].sources.join(',')).assertEqual('twitch');
-      expect(requests.some((request: WaterfallInterestRecallRequest): boolean => request.route === 'explore' &&
-        request.query === 'AI 科技' && request.sources.join(',') === 'youtube,x')).assertTrue();
-      expect(requests.some((request: WaterfallInterestRecallRequest): boolean => request.route === 'explore' &&
-        request.query === '' && request.sources.join(',') === 'twitch')).assertTrue();
-      expect(requests.every((request: WaterfallInterestRecallRequest): boolean =>
-        request.sources.indexOf('reddit') < 0)).assertTrue();
-      expect(aggregateSearchSearchSourceIds().indexOf('twitch')).assertEqual(-1);
+      expect(requests.map((request: WaterfallInterestRecallRequest): string => request.sources[0]).join(','))
+        .assertEqual('youtube,x,twitch');
+      expect(requests.map((request: WaterfallInterestRecallRequest): string => request.route).join(','))
+        .assertEqual('popular,explore,explore');
+      expect(requests.map((request: WaterfallInterestRecallRequest): string => request.query).join(','))
+        .assertEqual(',tech news,');
+      expect(aggregateSearchSearchSourceIds().indexOf('twitch')).assertLarger(-1);
       expect(aggregateSearchInterestSourceIds().indexOf('twitch')).assertLarger(-1);
     });
 
-    it('dispatches Twitch provider discovery after personalized and technology recall', 0, () => {
+    it('gives Zhihu discovery a search query so platform metrics stay available', 0, () => {
+      const request = planWaterfallInterestRecall(emptyPreferenceProfile(), [], ['zhihu'])[0];
+
+      expect(request.route).assertEqual('popular');
+      expect(request.query).assertEqual('人工智能');
+    });
+
+    it('registers the four new top-level sources once for search and discovery', 0, () => {
+      const metadata = aggregateSearchSourceMetadata();
+      const newSources: AggregateSearchSource[] = ['github', 'steam', 'cnnews', 'globalnews'];
+      expect(aggregateSearchSearchSourceIds().join(','))
+        .assertEqual(aggregateSearchInterestSourceIds().join(','));
+      newSources.forEach((source: AggregateSearchSource): void => {
+        const row = metadata.filter((item: AggregateSearchSourceMetadata): boolean => item.source === source)[0];
+        expect(aggregateSearchSearchSourceIds().indexOf(source)).assertLarger(-1);
+        expect(aggregateSearchInterestSourceIds().indexOf(source)).assertLarger(-1);
+        expect(row.capabilities.search).assertTrue();
+        expect(row.capabilities.interest).assertTrue();
+        expect(row.defaultEnabled).assertTrue();
+        expect(row.introducedInRegistryVersion).assertEqual(4);
+      });
+      expect(metadata.filter((item: AggregateSearchSourceMetadata): boolean =>
+        ['chinanews', 'ithome', 'sspai', 'ifanr', 'v2ex'].indexOf(item.source) >= 0).length).assertEqual(0);
+    });
+
+    it('keeps Twitch provider discovery separate from source exploration', 0, () => {
       const profile = emptyPreferenceProfile();
       profile.topicWeights = [{ key: '科幻', weight: 8, updatedAt: WATERFALL_NOW_MS }];
       const recent = [rankedWaterfallCandidate('recent-game', 'youtube', '游戏直播', 0)];
       recent[0].topics = ['游戏'];
       const requests = planWaterfallInterestRecall(profile, recent, ['youtube', 'x', 'twitch']);
 
-      expect(requests[0].route).assertEqual('similar');
-      expect(requests[0].query).assertEqual('游戏');
-      expect(requests[1].route).assertEqual('profile');
-      expect(requests[1].query).assertEqual('科幻');
+      expect(requests.length).assertEqual(3);
+      expect(requests[0].route).assertEqual('popular');
+      expect(requests[0].query).assertEqual('');
+      expect(requests[1].route).assertEqual('explore');
+      expect(requests[1].query).assertEqual('tech news');
       expect(requests[2].route).assertEqual('explore');
-      expect(requests[2].query).assertEqual('AI 科技');
-      expect(requests[3].route).assertEqual('explore');
-      expect(requests[3].query).assertEqual('');
-      expect(requests[3].sources.join(',')).assertEqual('twitch');
-      expect(requests.filter((request: WaterfallInterestRecallRequest): boolean => request.route === 'explore')
-        .reduce((sum: number, request: WaterfallInterestRecallRequest): number => sum + request.weight, 0))
-        .assertEqual(10);
+      expect(requests[2].query).assertEqual('');
+      expect(requests[2].sources.join(',')).assertEqual('twitch');
     });
 
     it('keeps interest batches on the shared ranker without starting search expansion', 0, () => {
@@ -1229,6 +1519,32 @@ export default function aggregateSearchClientTest() {
       expect(update.state.tail.map((item) => item.id).join(',')).assertEqual('late-exact,tail-old');
     });
 
+    it('lets a later source appear immediately after the two frozen cards', 0, () => {
+      const current = rankedWaterfallCandidate('zh-0', 'zhihu', '知乎 人工智能 讨论', 0);
+      const nextOne = rankedWaterfallCandidate('zh-1', 'zhihu', '知乎 科技数码 一', 1);
+      const nextTwo = rankedWaterfallCandidate('zh-2', 'zhihu', '知乎 科技数码 二', 2);
+      const tail: WaterfallRankedCandidate[] = [];
+      for (let index = 3; index < 10; index += 1) {
+        tail.push(rankedWaterfallCandidate(
+          'zh-' + index.toString(), 'zhihu', '知乎 科技数码 ' + index.toString(), index));
+      }
+      const state = feedState(current, [nextOne, nextTwo], tail, [
+        sourceState('zhihu', null), sourceState('bilibili', null)
+      ]);
+      state.mode = 'interest';
+      const incoming: WaterfallCandidate[] = [];
+      for (let index = 0; index < 6; index += 1) {
+        incoming.push(waterfallCandidate(
+          'bi-' + index.toString(), 'bilibili', 'B站 编程开发 ' + index.toString(), '',
+          'https://bilibili.test/bi-' + index.toString(), '2026-08-06T11:00:00.000Z', index));
+      }
+      const update = mergeWaterfallBatch(state, incoming, sourceState('bilibili', null), WATERFALL_NOW_MS);
+
+      expect(update.state.current?.id).assertEqual('zh-0');
+      expect(update.state.stable.map((item) => item.id).join(',')).assertEqual('zh-1,zh-2');
+      expect(update.state.tail[0].source).assertEqual('bilibili');
+    });
+
     it('moves the two-item stable window after advancing', 0, () => {
       const state = feedState(
         rankedWaterfallCandidate('current-1', 'youtube', 'OpenAI Codex current', 1),
@@ -1244,7 +1560,7 @@ export default function aggregateSearchClientTest() {
       expect(update.state.tail.length).assertEqual(0);
     });
 
-    it('reranks the remaining interest inventory from the latest behavior profile after advancing', 0, () => {
+    it('does not let a behavior update replace the already visible interest card', 0, () => {
       const consumed = rankedWaterfallCandidate('consumed', 'youtube', 'OpenAI Codex watched', 0);
       const youtubeNext = rankedWaterfallCandidate('youtube-next', 'youtube', 'OpenAI Codex video', 1);
       const xNext = rankedWaterfallCandidate('x-next', 'x', 'OpenAI Codex discussion', 2);
@@ -1263,8 +1579,8 @@ export default function aggregateSearchClientTest() {
       expect(beforeBehavior.current?.id).assertEqual('youtube-next');
       expect(update.state.shown.map((item: WaterfallRankedCandidate): string => item.id).join(','))
         .assertEqual('consumed');
-      expect(update.state.current?.id).assertEqual('x-next');
-      expect(update.state.current?.id === beforeBehavior.current?.id).assertFalse();
+      expect(update.state.current?.id).assertEqual('youtube-next');
+      expect(update.state.current?.id === beforeBehavior.current?.id).assertTrue();
       expect(waterfallInventoryIds(update.state).indexOf('consumed')).assertEqual(0);
       expect(update.state.stable.concat(update.state.tail, update.state.reserve ?? [])
         .some((item: WaterfallRankedCandidate): boolean => item.id === 'consumed')).assertFalse();
@@ -1324,6 +1640,22 @@ export default function aggregateSearchClientTest() {
       expect(first.shown.map((item: WaterfallRankedCandidate): string => item.id).join(','))
         .assertEqual('bounded-current');
       expect(third.shown.length).assertEqual(3);
+    });
+
+    it('catches the native current up to the visible card in one advance', 0, () => {
+      const state = feedState(
+        rankedWaterfallCandidate('current-1', 'youtube', 'OpenAI Codex current', 1),
+        [rankedWaterfallCandidate('next-1', 'youtube', 'OpenAI Codex next one', 2),
+          rankedWaterfallCandidate('next-2', 'youtube', 'OpenAI Codex next two', 3)],
+        [rankedWaterfallCandidate('tail-old', 'youtube', 'OpenAI Codex old tail', 4),
+          rankedWaterfallCandidate('tail-later', 'youtube', 'OpenAI Codex later tail', 5)],
+        [sourceState('youtube', null)]
+      );
+      const update = advanceWaterfallFeed(state, WATERFALL_NOW_MS, 'tail-old');
+
+      expect(update.state.shown.map((item) => item.id).join(',')).assertEqual('current-1,next-1,next-2');
+      expect(update.state.current?.id).assertEqual('tail-old');
+      expect(update.state.stable.map((item) => item.id).join(',')).assertEqual('tail-later');
     });
 
     it('reorders all unshown items after an explicit source toggle', 0, () => {
@@ -1507,14 +1839,14 @@ export default function aggregateSearchClientTest() {
       const repeated = mergeWaterfallFeedSnapshot(seeded.state, seeded.state, WATERFALL_NOW_MS, false);
       expect(repeated.state.reserve?.length).assertEqual(40);
       let state = seeded.state;
-      for (let index = 0; index < 17; index++) {
+      for (let index = 0; index < 12; index++) {
         state = advanceWaterfallFeed(state, WATERFALL_NOW_MS).state;
       }
       const fromReserve = planWaterfallContinuation(state);
 
       expect(fromReserve.loadRequests.length).assertEqual(0);
       expect((fromReserve.state.current === null ? 0 : 1) + fromReserve.state.stable.length + fromReserve.state.tail.length).assertEqual(20);
-      expect(fromReserve.state.reserve?.length).assertEqual(23);
+      expect(fromReserve.state.reserve?.length).assertEqual(28);
 
       const low = feedState(
         rankedWaterfallCandidate('low-current', 'youtube', 'OpenAI Codex current', 100),
@@ -1771,7 +2103,7 @@ export default function aggregateSearchClientTest() {
       expect(loaded.join(',')).assertEqual('youtube,bilibili,x,hackernews,reddit,zhihu');
     });
 
-    it('dispatches Twitch only for interest continuation context', 0, async () => {
+    it('dispatches Twitch for search and interest continuation contexts', 0, async () => {
       configureWaterfallEnabledSourcesForRuntime(['youtube', 'twitch']);
       configureWaterfallSearchPolicyForRuntime({ domesticOnly: false, multilingual: true });
       const requests: WaterfallLoadRequest[] = [{
@@ -1798,7 +2130,7 @@ export default function aggregateSearchClientTest() {
           (_batch: AggregateSearchSourceBatch): void => {}, loaderFor(interestLoaded)
         );
 
-        expect(ordinaryLoaded.join(',')).assertEqual('youtube');
+        expect(ordinaryLoaded.join(',')).assertEqual('youtube,twitch');
         expect(interestLoaded.join(',')).assertEqual('youtube,twitch');
       } finally {
         configureWaterfallEnabledSourcesForRuntime(aggregateSearchRegistrySourceIds());
@@ -1909,6 +2241,33 @@ export default function aggregateSearchClientTest() {
       expect(result.waterfall?.current === null).assertFalse();
       expect(result.sourceStatuses[2].status).assertEqual('needs_auth');
       expect(result.waterfall?.sources.every((item) => item.continuation === null)).assertTrue();
+    });
+
+    it('does not let an empty source delay the first source with content', 0, async () => {
+      const deferred = new DeferredAggregateBatch();
+      const snapshots: AggregateSearchResult[] = [];
+      const finalPromise = streamAggregateSearchSourceBatches(
+        'openai codex',
+        ['twitch', 'bilibili', 'x'],
+        [
+          Promise.resolve(aggregateBatch('twitch', 'twitch-empty', 'needs_auth')),
+          Promise.resolve(aggregateBatch('bilibili', 'bilibili-first')),
+          deferred.promise
+        ],
+        (snapshot: AggregateSearchResult): void => {
+          snapshots.push(snapshot);
+        },
+        WATERFALL_NOW_MS,
+        '',
+        100
+      );
+
+      await settleAggregateSearchMicrotasks();
+      expect(snapshots.length).assertEqual(1);
+      expect(snapshots[0].videos[0].id).assertEqual('bilibili-first');
+
+      deferred.finish(aggregateBatch('x', 'x-final'));
+      await finalPromise;
     });
 
     it('defers duplicate suppression until the complete aggregate result is finalized', 0, async () => {

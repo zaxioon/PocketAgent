@@ -15,14 +15,25 @@ import {
   HtmlHomeDocument,
   HtmlHomeMetric,
   WaterfallBehaviorActionArgs,
-  WaterfallHomePayload
+  WaterfallCardActionArgs,
+  WaterfallCardViewState,
+  WaterfallHomePayload,
+  WaterfallSavedCardView
 } from './HtmlHomeTypes';
+import {
+  WaterfallCardRecord,
+  WaterfallSavedCard
+} from '../waterfall/WaterfallPreferencesStore';
 import {
   APP_LOGO_APPLE_PODCASTS,
   APP_LOGO_BILIBILI,
+  APP_LOGO_CNNEWS,
   APP_LOGO_DOUBAN,
+  APP_LOGO_GITHUB,
+  APP_LOGO_GLOBALNEWS,
   APP_LOGO_HACKERNEWS,
   APP_LOGO_REDDIT,
+  APP_LOGO_STEAM,
   APP_LOGO_TWITCH,
   APP_LOGO_X,
   APP_LOGO_YOUTUBE,
@@ -82,6 +93,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", Arial, sans-serif;
   letter-spacing: 0;
 }
+body.waterfall-direct { background: transparent; }
 h1, h2, h3, p { margin: 0; }
 .aggregate-shell {
   width: min(100%, 980px);
@@ -678,6 +690,7 @@ h1, h2, h3, p { margin: 0; }
 .aggregate-embed {
   width: 100%;
   aspect-ratio: 16 / 9;
+  object-fit: cover;
   margin-top: 12px;
   border: 0;
   border-radius: 12px;
@@ -842,9 +855,13 @@ const WATERFALL_CSS: string = `
 @keyframes waterfall-overlay-in { from { opacity: 0; } to { opacity: 1; } }
 .waterfall-track {
   height: 100dvh; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: none;
-  scroll-snap-type: y mandatory; scroll-padding-block: 18px; scrollbar-width: none;
-  background: #eef0f2; padding: 18px 0 44px; touch-action: pan-y;
+  scroll-snap-type: y mandatory; scrollbar-width: none; background: #eef0f2; touch-action: pan-y;
+  padding: calc(64px + env(safe-area-inset-top) + 12px) 0 calc(96px + env(safe-area-inset-bottom));
+  scroll-padding-top: calc(64px + env(safe-area-inset-top) + 12px);
+  scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom));
 }
+body.waterfall-direct .waterfall-overlay,
+body.waterfall-direct .waterfall-track { background: transparent; }
 .waterfall-track::-webkit-scrollbar { display: none; }
 .waterfall-card {
   position: relative; width: min(100%, 720px); height: auto; min-height: 0; margin: 0 auto 28px;
@@ -855,9 +872,10 @@ const WATERFALL_CSS: string = `
 }
 .waterfall-card.is-adjacent { opacity: 0.42; transform: translate3d(0, 0, 0) scale(0.975); }
 .waterfall-card.is-active,
-.waterfall-card--video-fullscreen { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+.waterfall-card--video-fullscreen,
+.waterfall-card.is-playing { opacity: 1; transform: none; }
 .waterfall-cinema-stage {
-  position: absolute; top: max(88px, calc(62px + env(safe-area-inset-top))); left: 14px; right: 14px;
+  position: relative; top: auto; left: auto; right: auto;
   height: min(48dvh, 420px); overflow: hidden; border: 1px solid var(--line); border-radius: 22px;
   background: linear-gradient(145deg, #e8edf2, #f4f6f8); box-shadow: 0 12px 32px rgba(39, 50, 62, 0.1);
 }
@@ -914,7 +932,7 @@ const WATERFALL_CSS: string = `
   display: none;
 }
 .waterfall-card--video.waterfall-card--portrait .waterfall-cinema-stage {
-  left: max(28px, 7vw); right: max(28px, 7vw); height: min(62dvh, 560px);
+  left: auto; right: auto; height: min(62dvh, 560px);
 }
 .waterfall-card--video.waterfall-card--portrait .waterfall-media-cover { object-position: center; }
 .waterfall-video-fullscreen-toggle {
@@ -941,19 +959,22 @@ const WATERFALL_CSS: string = `
   margin-bottom: 18px;
   color: #303841; font-size: 12px; font-weight: 740;
 }
+.waterfall-author { display: inline-flex; min-width: 0; align-items: center; gap: 7px; color: var(--card-muted, var(--muted)); }
+.waterfall-author::before { content: ''; width: 1px; height: 14px; margin: 0 2px; background: var(--card-line, var(--line)); }
+.waterfall-author-avatar { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 999px; object-fit: cover; }
+.waterfall-author-name { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .waterfall-cinema-copy {
-  position: absolute; z-index: 4; top: min(52dvh, 468px); left: 14px; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom));
+  position: relative; z-index: 4; top: auto; left: auto; right: auto; bottom: auto;
   display: flex; min-height: 0; flex-direction: column; overflow: hidden; padding: 18px;
-  border: 1px solid var(--line); border-radius: 22px; background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 12px 32px rgba(39, 50, 62, 0.08);
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
 }
-.waterfall-card--video.waterfall-card--landscape .waterfall-cinema-copy { top: min(calc(42dvh + 106px), 466px); }
+.waterfall-card--video.waterfall-card--landscape .waterfall-cinema-copy { top: auto; }
 .waterfall-card--video.waterfall-card--portrait .waterfall-cinema-copy {
-  top: auto; max-height: min(42dvh, 390px); backdrop-filter: blur(18px);
+  top: auto; max-height: min(42dvh, 390px); backdrop-filter: none;
 }
-.waterfall-card--image-text .waterfall-cinema-copy { top: min(55dvh, 488px); }
+.waterfall-card--image-text .waterfall-cinema-copy { top: auto; }
 .waterfall-card--text .waterfall-cinema-copy {
-  top: max(96px, calc(72px + env(safe-area-inset-top))); bottom: calc(14px + env(safe-area-inset-bottom)); max-height: none;
+  top: auto; bottom: auto; max-height: none;
   display: flex; flex-direction: column; justify-content: flex-start;
 }
 .waterfall-cinema-card h2 {
@@ -986,6 +1007,11 @@ const WATERFALL_CSS: string = `
 .waterfall-cinema-card a { border-color: var(--line-strong); background: var(--panel); color: #2f4e6f; }
 .waterfall-recommendation { min-width: 0; max-width: 26ch; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .waterfall-meta { margin-top: 7px; color: #747f8a; font-size: 12px; line-height: 1.35; }
+.waterfall-signal-rail { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; margin-top: 14px; }
+.waterfall-signal { display: inline-flex; min-width: 0; align-items: center; gap: 6px; color: var(--card-muted, var(--muted)); font-size: 12px; }
+.waterfall-signal .waterfall-icon { width: 16px; height: 16px; color: var(--card-accent, var(--accent)); }
+.waterfall-signal .waterfall-icon svg { width: 15px; height: 15px; }
+.waterfall-signal b { overflow: hidden; font-variant-numeric: tabular-nums; font-weight: 720; text-overflow: ellipsis; }
 .waterfall-reader {
   position: fixed; z-index: 8; inset: 0; display: block; overflow: hidden;
   background: #eef0f2; color: var(--ink); pointer-events: none; visibility: hidden;
@@ -995,11 +1021,13 @@ const WATERFALL_CSS: string = `
 }
 .waterfall-reader.active {
   pointer-events: auto; visibility: visible; opacity: 1;
-  transform: translate3d(0, 0, 0) scale(1); transition-delay: 0s;
+  transform: none; transition-delay: 0s;
 }
 .waterfall-reader.active.closing {
   pointer-events: auto; opacity: 0; transform: translate3d(0, 5px, 0) scale(0.99);
 }
+.waterfall-reader.is-playing,
+.waterfall-reader.active.is-playing { transform: none; }
 .waterfall-reader-body {
   height: 100dvh; overflow-y: auto; padding: calc(72px + env(safe-area-inset-top)) 24px calc(40px + env(safe-area-inset-bottom));
   overscroll-behavior-y: contain; opacity: 1; transition: none;
@@ -1033,8 +1061,10 @@ const WATERFALL_CSS: string = `
   position: fixed; z-index: 6; top: 0; left: 0; right: 0;
   min-height: calc(64px + env(safe-area-inset-top));
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
-  padding: env(safe-area-inset-top) 12px 0; background: #eef0f2;
-  border-bottom: 1px solid rgba(56, 65, 72, 0.09);
+  padding: env(safe-area-inset-top) 12px 0;
+  background: linear-gradient(180deg, rgba(245, 242, 238, 0.94) 0%, rgba(245, 242, 238, 0.55) 62%,
+    rgba(245, 242, 238, 0) 100%);
+  border-bottom: 0;
   pointer-events: auto;
 }
 .waterfall-toolbar button, .waterfall-preferences button {
@@ -1093,38 +1123,70 @@ const WATERFALL_CSS: string = `
 .waterfall-preferences {
   position: fixed; z-index: 32; inset: auto 14px calc(14px + env(safe-area-inset-bottom)) 14px;
   display: block; max-height: min(72dvh, 560px); overflow-y: auto; padding: 14px;
-  border: 1px solid rgba(38, 49, 60, 0.10); border-radius: 22px; background: #f9fafb;
-  box-shadow: 0 18px 48px rgba(39, 50, 62, 0.16); pointer-events: none; transform: none;
+  border: 1px solid rgba(153, 95, 76, 0.14); border-radius: 22px; background: #f8f5f0;
+  box-shadow: 0 18px 48px rgba(125, 75, 59, 0.16); pointer-events: none;
+  transform: translate3d(0, 24px, 0);
   visibility: hidden; opacity: 0;
-  transition: opacity 140ms var(--ease-out), visibility 0s linear 140ms;
+  transition: opacity 180ms var(--ease-out), transform 220ms var(--ease-drawer), visibility 0s linear 180ms;
 }
 .waterfall-preferences.active {
-  pointer-events: auto; visibility: visible; opacity: 1; transition-delay: 0s;
+  pointer-events: auto; visibility: visible; opacity: 1; transform: translate3d(0, 0, 0);
+  transition-delay: 0s;
+}
+.waterfall-preferences:not(.active) {
+  transition: opacity 100ms var(--ease-out), transform 100ms var(--ease-out), visibility 0s linear 100ms !important;
 }
 .waterfall-preferences:not(.active),
 .waterfall-preferences:not(.active) * {
   pointer-events: none !important;
 }
 .waterfall-preferences .waterfall-toolbar {
-  position: static; inset: auto; display: grid; grid-template-columns: 44px 1fr auto; gap: 8px;
-  align-items: center; padding: 0; margin: 0 0 14px; pointer-events: auto;
+  position: static; inset: auto; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: 4px;
+  align-items: center; padding: 0; margin: 0 0 8px; pointer-events: auto;
 }
-.waterfall-preferences .waterfall-toolbar b { font-size: 17px; text-align: center; }
+.waterfall-preferences .waterfall-toolbar b { font-size: 17px; text-align: left; white-space: nowrap; }
+.waterfall-source-bulk { display: inline-flex; align-items: center; margin: 0; }
+.waterfall-source-bulk button {
+  position: relative; min-width: 44px; min-height: 44px; color: var(--muted);
+  border-radius: 10px; padding: 0 7px; font-size: 12px;
+}
+.waterfall-source-bulk button + button::before {
+  content: ''; position: absolute; left: 0; top: 15px; bottom: 15px; width: 1px;
+  background: rgba(38, 49, 60, 0.12);
+}
 .waterfall-source-grid {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 14px;
 }
 .waterfall-preferences label {
-  display: grid; min-width: 0; min-height: 60px; grid-template-columns: 32px minmax(0, 1fr) 20px;
-  align-items: center; gap: 10px; border: 1px solid rgba(38, 49, 60, 0.08); border-radius: 16px;
-  background: #fff; color: #20262c; padding: 10px; font-size: 14px;
-  transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), border-color 180ms ease-out;
+  display: grid; min-width: 0; min-height: 54px; grid-template-columns: 30px minmax(0, 1fr) 34px;
+  align-items: center; gap: 8px; border: 0; border-bottom: 1px solid rgba(38, 49, 60, 0.08);
+  border-radius: 0; background: transparent; color: #20262c; padding: 7px 2px; font-size: 14px;
+  transition: opacity 160ms var(--ease-out), color 160ms var(--ease-out);
 }
-.waterfall-preferences label:has(input:checked) { border-color: rgba(47, 78, 111, 0.22); background: #f0f4f7; }
-.waterfall-source-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 720; }
-.waterfall-preferences input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.waterfall-preferences label:has(input:checked) {
+  color: var(--accent);
+}
+.waterfall-preferences label.is-unavailable { color: #97908a; opacity: 0.58; }
+.waterfall-source-copy { display: grid; min-width: 0; gap: 2px; }
+.waterfall-source-name { min-width: 0; overflow: visible; white-space: normal; font-weight: 720; line-height: 1.25; }
+.waterfall-source-reason { color: #8b817a; font-size: 10px; line-height: 1.25; }
+.waterfall-preferences input {
+  position: relative; width: 34px; height: 20px; margin: 0; border: 0; border-radius: 10px;
+  appearance: none; -webkit-appearance: none; background: #d8d4d0; cursor: pointer;
+  transition: background-color 160ms var(--ease-out);
+}
+.waterfall-preferences input::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(33, 27, 23, 0.22);
+  transition: transform 180ms var(--ease-out);
+}
+.waterfall-preferences input:checked { background: var(--accent); }
+.waterfall-preferences input:checked::after { transform: translateX(14px); }
+.waterfall-preferences input:disabled { cursor: default; background: #d8d4d0; }
 .waterfall-empty {
   min-height: calc(100dvh - 150px); display: grid; place-items: center; align-content: center; gap: 14px;
-  color: var(--muted); font-size: 16px; line-height: 1.5; padding: 20px; text-align: center;
+  color: var(--muted); font-size: 16px; line-height: 1.5;
+  padding: calc(72px + env(safe-area-inset-top)) 20px 20px; text-align: center;
 }
 .waterfall-empty button, .waterfall-status button {
   min-height: 48px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--panel);
@@ -1133,6 +1195,24 @@ const WATERFALL_CSS: string = `
 }
 .waterfall-empty button:active, .waterfall-status button:active { transform: scale(0.97); }
 .waterfall-status { color: var(--muted); font-size: 14px; line-height: 1.5; padding: 18px 20px 0; text-align: center; }
+.waterfall-convergence {
+  min-height: calc(100dvh - 150px); display: grid; place-content: center; justify-items: center; gap: 15px;
+  padding: calc(72px + env(safe-area-inset-top)) 24px 40px; color: var(--muted); text-align: center;
+}
+.waterfall-convergence-orbit { display: flex; max-width: 260px; flex-wrap: wrap; justify-content: center; gap: 7px; }
+.waterfall-convergence-source {
+  position: relative; display: inline-grid; width: 34px; height: 34px; place-items: center;
+  opacity: 0.34; transform: translate3d(0, 4px, 0) scale(0.94);
+  transition: opacity 220ms var(--ease-out), transform 240ms var(--ease-out);
+}
+.waterfall-convergence-source .waterfall-source-logo { width: 28px; height: 28px; border-radius: 8px; }
+.waterfall-convergence-source.is-loading { opacity: 0.62; animation: waterfall-source-breathe 1.4s ease-in-out infinite alternate; }
+.waterfall-convergence-source.is-ready { opacity: 1; transform: none; }
+.waterfall-convergence-source.is-failed { opacity: 0.24; transform: none; }
+.waterfall-convergence-copy { display: grid; gap: 4px; }
+.waterfall-convergence-copy strong { color: var(--ink); font-size: 15px; font-weight: 760; }
+.waterfall-convergence-copy span { font-size: 11px; }
+@keyframes waterfall-source-breathe { to { opacity: 0.92; transform: translate3d(0, 0, 0) scale(1); } }
 .waterfall-status--empty {
   min-height: calc(100dvh - 150px); display: grid; place-items: center; align-content: center; gap: 14px;
   padding: 20px;
@@ -1173,7 +1253,8 @@ const WATERFALL_CSS: string = `
 }
 .waterfall-card-shell {
   position: relative; top: auto; right: auto; bottom: auto; left: auto;
-  display: flex; height: auto; min-height: 0; flex-direction: column; overflow: hidden; margin: 0 14px; padding: 12px;
+  display: flex; height: auto; min-height: 0; flex-direction: column; overflow: hidden;
+  margin: 0 14px; padding: 12px;
   border: 1px solid rgba(56, 65, 72, 0.07); border-radius: 24px;
   background: #fbfcfd;
   color: var(--card-ink);
@@ -1256,8 +1337,9 @@ const WATERFALL_CSS: string = `
 }
 .waterfall-source-action {
   display: inline-grid; width: 44px !important; min-width: 44px; min-height: 44px;
-  place-items: center; border: 0 !important; border-radius: 999px !important;
-  background: rgba(255,255,255,0.46) !important; color: var(--card-accent) !important;
+  place-items: center; border: 1px solid rgba(153, 95, 76, 0.16) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.88) !important; color: var(--accent) !important;
   padding: 0 !important; text-decoration: none; cursor: pointer;
   transition: transform 140ms var(--ease-out), background-color 180ms ease;
 }
@@ -1270,6 +1352,44 @@ const WATERFALL_CSS: string = `
   position: absolute; z-index: 7; top: 26px; right: 26px; display: flex; align-items: center; gap: 10px;
 }
 .waterfall-source-action:active { transform: scale(0.97); }
+.waterfall-feedback-bar { display: flex; min-width: 0; align-items: center; margin-left: auto; }
+.waterfall-feedback-left { display: inline-flex; align-items: center; gap: 0; }
+.waterfall-card-action { width: 44px; height: 44px; display: inline-grid; flex: 0 0 44px; place-items: center;
+  position: relative; overflow: visible; border: 0; border-radius: 12px; background: transparent; color: var(--muted); padding: 0; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.waterfall-card-action .waterfall-icon { width: 32px; height: 32px; border-radius: 10px;
+  transition: color 160ms var(--ease-out), background-color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.waterfall-card-action .waterfall-icon svg { width: 19px; height: 19px; }
+.waterfall-card-action.is-selected { color: var(--accent); }
+.waterfall-card-action.is-selected .waterfall-icon { background: var(--accent-soft); }
+.waterfall-card-action--dislike.is-selected { color: #5e6875; }
+.waterfall-card-action--dislike.is-selected .waterfall-icon { background: rgba(94, 104, 117, 0.12); }
+.waterfall-card-action--save.is-selected .waterfall-icon svg { fill: currentColor; }
+.waterfall-card-action:active .waterfall-icon,
+.waterfall-card-action.is-pressed .waterfall-icon { transform: scale(0.88); }
+.waterfall-card-action.is-celebrating .waterfall-icon { animation: waterfall-action-pop 240ms var(--ease-out) both; }
+.waterfall-action-glint {
+  position: absolute; inset: 7px; border: 1px solid currentColor; border-radius: 11px; pointer-events: none;
+  animation: waterfall-action-glint 260ms var(--ease-out) both;
+}
+.waterfall-action-spark {
+  position: absolute; left: 21px; top: 21px; width: 3px; height: 3px; border-radius: 50%;
+  background: currentColor; pointer-events: none;
+  animation: waterfall-action-spark 300ms var(--ease-out) both;
+}
+@keyframes waterfall-action-pop { 0% { transform: scale(0.86); } 58% { transform: scale(1.1); } 100% { transform: none; } }
+@keyframes waterfall-action-glint { from { opacity: 0.58; transform: scale(0.72); } to { opacity: 0; transform: scale(1.28); } }
+@keyframes waterfall-action-spark {
+  from { opacity: 0.88; transform: translate3d(0, 0, 0) scale(1); }
+  to { opacity: 0; transform: translate3d(var(--spark-x), var(--spark-y), 0) scale(0.4); }
+}
+.waterfall-card-action:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.waterfall-feedback-divider { width: 1px; height: 20px; margin: 0 4px; background: var(--line); }
+.waterfall-feedback-bar .waterfall-source-action { border: 0 !important; background: transparent !important; }
+.waterfall-feedback-bar .waterfall-source-action .waterfall-icon { width: 32px; height: 32px; border-radius: 10px; }
+.waterfall-feedback-bar .waterfall-source-action .waterfall-icon svg { width: 19px; height: 19px; }
 .waterfall-video-fullscreen-toggle {
   position: relative; top: auto; right: auto; width: 44px; min-width: 44px; padding: 0;
   background: rgba(20, 24, 28, 0.72); font-size: 0;
@@ -1294,8 +1414,10 @@ const WATERFALL_CSS: string = `
 .waterfall-toolbar {
   top: 0; left: 0; right: 0; min-height: calc(64px + env(safe-area-inset-top));
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
-  padding: env(safe-area-inset-top) 12px 0; background: #eef0f2;
-  border-bottom: 1px solid rgba(56, 65, 72, 0.09);
+  padding: env(safe-area-inset-top) 12px 0;
+  background: linear-gradient(180deg, rgba(245, 242, 238, 0.94) 0%, rgba(245, 242, 238, 0.55) 62%,
+    rgba(245, 242, 238, 0) 100%);
+  border-bottom: 0;
   opacity: 1; transform: none; visibility: visible; pointer-events: auto;
 }
 .waterfall-toolbar button,
@@ -1317,19 +1439,65 @@ const WATERFALL_CSS: string = `
   width: auto; min-width: 68px; gap: 6px; padding: 0 10px !important;
   border: 0 !important; background: transparent !important;
 }
-.waterfall-toolbar-tools { justify-self: end; }
-.waterfall-toolbar button:active { background: #dde3e8; transform: scale(0.97); }
-.waterfall-toolbar .waterfall-toolbar-secondary:active { background: #dde3e8 !important; }
-.waterfall-track { padding-top: calc(76px + env(safe-area-inset-top)); }
+.waterfall-toolbar .waterfall-toolbar-secondary { width: 44px; min-width: 44px; padding: 0 !important; }
+.waterfall-toolbar-tools { display: inline-flex; align-items: center; justify-self: end; gap: 0; }
+.waterfall-toolbar-title, .waterfall-toolbar-tools {
+  transition: opacity 160ms var(--ease-out), transform 200ms var(--ease-out);
+}
+.waterfall-search-form {
+  position: absolute; z-index: 2; top: calc(env(safe-area-inset-top) + 10px); right: 12px; left: 82px;
+  height: 44px; display: flex; align-items: center; gap: 8px; border: 1px solid rgba(153, 95, 76, 0.2);
+  border-radius: 15px; background: rgba(255, 255, 255, 0.88); padding: 0 13px;
+  box-shadow: 0 10px 28px rgba(69, 48, 39, 0.08); opacity: 0; visibility: hidden;
+  transform: translate3d(18px, 0, 0) scaleX(0.9); transform-origin: right center; pointer-events: none;
+  transition: opacity 160ms var(--ease-out), transform 220ms var(--ease-drawer), visibility 0s linear 220ms;
+}
+.waterfall-search-form .waterfall-icon { flex: 0 0 auto; color: var(--accent); }
+.waterfall-search-form input {
+  width: 100%; min-width: 0; height: 40px; border: 0; outline: 0; background: transparent;
+  color: var(--ink); padding: 0; font: inherit; font-size: 15px;
+}
+.waterfall-search-form input::placeholder { color: #91847a; }
+.waterfall-toolbar.is-searching .waterfall-toolbar-title,
+.waterfall-toolbar.is-searching .waterfall-toolbar-tools { opacity: 0; transform: translate3d(-8px, 0, 0); pointer-events: none; }
+.waterfall-toolbar.is-searching .waterfall-search-form {
+  opacity: 1; visibility: visible; transform: none; pointer-events: auto; transition-delay: 0s;
+}
+.waterfall-search-status {
+  position: fixed; z-index: 7; top: calc(64px + env(safe-area-inset-top)); left: 50%;
+  display: flex; align-items: center; gap: 7px; max-width: calc(100% - 32px); min-height: 30px;
+  border: 1px solid rgba(153, 95, 76, 0.12); border-radius: 15px;
+  background: rgba(248, 245, 240, 0.9); color: var(--muted); padding: 5px 11px;
+  box-shadow: 0 8px 24px rgba(69, 48, 39, 0.07); font-size: 11px; opacity: 0;
+  transform: translate3d(-50%, -5px, 0); pointer-events: none;
+  transition: opacity 160ms var(--ease-out), transform 180ms var(--ease-out);
+}
+.waterfall-search-status.active { opacity: 1; transform: translate3d(-50%, 0, 0); }
+.waterfall-track.is-search-pending .waterfall-card-shell { opacity: 0.42; }
+.waterfall-track.is-search-results-enter .waterfall-card-shell { animation: waterfall-search-result-in 220ms var(--ease-out) both; }
+@keyframes waterfall-search-result-in { from { opacity: 0; transform: translate3d(0, 8px, 0); } to { opacity: 1; transform: none; } }
+.waterfall-toolbar button:active { background: var(--accent-soft); transform: scale(0.97); }
+.waterfall-toolbar .waterfall-toolbar-secondary:active { background: var(--accent-soft) !important; }
+.waterfall-edge-fade {
+  position: fixed; z-index: 5; left: 0; right: 0; pointer-events: none;
+}
+.waterfall-edge-fade--top {
+  top: 0; height: calc(72px + env(safe-area-inset-top));
+  background: linear-gradient(180deg, rgba(245, 242, 238, 0.78) 0%, rgba(245, 242, 238, 0) 100%);
+}
+.waterfall-edge-fade--bottom {
+  bottom: 0; height: 18vh;
+  background: linear-gradient(0deg, rgba(245, 242, 238, 0.78) 0%, rgba(245, 242, 238, 0) 100%);
+}
 .waterfall-preferences .waterfall-toolbar {
   min-height: 44px; background: transparent; border-bottom: 0;
   opacity: 1; transform: none; visibility: visible; transition: none;
 }
-.waterfall-reader { background: #eef0f2; }
+.waterfall-reader { background: var(--paper); }
 .waterfall-reader-head {
   z-index: 10; top: 0; left: 0; right: 0; min-height: calc(64px + env(safe-area-inset-top));
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
-  padding: env(safe-area-inset-top) 12px 0; background: #eef0f2;
+  padding: env(safe-area-inset-top) 12px 0; background: var(--paper);
   border-bottom: 1px solid rgba(56, 65, 72, 0.09);
   opacity: 1; transform: none; visibility: visible;
   transition: opacity 120ms var(--ease-out), transform 140ms var(--ease-out);
@@ -1352,10 +1520,11 @@ const WATERFALL_CSS: string = `
 .waterfall-reader-head a.is-pressed,
 .waterfall-toolbar button.is-pressed,
 .waterfall-preferences button.is-pressed {
-  background: #dde3e8 !important; transform: scale(0.97);
+  background: var(--accent-soft) !important; transform: scale(0.97);
 }
-.waterfall-reader-body { padding: calc(82px + env(safe-area-inset-top)) 22px calc(48px + env(safe-area-inset-bottom)); }
+.waterfall-reader-body { padding: calc(86px + env(safe-area-inset-top)) 24px calc(56px + env(safe-area-inset-bottom)); }
 .waterfall-reader-layout { width: min(100%, 640px); margin: 0 auto; }
+.waterfall-reader-copy { width: 100%; }
 .waterfall-toolbar button,
 .waterfall-reader-head button,
 .waterfall-reader-head a,
@@ -1363,22 +1532,16 @@ const WATERFALL_CSS: string = `
   -webkit-tap-highlight-color: transparent; touch-action: manipulation; cursor: pointer;
 }
 .waterfall-reader-media {
-  height: min(44dvh, 390px); overflow: hidden; margin-bottom: 24px; border-radius: 22px;
-  background: #e7eaed; box-shadow: 0 10px 28px rgba(42,55,69,0.09);
+  height: min(44dvh, 390px); overflow: hidden; margin-bottom: 28px; border-radius: 16px;
+  background: #e7eaed; box-shadow: 0 18px 44px rgba(42,55,69,0.10);
 }
 .waterfall-reader-media img,
 .waterfall-reader-media iframe,
 .waterfall-reader-media video { display: block; width: 100%; height: 100%; border: 0; object-fit: cover; }
-.waterfall-reader-media--video { height: auto; margin-bottom: 0; aspect-ratio: 16 / 9; background: #e6e3dd; box-shadow: none; }
+.waterfall-reader-media--video { height: auto; aspect-ratio: 16 / 9; }
 .waterfall-reader--video.waterfall-reader--portrait .waterfall-reader-media--video {
   width: min(72%, 360px); margin-right: auto; margin-left: auto; aspect-ratio: 9 / 16;
 }
-.waterfall-reader-video-card {
-  overflow: hidden; border: 1px solid rgba(56,65,72,0.07); border-radius: 24px; padding: 12px;
-  background: #fbfcfd;
-  box-shadow: 0 20px 48px rgba(42,55,69,0.12);
-}
-.waterfall-reader-video-copy { padding: 18px 8px 10px; }
 .waterfall-reader-video-stage { position: relative; }
 .waterfall-reader-video-poster { position: absolute; z-index: 1; inset: 0; }
 .waterfall-reader-video-fallback {
@@ -1392,26 +1555,133 @@ const WATERFALL_CSS: string = `
 .waterfall-reader-video-frame .waterfall-media-frame { position: absolute; inset: 0; }
 .waterfall-reader-video-play {
   position: absolute; z-index: 3; inset: 0; display: grid; place-content: center; justify-items: center; gap: 9px;
-  border: 0; background: linear-gradient(180deg, rgba(20,20,18,0.02), rgba(20,20,18,0.20)); color: #fff;
-  font-size: 13px; font-weight: 760; cursor: pointer;
+  border: 0; background: transparent; color: rgba(255, 255, 255, 0.94);
+  font-size: 13px; font-weight: 760; cursor: pointer; pointer-events: auto;
 }
 .waterfall-reader-video-play .waterfall-icon {
-  width: 54px; height: 54px; border-radius: 999px; background: rgba(20,20,18,0.72);
-  box-shadow: 0 10px 28px rgba(20,20,18,0.24); backdrop-filter: blur(14px);
+  width: 44px; height: 44px; border: 1px solid rgba(255, 255, 255, 0.34); border-radius: 999px;
+  background: rgba(24, 28, 32, 0.52); box-shadow: 0 8px 20px rgba(20, 24, 28, 0.16);
+  backdrop-filter: blur(8px); transition: transform 140ms var(--ease-out), background-color 140ms ease;
 }
-.waterfall-reader-video-play .waterfall-icon svg { width: 24px; height: 24px; }
+.waterfall-reader-video-play .waterfall-icon svg { width: 20px; height: 20px; }
+.waterfall-reader-video-play span { display: none; }
+.waterfall-reader-video-play:active .waterfall-icon { transform: scale(0.95); background: rgba(24, 28, 32, 0.64); }
+.waterfall-reader-video-play:focus-visible { outline: 2px solid #fff; outline-offset: -4px; }
 .waterfall-reader-video-stage.is-playing .waterfall-reader-video-frame { opacity: 1; pointer-events: auto; }
 .waterfall-reader-video-stage.is-playing .waterfall-reader-video-poster,
 .waterfall-reader-video-stage.is-playing .waterfall-media-cover,
 .waterfall-reader-video-stage.is-playing .waterfall-reader-video-play { opacity: 0; pointer-events: none; }
-.waterfall-reader--video .waterfall-reader-context { margin-bottom: 14px; }
-.waterfall-reader--video h2 { max-width: 18ch; margin: 0 0 12px; font-size: clamp(27px, 7vw, 38px); line-height: 1.12; }
-.waterfall-reader--video p { font-size: 15px; line-height: 1.68; }
-.waterfall-reader-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); }
-.waterfall-reader-source { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); text-transform: none; letter-spacing: 0; }
-.waterfall-reader h2 { max-width: 14ch; margin: 16px 0 20px; font-size: clamp(34px, 8.8vw, 50px); line-height: 1.08; }
-.waterfall-reader p { color: #423d38; font-size: 17px; line-height: 1.82; }
-.waterfall-reader--text h2 { max-width: 12ch; }
+.waterfall-reader-context {
+  display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 20px; color: var(--muted); font-size: 12px;
+}
+.waterfall-reader-source { display: inline-flex; min-width: 0; align-items: center; gap: 8px; color: var(--accent); text-transform: none; letter-spacing: 0; }
+.waterfall-reader-source .waterfall-author { color: var(--muted); font-weight: 650; }
+.waterfall-reader-source .waterfall-author-name { max-width: none; overflow: visible; text-overflow: clip; white-space: normal; }
+.waterfall-reader-context > span:last-child { flex: 0 0 auto; }
+.waterfall-reader-signals {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 8px;
+  margin: 0 0 26px; border-top: 1px solid var(--line); padding-top: 16px;
+}
+.waterfall-reader-signal {
+  display: grid; min-width: 0; grid-template-columns: 14px minmax(0, 1fr); align-items: center; gap: 2px 4px;
+  color: var(--muted); font-size: 11px;
+}
+.waterfall-reader-signal .waterfall-icon { width: 14px; height: 14px; color: var(--accent); }
+.waterfall-reader-signal .waterfall-icon svg { width: 14px; height: 14px; }
+.waterfall-reader-signal b { grid-column: 2; grid-row: 1; overflow-wrap: anywhere; color: var(--ink); font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 760; }
+.waterfall-reader-signal-label { grid-column: 1 / -1; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.waterfall-reader h2 {
+  max-width: 18ch; margin: 0 0 24px; color: var(--ink);
+  font-size: clamp(28px, 7.2vw, 38px); line-height: 1.08; letter-spacing: -0.035em;
+}
+.waterfall-reader p { max-width: 34em; margin: 0; color: #423d38; font-size: 17px; line-height: 1.78; overflow-wrap: anywhere; }
+.waterfall-reader p + p { margin-top: 1em; }
+.waterfall-comments { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 13px; }
+.waterfall-comments-head { display: flex; min-height: 24px; align-items: center; justify-content: space-between; }
+.waterfall-comments-head h3 { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.4; font-weight: 780; }
+.waterfall-comments-head span { color: var(--muted); font-size: 10px; font-weight: 650; }
+.waterfall-comments-list { display: grid; }
+.waterfall-comment-row {
+  display: grid; width: 100%; min-width: 0; grid-template-columns: 24px minmax(0, 1fr); gap: 8px;
+  border: 0; border-bottom: 1px solid rgba(56, 65, 72, 0.07); border-radius: 0;
+  background: transparent; color: inherit; padding: 9px 0; text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.waterfall-comment-row:last-child { border-bottom: 0; padding-bottom: 2px; }
+.waterfall-comment-row--no-avatar { grid-template-columns: minmax(0, 1fr); }
+.waterfall-comment-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; background: #e7e9e8; }
+.waterfall-comment-body { min-width: 0; }
+.waterfall-comment-meta { display: flex; min-width: 0; align-items: center; gap: 6px; margin-bottom: 2px;
+  color: var(--muted); font-size: 10.5px; line-height: 1.35; }
+.waterfall-comment-author { overflow: hidden; color: #56514c; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+.waterfall-comment-time { flex: 0 0 auto; }
+.waterfall-comment-text {
+  display: -webkit-box; overflow: hidden; color: #5a554f; font-size: 13px; line-height: 1.46;
+  overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.waterfall-comment-row[aria-expanded="true"] .waterfall-comment-text { display: block; overflow: visible; }
+.waterfall-comment-stats { display: flex; gap: 9px; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.3; }
+.waterfall-comment-skeleton { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; padding: 9px 0; }
+.waterfall-comment-skeleton-avatar { width: 24px; height: 24px; border-radius: 50%; }
+.waterfall-comment-skeleton-copy { display: grid; gap: 6px; padding-top: 1px; }
+.waterfall-comment-skeleton-line { display: block; height: 8px; border-radius: 999px; }
+.waterfall-comment-skeleton-line--short { width: 34%; }
+.waterfall-comment-skeleton-line--long { width: 88%; }
+.waterfall-comment-skeleton-avatar,
+.waterfall-comment-skeleton-line {
+  background: linear-gradient(90deg, #e9e9e6 22%, #f5f4f1 42%, #e9e9e6 62%); background-size: 220% 100%;
+  animation: waterfall-comment-shimmer 1.15s ease-in-out infinite;
+}
+@keyframes waterfall-comment-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.waterfall-reader-copy > .waterfall-feedback-bar { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); }
+.waterfall-collection {
+  position: fixed; z-index: 9; inset: 0; overflow-x: hidden; overflow-y: auto; visibility: hidden;
+  background: var(--paper); color: var(--ink); pointer-events: none; opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.985); transform-origin: center;
+  transition: opacity 140ms var(--ease-out), transform 180ms var(--ease-out), visibility 0s linear 180ms;
+}
+.waterfall-collection.active { visibility: visible; pointer-events: auto; opacity: 1; transform: none; transition-delay: 0s; }
+.waterfall-collection-head {
+  position: sticky; z-index: 2; top: 0; display: grid; min-height: calc(64px + env(safe-area-inset-top));
+  grid-template-columns: 1fr auto 1fr; align-items: end; padding: env(safe-area-inset-top) 12px 0;
+  border-bottom: 1px solid rgba(56, 65, 72, 0.09); background: rgba(245, 242, 238, 0.96); backdrop-filter: blur(14px);
+}
+.waterfall-collection-head button { display: inline-grid; width: 44px; height: 44px; place-items: center; border: 0;
+  border-radius: 14px; background: transparent; color: var(--ink); padding: 0; cursor: pointer; }
+.waterfall-collection-head button:last-child { justify-self: end; }
+.waterfall-collection-head strong { align-self: center; font-size: 15px; font-weight: 780; }
+.waterfall-collection-search { padding: 12px 16px 0; }
+.waterfall-collection-search input { width: 100%; height: 42px; border: 1px solid var(--line); border-radius: 13px;
+  background: #fff; color: var(--ink); padding: 0 14px; font: inherit; outline: none; }
+.waterfall-collection-search input:focus { border-color: rgba(153, 95, 76, 0.45); }
+.waterfall-collection-filters { display: flex; align-items: center; gap: 8px; padding: 12px 16px 8px; }
+.waterfall-collection-sources { display: flex; min-width: 0; flex: 1 1 auto; gap: 7px; overflow-x: auto; scrollbar-width: none; }
+.waterfall-collection-sources::-webkit-scrollbar { display: none; }
+.waterfall-collection-sources button, .waterfall-collection-sort { min-height: 32px; flex: 0 0 auto; border: 1px solid var(--line);
+  border-radius: 999px; background: transparent; color: var(--muted); padding: 0 12px; font-size: 12px; font-weight: 700; }
+.waterfall-collection-sources button.is-selected { border-color: rgba(153, 95, 76, 0.24); background: var(--accent-soft); color: var(--accent); }
+.waterfall-collection-sort { border: 0; padding: 0 6px; color: var(--ink); }
+.waterfall-collection-list { width: min(100%, 680px); margin: 0 auto; padding: 4px 16px calc(32px + env(safe-area-inset-bottom)); }
+.waterfall-collection-row { display: grid; grid-template-columns: 84px minmax(0, 1fr) 44px; align-items: center; gap: 12px;
+  min-height: 104px; border-bottom: 1px solid var(--line); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.waterfall-collection-cover { display: grid; width: 84px; height: 72px; place-items: center; overflow: hidden; border-radius: 12px; background: #e7eaed; }
+.waterfall-collection-cover > img { width: 100%; height: 100%; object-fit: cover; }
+.waterfall-collection-copy { min-width: 0; }
+.waterfall-collection-meta { overflow: hidden; color: var(--accent); font-size: 11px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+.waterfall-collection-row h3 { display: -webkit-box; margin: 5px 0 4px; overflow: hidden; color: var(--ink); font-size: 15px;
+  line-height: 1.35; font-weight: 700; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.waterfall-collection-copy > span { color: var(--muted); font-size: 11px; }
+.waterfall-collection-empty { padding: 22vh 16px 0; color: var(--muted); font-size: 14px; text-align: center; }
+.waterfall-toast.actionable { display: flex; align-items: center; gap: 16px; pointer-events: auto; }
+.waterfall-toast.actionable button { border: 0; background: transparent; color: #f0c7b8; padding: 4px 0; font: inherit; font-weight: 780; }
+@media (max-width: 480px) {
+  .waterfall-reader-context { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .waterfall-reader-source { flex-wrap: wrap; }
+}
+@media (max-width: 360px) {
+  .waterfall-reader-signals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (hover: hover) and (pointer: fine) {
   .waterfall-entry button:hover, .waterfall-toolbar button:hover, .waterfall-preferences label:hover {
     transform: translateY(-1px);
@@ -1422,11 +1692,17 @@ const WATERFALL_CSS: string = `
   .waterfall-overlay.active.closing { animation: none !important; }
   .waterfall-entry button, .waterfall-toolbar button, .waterfall-preferences button,
   .waterfall-preferences label, .waterfall-empty button, .waterfall-status button,
-  .waterfall-inline-play { transition: none; }
+  .waterfall-inline-play, .waterfall-card-action, .waterfall-card-action .waterfall-icon,
+  .waterfall-comment-skeleton-avatar, .waterfall-comment-skeleton-line,
+  .waterfall-convergence-source, .waterfall-action-glint, .waterfall-action-spark { transition: none; animation: none; }
+  .waterfall-action-glint, .waterfall-action-spark { display: none; }
+  .waterfall-search-form { transform: none; transition: opacity 140ms var(--ease-out), visibility 0s linear 140ms; }
+  .waterfall-track.is-search-results-enter .waterfall-card-shell { animation: none; }
   .waterfall-reader {
     transform: none;
     transition: none !important;
   }
+  .waterfall-collection { transform: none; transition: opacity 140ms var(--ease-out), visibility 0s linear 140ms !important; }
   .waterfall-preferences {
     transform: none;
     transition: opacity 140ms var(--ease-out), visibility 0s linear 140ms !important;
@@ -1473,17 +1749,37 @@ const WATERFALL_CSS: string = `
 
 const WATERFALL_JS: string = `
 (function () {
+  function disableArkWebDomTree(scanner) {
+    if (!scanner) return;
+    scanner.addDomTreeReportedAsync = function () {};
+    if (typeof scanner.removeDomTreeReported === 'function') scanner.removeDomTreeReported();
+  }
+  var arkWebDomTree = window.__arkWebDomTree;
+  if (arkWebDomTree) {
+    disableArkWebDomTree(arkWebDomTree);
+  } else {
+    Object.defineProperty(window, '__arkWebDomTree', {
+      configurable: true,
+      get: function () { return arkWebDomTree; },
+      set: function (scanner) { arkWebDomTree = scanner; disableArkWebDomTree(scanner); }
+    });
+  }
   var overlay = document.getElementById('waterfall-discovery');
   var track = document.getElementById('waterfall-track');
   var preferences = document.getElementById('waterfall-preferences');
   var reader = document.getElementById('waterfall-reader');
+  var collection = document.getElementById('waterfall-collection');
   var toolbar = document.getElementById('waterfall-toolbar');
   var toast = document.getElementById('waterfall-toast');
+  var searchForm = document.getElementById('waterfall-search-form');
+  var searchInput = document.getElementById('waterfall-search-input');
+  var searchStatus = document.getElementById('waterfall-search-status');
   var state = window.__aiphoneWaterfallInitial || null;
   var directDiscovery = window.__aiphoneWaterfallDirect === true;
   var mode = directDiscovery ? 'discovering' : 'entry';
   var enabledSources = state && state.enabledSources ? state.enabledSources.slice() : [];
   var preferenceBaseline = '';
+  var committedPreferenceSources = null;
   var aggregateHtml = state && state.aggregateHtml ? state.aggregateHtml : '';
   var advancePending = false;
   var renderedCurrentId = '';
@@ -1492,6 +1788,7 @@ const WATERFALL_JS: string = `
   var alignToCandidateId = '';
   var closeTimer = null;
   var readerCloseTimer = null;
+  var collectionCloseTimer = null;
   var preferenceApplyTimer = null;
   var presentationFrame = null;
   var advanceTimer = null;
@@ -1513,19 +1810,123 @@ const WATERFALL_JS: string = `
   var readerCandidateId = '';
   var readerMountedId = '';
   var readerFeedScrollTop = 0;
+  var readerReturnScrolled = false;
+  var preferencesFeedScrollTop = 0;
   var readerStartedAt = 0;
   var readerDurationMs = 0;
+  var readerReturnMode = 'discovering';
+  var collectionFeedScrollTop = 0;
+  var collectionQuery = '';
+  var collectionSource = 'all';
+  var collectionSort = 'recent';
+  var collectionSearchOpen = false;
+  var collectionUndoCard = null;
   var pageAnchorIndex = -1;
-  var pagingClamp = false;
   var ignoreNextFeedOpen = false;
   var emittedBehavior = {};
   var pendingPayload = null;
+  var pendingCardAction = null;
+  var preserveLoadedCardOrder = false;
+  var preferenceStatusKey = '';
+  var knownUnavailableSourceStates = {};
+  var searchActive = false;
+  var searchSubmitted = false;
+  var searchPending = false;
+  var searchQuery = '';
+  var searchFeedScrollTop = 0;
+  var searchSourceStates = [];
+  var searchTransitionTimer = null;
+  var searchRestorePending = false;
   window.__aiphoneApplyWaterfallUpdate = function (payload) {
-    pendingPayload = payload;
-    if (mode === 'reading' || mode === 'reader_closing' || mode === 'source_preferences' ||
-      mode === 'source_preferences_closing' || interactionActive || scrollActive) return;
+    applyCardActionAcknowledgement(payload);
+    if (searchActive && searchPending && payload && text(payload.query) === searchQuery) {
+      searchSourceStates = Array.isArray(payload.sources) ? payload.sources.slice() : [];
+      if (Array.isArray(payload.candidates) && payload.candidates.length === 0 && payload.replenishing) {
+        updateSearchPendingStatus();
+        return;
+      }
+      searchPending = false;
+      if (searchInput && typeof searchInput.blur === 'function') searchInput.blur();
+      if (toolbar) toolbar.classList.remove('is-searching');
+      if (track) {
+        track.classList.remove('is-search-pending');
+        track.classList.add('is-search-results-enter');
+      }
+      if (searchStatus) searchStatus.classList.remove('active');
+      if (searchTransitionTimer !== null) clearTimeout(searchTransitionTimer);
+      searchTransitionTimer = setTimeout(function () {
+        if (track) track.classList.remove('is-search-results-enter');
+        searchTransitionTimer = null;
+      }, 240);
+    }
+    pendingPayload = payloadAfterCardAction(payload);
+    if (mode === 'collection') {
+      mergePayload(payload);
+      pendingPayload = null;
+      renderCollection();
+      return;
+    }
+    if (mode === 'reading') {
+      mergePayload(payload);
+      syncReaderComments();
+      return;
+    }
+    if (mode === 'reader_closing' || mode === 'source_preferences' ||
+      mode === 'collection_closing' || preferenceApplyTimer !== null || interactionActive || scrollActive) return;
+    var restoringSearch = searchRestorePending && payload && text(payload.query) !== searchQuery;
     flushPendingPayload();
+    if (restoringSearch) restoreSearchScrollAfterPaint();
   };
+  function applyCardActionAcknowledgement(payload) {
+    if (!pendingCardAction || !payload || !Array.isArray(payload.cardStates)) return false;
+    var cardState = payload.cardStates.find(function (value) {
+      return text(value.candidateId) === pendingCardAction.candidateId;
+    });
+    if (!cardState) return false;
+    var active = pendingCardAction.action === 'save' ? cardState.saved === true :
+      cardState.reaction === pendingCardAction.action;
+    if (active !== pendingCardAction.active) return false;
+    state.cardStates = payload.cardStates;
+    if (Array.isArray(payload.savedCards)) state.savedCards = payload.savedCards;
+    syncCardActionControls(pendingCardAction.candidateId);
+    pendingCardAction = null;
+    preserveLoadedCardOrder = true;
+    return true;
+  }
+  function payloadAfterCardAction(payload) {
+    if (!preserveLoadedCardOrder || !payload || !Array.isArray(payload.candidates) || renderedCards.length === 0) {
+      return payload;
+    }
+    var byId = {};
+    payload.candidates.forEach(function (item) { byId['$' + text(item.id)] = item; });
+    var existing = {};
+    renderedCards.forEach(function (card) {
+      if (byId['$' + card.id]) existing['$' + card.id] = true;
+    });
+    var additions = {};
+    var anchor = '$tail';
+    for (var index = payload.candidates.length - 1; index >= 0; index -= 1) {
+      var item = payload.candidates[index];
+      var key = '$' + text(item.id);
+      if (existing[key]) anchor = key;
+      else {
+        if (!additions[anchor]) additions[anchor] = [];
+        additions[anchor].push(item);
+      }
+    }
+    var ordered = [];
+    var appendAdditions = function (key) {
+      var values = additions[key] || [];
+      for (var valueIndex = values.length - 1; valueIndex >= 0; valueIndex -= 1) ordered.push(values[valueIndex]);
+    };
+    renderedCards.forEach(function (card) {
+      appendAdditions('$' + card.id);
+      var item = byId['$' + card.id];
+      if (item) ordered.push(item);
+    });
+    appendAdditions('$tail');
+    return Object.assign({}, payload, { candidates: ordered });
+  }
   function flushPendingPayload(enabledOverride) {
     if (!pendingPayload) return false;
     if (payloadSettleTimer !== null) clearTimeout(payloadSettleTimer);
@@ -1537,6 +1938,9 @@ const WATERFALL_JS: string = `
     mergePayload(payload);
     if (enabledOverride) enabledSources = enabledOverride.slice();
     if (!render()) scheduleAdvance(updateCardPresentation());
+    if (state && Array.isArray(state.cardStates)) {
+      state.cardStates.forEach(function (cardState) { syncCardActionControls(cardState.candidateId); });
+    }
     if (previousCurrentId !== text(state && state.currentId)) {
       pauseCurrentBehavior(false);
       behaviorCandidateId = '';
@@ -1556,6 +1960,36 @@ const WATERFALL_JS: string = `
   function cleanSummary(value) {
     return text(value).trim().replace(/^[^：:\\n]{0,16}(?:搜索结果|检索结果|结果摘要)[ ：:]*/i, '').trim();
   }
+  function readerParagraphs(value) {
+    var normalized = cleanSummary(value).replace(/\\r/g, '');
+    if (!normalized) return '';
+    var paragraphs = [];
+    normalized.split(/\\n{2,}/).forEach(function (block) {
+      block.split(/\\n+/).forEach(function (line) {
+        var copy = line.trim();
+        if (!copy) return;
+        if (copy.length <= 150) {
+          paragraphs.push(copy);
+          return;
+        }
+        var sentences = copy.match(/[^。！？!?]+[。！？!?]?/g) || [copy];
+        var current = '';
+        sentences.forEach(function (sentence) {
+          var next = current + sentence;
+          if (current && next.length > 96) {
+            paragraphs.push(current.trim());
+            current = sentence;
+          } else {
+            current = next;
+          }
+        });
+        if (current.trim()) paragraphs.push(current.trim());
+      });
+    });
+    return paragraphs.map(function (paragraph) {
+      return '<p>' + escapeHtml(paragraph) + '</p>';
+    }).join('');
+  }
   function publishedLabel(value) { return text(value).trim().replace(/^(\\d{4}-\\d{2}-\\d{2})T.*$/, '$1'); }
   function sourceLabel(source) {
     var labels = ${WATERFALL_SOURCE_LABELS_JSON};
@@ -1563,6 +1997,12 @@ const WATERFALL_JS: string = `
       if (labels[index].source === source) return labels[index].label;
     }
     return source;
+  }
+  function cardSourceLabel(item) {
+    var primary = sourceLabel(item.source);
+    var provider = text(item.provider).trim();
+    return (item.source === 'cnnews' || item.source === 'globalnews') && provider && provider !== primary ?
+      primary + ' · ' + provider : primary;
   }
   function sourceTone(source) {
     var key = text(source).trim().toLowerCase();
@@ -1578,6 +2018,157 @@ const WATERFALL_JS: string = `
   function uiIcon(name) {
     var icons = window.__aiphoneWaterfallUiIcons || {};
     return text(icons[name]);
+  }
+  function cardStateById(id) {
+    var values = state && Array.isArray(state.cardStates) ? state.cardStates : [];
+    return values.find(function (value) { return text(value.candidateId) === text(id); }) ||
+      { candidateId: text(id), reaction: 'none', saved: false };
+  }
+  function cardActionButton(item, action, label, icon) {
+    var cardState = cardStateById(item.id);
+    var selected = action === 'save' ? cardState.saved === true : cardState.reaction === action;
+    return '<button type="button" class="waterfall-card-action waterfall-card-action--' + action +
+      (selected ? ' is-selected' : '') + '" data-waterfall-card-action="' + action +
+      '" data-waterfall-candidate-id="' + escapeHtml(item.id) + '" aria-label="' + label +
+      '" aria-pressed="' + (selected ? 'true' : 'false') + '">' + uiIcon(icon) + '</button>';
+  }
+  function feedbackBarMarkup(item) {
+    var source = item.url ? '<a class="waterfall-source-action" href="' +
+      escapeHtml(item.url) + '" rel="noopener noreferrer" aria-label="查看来源">' +
+      uiIcon('external') + '</a>' : '';
+    return '<div class="waterfall-feedback-bar"><div class="waterfall-feedback-left">' +
+      cardActionButton(item, 'like', '喜欢', 'thumbsUp') +
+      cardActionButton(item, 'dislike', '不喜欢', 'thumbsDown') +
+      cardActionButton(item, 'save', '收藏', 'bookmark') +
+      '</div><span class="waterfall-feedback-divider" aria-hidden="true"></span>' + source + '</div>';
+  }
+  function waterfallCommentsSupported(item) {
+    return ['youtube', 'bilibili', 'x', 'hackernews', 'reddit'].indexOf(text(item && item.source)) >= 0 &&
+      text(item && item.providerItemId).trim().length > 0;
+  }
+  function commentStatsMarkup(comment) {
+    var stats = [];
+    if (isFinite(Number(comment.likeCount)) && Number(comment.likeCount) >= 0 && comment.likeCount !== undefined) {
+      stats.push('赞 ' + compactMetricValue(Number(comment.likeCount), false));
+    }
+    if (isFinite(Number(comment.replyCount)) && Number(comment.replyCount) >= 0 && comment.replyCount !== undefined) {
+      stats.push('回复 ' + compactMetricValue(Number(comment.replyCount), false));
+    }
+    return stats.length ? '<span class="waterfall-comment-stats"><span>' +
+      stats.map(escapeHtml).join('</span><span>') + '</span></span>' : '';
+  }
+  function commentRowMarkup(comment, index) {
+    var avatar = text(comment.authorAvatarUrl).trim();
+    var author = text(comment.authorName).trim();
+    var published = publishedLabel(comment.publishedAt);
+    var meta = author || published ? '<span class="waterfall-comment-meta">' +
+      (author ? '<span class="waterfall-comment-author">' + escapeHtml(author) + '</span>' : '') +
+      (published ? '<span class="waterfall-comment-time">' + escapeHtml(published) + '</span>' : '') + '</span>' : '';
+    return '<button type="button" class="waterfall-comment-row' + (avatar ? '' : ' waterfall-comment-row--no-avatar') +
+      '" data-waterfall-comment-toggle aria-expanded="false" aria-label="展开第 ' + (index + 1) + ' 条评论">' +
+      (avatar ? '<img class="waterfall-comment-avatar" src="' + escapeHtml(avatar) +
+        '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true" />' : '') +
+      '<span class="waterfall-comment-body">' + meta + '<span class="waterfall-comment-text">' +
+      escapeHtml(comment.text) + '</span>' + commentStatsMarkup(comment) + '</span></button>';
+  }
+  function commentsMarkup(item) {
+    if (item.commentLoadState === 'loading') {
+      var skeleton = '<span class="waterfall-comment-skeleton"><span class="waterfall-comment-skeleton-avatar"></span>' +
+        '<span class="waterfall-comment-skeleton-copy"><span class="waterfall-comment-skeleton-line waterfall-comment-skeleton-line--short"></span>' +
+        '<span class="waterfall-comment-skeleton-line waterfall-comment-skeleton-line--long"></span></span></span>';
+      return '<section class="waterfall-comments" aria-label="评论精选"><div class="waterfall-comments-head"><h3>评论精选</h3>' +
+        '<span>加载中</span></div><div class="waterfall-comments-list" aria-busy="true">' + skeleton + skeleton + '</div></section>';
+    }
+    var comments = Array.isArray(item.comments) ? item.comments.filter(function (comment) {
+      return comment && text(comment.text).trim().length > 0;
+    }).slice(0, 5) : [];
+    if (item.commentLoadState !== 'ready' || comments.length === 0) return '';
+    return '<section class="waterfall-comments" aria-label="评论精选"><div class="waterfall-comments-head"><h3>评论精选</h3>' +
+      '<span>' + comments.length + ' 条</span></div><div class="waterfall-comments-list">' +
+      comments.map(commentRowMarkup).join('') + '</div></section>';
+  }
+  function postCommentsLoad(candidateId) {
+    if (!state || !window.AIPhoneHome || typeof window.AIPhoneHome.postAction !== 'function') return;
+    window.AIPhoneHome.postAction(JSON.stringify({
+      id: 'waterfall.comments.load', label: '加载评论', prompt: '', variant: 'secondary', kind: 'client',
+      args: { surfaceId: state.surfaceId || '', candidateId: candidateId }
+    }));
+  }
+  function metricLabel(source, kind) {
+    if (kind === 'view') return source === 'x' ? '浏览' : '播放';
+    if (kind === 'like') return '点赞';
+    if (kind === 'favorite') return '收藏';
+    if (kind === 'comment') return source === 'x' ? '回复' : '评论';
+    if (kind === 'score') return '热度';
+    if (kind === 'star') return '星标';
+    if (kind === 'fork') return 'Fork';
+    if (kind === 'repost') return '转发';
+    if (kind === 'quote') return '引用';
+    if (kind === 'coin') return '投币';
+    if (kind === 'danmaku') return '弹幕';
+    if (kind === 'share') return '分享';
+    return '';
+  }
+  function metricIcon(source, kind) {
+    if (kind === 'view') return source === 'x' ? 'eye' : 'play';
+    if (kind === 'like') return source === 'youtube' || source === 'zhihu' ? 'thumbsUp' : 'heart';
+    if (kind === 'favorite') return 'star';
+    if (kind === 'comment') return 'comment';
+    if (kind === 'star') return 'star';
+    if (kind === 'fork') return 'repost';
+    return kind === 'score' ? 'upvote' : kind;
+  }
+  function fullMetricValue(value) {
+    return Math.round(value).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');
+  }
+  function compactMetricValue(value, keepOneDecimal) {
+    if (value < 10000) return Math.round(value).toString();
+    var compact = Math.round(value / 1000) / 10;
+    return compact.toFixed(keepOneDecimal || compact % 1 !== 0 ? 1 : 0) + '万';
+  }
+  function authorMarkup(item) {
+    var name = text(item.authorName).trim();
+    var avatar = text(item.authorAvatarUrl).trim();
+    if (!name && !avatar) return '';
+    return '<span class="waterfall-author">' +
+      (avatar ? '<img class="waterfall-author-avatar" src="' + escapeHtml(avatar) +
+        '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true" />' : '') +
+      (name ? '<span class="waterfall-author-name">' + escapeHtml(name) + '</span>' : '') + '</span>';
+  }
+  function metricsMarkup(item, detail) {
+    var metrics = Array.isArray(item.metrics) ? item.metrics.filter(function (metric) {
+      return metric && metricLabel(item.source, text(metric.kind)) && isFinite(Number(metric.value)) && Number(metric.value) >= 0;
+    }) : [];
+    if (!metrics.length) return '';
+    var visible = detail ? metrics : metrics.slice(0, 4);
+    var content = visible.map(function (metric) {
+      var kind = text(metric.kind);
+      var value = Number(metric.value);
+      var label = metricLabel(item.source, kind);
+      if (detail) {
+        return '<span class="waterfall-reader-signal" data-waterfall-metric="' + escapeHtml(kind) + '">' +
+          uiIcon(metricIcon(item.source, kind)) + '<span class="waterfall-reader-signal-label">' +
+          escapeHtml(label) + '</span><b>' + escapeHtml(compactMetricValue(value, true)) + '</b></span>';
+      }
+      return '<span class="waterfall-signal" data-waterfall-metric="' + escapeHtml(kind) + '" aria-label="' +
+        escapeHtml(label + ' ' + fullMetricValue(value)) + '">' + uiIcon(metricIcon(item.source, kind)) +
+        '<b>' + escapeHtml(compactMetricValue(value)) + '</b></span>';
+    }).join('');
+    return '<div class="' + (detail ? 'waterfall-reader-signals' : 'waterfall-signal-rail') + '">' + content + '</div>';
+  }
+  function syncMetricSlots(payload) {
+    candidates(payload).forEach(function (item) {
+      var card = cardById(item.id);
+      if (!card || typeof card.querySelector !== 'function') return;
+      var slot = card.querySelector('[data-waterfall-card-metrics]');
+      var markup = metricsMarkup(item, false);
+      if (slot && slot.innerHTML !== markup) slot.innerHTML = markup;
+    });
+    if (mode !== 'reading' || !reader || typeof reader.querySelector !== 'function') return;
+    var readerItem = candidateById(readerCandidateId);
+    var readerSlot = reader.querySelector('[data-waterfall-reader-metrics]');
+    var readerMarkup = readerItem ? metricsMarkup(readerItem, true) : '';
+    if (readerSlot && readerSlot.innerHTML !== readerMarkup) readerSlot.innerHTML = readerMarkup;
   }
   function videoEmbedForUrl(value) {
     var raw = text(value).trim();
@@ -1625,22 +2216,41 @@ const WATERFALL_JS: string = `
     return url.indexOf('autoplay=0') >= 0 ? url.replace('autoplay=0', 'autoplay=1') :
       url + (url.indexOf('?') >= 0 ? '&' : '?') + 'autoplay=1';
   }
+  function mountPlayback(frame, kind, url) {
+    if (kind === 'iframe') {
+      var iframe = document.createElement('iframe');
+      iframe.className = 'waterfall-media-frame';
+      iframe.title = '视频播放';
+      iframe.setAttribute('allowfullscreen', 'true');
+      iframe.setAttribute('allow',
+        'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
+      iframe.setAttribute('referrerpolicy', 'origin-when-cross-origin');
+      iframe.src = autoplayVideoUrl(url);
+      frame.appendChild(iframe);
+      return;
+    }
+    var video = document.createElement('video');
+    video.className = 'waterfall-media-frame';
+    video.setAttribute('controls', '');
+    video.setAttribute('autoplay', '');
+    video.setAttribute('playsinline', '');
+    video.src = url;
+    frame.appendChild(video);
+  }
   function playVideo(control) {
-    var stage = control && typeof control.closest === 'function' ? control.closest('.waterfall-reader-video-stage') : null;
-    if (!stage || typeof stage.getAttribute !== 'function' || typeof stage.querySelector !== 'function') return;
+    var stage = control && typeof control.closest === 'function' ?
+      control.closest('.waterfall-reader-video-stage') : null;
+    if (!stage || typeof stage.getAttribute !== 'function' ||
+      typeof stage.querySelector !== 'function') return;
     var frame = stage.querySelector('.waterfall-reader-video-frame');
     var kind = text(stage.getAttribute('data-waterfall-video-kind'));
     var url = text(stage.getAttribute('data-waterfall-video-url'));
     if (!frame || !url) return;
-    if (!frame.innerHTML) {
-      frame.innerHTML = kind === 'iframe' ? '<iframe class="waterfall-media-frame" src="' +
-        escapeHtml(autoplayVideoUrl(url)) + '" title="视频播放" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" ' +
-        'allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>' :
-        '<video class="waterfall-media-frame" src="' + escapeHtml(url) + '" controls autoplay playsinline></video>';
-    }
+    if (!frame.firstChild) mountPlayback(frame, kind, url);
     stage.classList.add('is-playing');
-    var videoCard = control.closest('.waterfall-reader-video-card');
-    if (videoCard) videoCard.classList.add('is-playing');
+    var hostCard = typeof stage.closest === 'function' ? stage.closest('.waterfall-card') : null;
+    if (hostCard) hostCard.classList.add('is-playing');
+    if (reader && reader.contains(stage)) reader.classList.add('is-playing');
     var player = frame.querySelector('video');
     if (player && typeof player.play === 'function') player.play();
   }
@@ -1698,16 +2308,19 @@ const WATERFALL_JS: string = `
         pressed = null;
         return;
       }
-      if (Math.abs(touch.clientX - tapX) > 12 || Math.abs(touch.clientY - tapY) > 12) {
+      if (Math.abs(touch.clientX - tapX) > 24 || Math.abs(touch.clientY - tapY) > 24) {
         setPressed(pressed, false);
         pressed = null;
         return;
       }
-      if (handler(event)) {
+      var result = handler(event);
+      if (result) {
         handled = true;
         setPressed(pressed, false);
         pressed = null;
-        if (event.cancelable && typeof event.preventDefault === 'function') event.preventDefault();
+        if (result !== 'media' && event.cancelable && typeof event.preventDefault === 'function') {
+          event.preventDefault();
+        }
         return;
       }
       setPressed(pressed, false);
@@ -1909,6 +2522,88 @@ const WATERFALL_JS: string = `
       window.AIPhoneHome.setWaterfallFullscreen(active ? 'true' : 'false');
     }
   }
+  function updateSearchPendingStatus() {
+    if (!searchStatus || !searchPending) return;
+    var active = searchSourceStates.filter(function (source) {
+      return enabledSources.indexOf(text(source.source)) >= 0;
+    });
+    var ready = active.filter(function (source) {
+      return source.phase !== 'loading' && source.inFlight !== true;
+    }).length;
+    searchStatus.innerHTML = uiIcon('search') + '<span>正在搜索“' + escapeHtml(searchQuery) + '”' +
+      (ready > 0 ? ' · ' + ready + '/' + active.length : '') + '</span>';
+    searchStatus.classList.add('active');
+  }
+  function openSearch() {
+    if (!directDiscovery || !toolbar || !searchInput) return;
+    if (!searchActive) {
+      searchActive = true;
+      searchFeedScrollTop = track ? track.scrollTop : 0;
+    }
+    toolbar.classList.add('is-searching');
+    setFullscreen(true);
+    var focus = function () {
+      if (typeof searchInput.focus === 'function') searchInput.focus();
+    };
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(focus);
+    else focus();
+  }
+  function submitSearch() {
+    if (!searchInput || !state || !window.AIPhoneHome ||
+      typeof window.AIPhoneHome.postAction !== 'function') return;
+    var query = text(searchInput.value).trim();
+    if (!query || query.length > 160) return;
+    searchQuery = query;
+    searchSubmitted = true;
+    searchPending = true;
+    searchRestorePending = false;
+    preserveLoadedCardOrder = false;
+    pendingPayload = null;
+    searchSourceStates = enabledSources.map(function (source) {
+      return { source: source, phase: 'loading', inFlight: true };
+    });
+    if (track) track.classList.add('is-search-pending');
+    updateSearchPendingStatus();
+    window.AIPhoneHome.postAction(JSON.stringify({
+      id: 'waterfall.search.submit', label: '搜索', prompt: '', variant: 'secondary', kind: 'client',
+      args: { surfaceId: state.surfaceId || '', query: query }
+    }));
+  }
+  function closeSearchUi(restoreNow) {
+    searchActive = false;
+    searchPending = false;
+    if (searchInput && typeof searchInput.blur === 'function') searchInput.blur();
+    if (toolbar) toolbar.classList.remove('is-searching');
+    if (track) track.classList.remove('is-search-pending');
+    if (searchStatus) searchStatus.classList.remove('active');
+    if (restoreNow && track) track.scrollTop = searchFeedScrollTop;
+    setFullscreen(false);
+  }
+  function restoreSearchScrollAfterPaint() {
+    searchRestorePending = false;
+    var restore = function () {
+      if (!track) return;
+      track.scrollTop = searchFeedScrollTop;
+      cardMetrics = [];
+      updateCardPresentation(true);
+    };
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(restore);
+    else restore();
+  }
+  function exitSearch() {
+    if (!searchActive) return false;
+    var submitted = searchSubmitted;
+    searchSubmitted = false;
+    if (submitted && state && window.AIPhoneHome && typeof window.AIPhoneHome.postAction === 'function') {
+      searchRestorePending = true;
+      window.AIPhoneHome.postAction(JSON.stringify({
+        id: 'waterfall.search.exit', label: '退出搜索', prompt: '', variant: 'secondary', kind: 'client',
+        args: { surfaceId: state.surfaceId || '' }
+      }));
+    }
+    closeSearchUi(!submitted);
+    return true;
+  }
   function candidates(payload) {
     if (!payload) return [];
     var values = payload.candidates || [];
@@ -1921,30 +2616,108 @@ const WATERFALL_JS: string = `
     });
   }
   function renderedOrderCandidates(payload) {
-    var items = candidates(payload).filter(function (item) {
+    return candidates(payload).filter(function (item) {
       return enabledSources.indexOf(item.source) >= 0;
     });
-    if (renderedCards.length === 0) return items;
-    var indexed = {};
-    items.forEach(function (item) { indexed['$' + text(item.id)] = item; });
-    var ordered = [];
-    var included = {};
-    renderedCards.forEach(function (rendered) {
-      var key = '$' + rendered.id;
-      if (!indexed[key]) return;
-      ordered.push(indexed[key]);
-      included[key] = true;
-    });
-    items.forEach(function (item) {
-      var key = '$' + text(item.id);
-      if (included[key]) return;
-      ordered.push(item);
-      included[key] = true;
-    });
-    return ordered;
   }
   function candidateById(id) {
-    return candidates(state).find(function (item) { return text(item.id) === text(id); }) || null;
+    var live = candidates(state).find(function (item) { return text(item.id) === text(id); });
+    if (live) return live;
+    var saved = state && Array.isArray(state.savedCards) ? state.savedCards : [];
+    return saved.find(function (item) { return text(item.id) === text(id); }) || null;
+  }
+  function syncCardActionControls(candidateId) {
+    if (typeof document.querySelectorAll !== 'function') return;
+    var cardState = cardStateById(candidateId);
+    var controls = document.querySelectorAll('[data-waterfall-card-action][data-waterfall-candidate-id="' +
+      text(candidateId).replace(/"/g, '\\"') + '"]');
+    for (var index = 0; index < controls.length; index += 1) {
+      var control = controls[index];
+      var action = text(control.getAttribute('data-waterfall-card-action'));
+      var selected = action === 'save' ? cardState.saved === true : cardState.reaction === action;
+      control.classList.toggle('is-selected', selected);
+      control.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    }
+  }
+  function setLocalCardAction(item, action, active) {
+    if (!state) return;
+    if (!Array.isArray(state.cardStates)) state.cardStates = [];
+    var cardState = cardStateById(item.id);
+    if (state.cardStates.indexOf(cardState) < 0) state.cardStates.push(cardState);
+    if (action === 'save') {
+      cardState.saved = active;
+      if (!Array.isArray(state.savedCards)) state.savedCards = [];
+      var savedIndex = state.savedCards.findIndex(function (saved) { return text(saved.id) === text(item.id); });
+      if (active && savedIndex < 0) state.savedCards.unshift(Object.assign({}, item, { savedAt: Date.now() }));
+      if (!active && savedIndex >= 0) state.savedCards.splice(savedIndex, 1);
+    } else {
+      cardState.reaction = active ? action : 'none';
+    }
+    syncCardActionControls(item.id);
+  }
+  function postCardAction(candidateId, action, active, restoreSavedAt) {
+    if (!state || !window.AIPhoneHome || typeof window.AIPhoneHome.postAction !== 'function') return;
+    pendingCardAction = { candidateId: candidateId, action: action, active: active };
+    var args = {
+      surfaceId: state.surfaceId || '', candidateId: candidateId, action: action, active: active
+    };
+    if (action === 'save') args.restoreSavedAt = restoreSavedAt === true;
+    window.AIPhoneHome.postAction(JSON.stringify({
+      id: 'waterfall.card.action', label: '卡片操作', prompt: '', variant: 'secondary', kind: 'client',
+      args: args
+    }));
+  }
+  function playCardActionFeedback(control, action, active) {
+    if (!active || (action !== 'like' && action !== 'save') || !control ||
+      typeof control.querySelectorAll !== 'function' || typeof control.appendChild !== 'function') return;
+    var old = control.querySelectorAll('.waterfall-action-glint, .waterfall-action-spark');
+    for (var oldIndex = 0; oldIndex < old.length; oldIndex += 1) {
+      if (old[oldIndex].parentNode) old[oldIndex].parentNode.removeChild(old[oldIndex]);
+    }
+    control.classList.remove('is-celebrating');
+    void control.offsetWidth;
+    control.classList.add('is-celebrating');
+    var glint = document.createElement('span');
+    glint.className = 'waterfall-action-glint';
+    control.appendChild(glint);
+    var vectors = action === 'save' ? [[-11, -14], [12, -12], [-13, 10], [13, 11]] :
+      [[-12, -12], [13, -8], [1, -16]];
+    var count = Math.min(4, vectors.length);
+    for (var index = 0; index < count; index += 1) {
+      var spark = document.createElement('span');
+      spark.className = 'waterfall-action-spark';
+      spark.style.setProperty('--spark-x', vectors[index][0] + 'px');
+      spark.style.setProperty('--spark-y', vectors[index][1] + 'px');
+      control.appendChild(spark);
+    }
+    setTimeout(function () {
+      var effects = control.querySelectorAll('.waterfall-action-glint, .waterfall-action-spark');
+      for (var effectIndex = 0; effectIndex < effects.length; effectIndex += 1) {
+        if (effects[effectIndex].parentNode) effects[effectIndex].parentNode.removeChild(effects[effectIndex]);
+      }
+    }, 320);
+  }
+  function handleCardAction(control) {
+    if (!control || typeof control.getAttribute !== 'function') return false;
+    var candidateId = text(control.getAttribute('data-waterfall-candidate-id'));
+    var action = text(control.getAttribute('data-waterfall-card-action'));
+    var item = candidateById(candidateId);
+    if (action === 'save' && mode === 'collection' && state && Array.isArray(state.savedCards)) {
+      item = state.savedCards.find(function (saved) { return text(saved.id) === candidateId; }) || item;
+    }
+    if (!item || ['like', 'dislike', 'save'].indexOf(action) < 0) return false;
+    var cardState = cardStateById(candidateId);
+    var active = action === 'save' ? !cardState.saved : cardState.reaction !== action;
+    if (action === 'save' && !active) collectionUndoCard = Object.assign({}, item,
+      { savedAt: Number(item.savedAt) || Date.now() });
+    setLocalCardAction(item, action, active);
+    playCardActionFeedback(control, action, active);
+    postCardAction(candidateId, action, active, false);
+    if (mode === 'collection' && action === 'save' && !active) {
+      renderCollection();
+      showCollectionUndo();
+    }
+    return true;
   }
   function candidateFormat(item) {
     if (item && item.mediaType === 'video') {
@@ -1974,12 +2747,22 @@ const WATERFALL_JS: string = `
     shell.innerHTML = aggregateHtml;
     if (window.__aiphoneRefreshAggregateSearch) window.__aiphoneRefreshAggregateSearch();
   }
+  function stopStageMedia(root) {
+    if (!root || typeof root.querySelectorAll !== 'function') return;
+    var stages = root.querySelectorAll('.waterfall-reader-video-stage.is-playing');
+    for (var index = 0; index < stages.length; index += 1) {
+      var frame = stages[index].querySelector('.waterfall-reader-video-frame');
+      if (frame) frame.innerHTML = '';
+      stages[index].classList.remove('is-playing');
+    }
+    var playing = root.querySelectorAll('.is-playing');
+    for (index = 0; index < playing.length; index += 1) {
+      playing[index].classList.remove('is-playing');
+    }
+  }
   function stopReaderMedia() {
-    if (!reader || typeof reader.querySelector !== 'function') return;
-    var frame = reader.querySelector('.waterfall-reader-video-frame');
-    if (frame) frame.innerHTML = '';
-    var playing = reader.querySelector('.is-playing');
-    if (playing && playing.classList) playing.classList.remove('is-playing');
+    stopStageMedia(reader);
+    if (reader && reader.classList) reader.classList.remove('is-playing');
   }
   function visibleCardIndex() {
     if (!track) return 0;
@@ -1994,28 +2777,22 @@ const WATERFALL_JS: string = `
         bestIndex = index;
       }
     }
-    if (presentedIndex >= 0 && presentedIndex < cardMetrics.length) {
-      if (Math.abs(bestIndex - presentedIndex) > 1) {
-        bestIndex = bestIndex > presentedIndex ? presentedIndex + 1 : presentedIndex - 1;
-      }
-      var currentTop = cardMetrics[presentedIndex].snapTop;
-      var next = cardMetrics[presentedIndex + 1];
-      var previous = cardMetrics[presentedIndex - 1];
-      if (next && track.scrollTop >= currentTop + (next.snapTop - currentTop) * 0.32) {
-        bestIndex = presentedIndex + 1;
-      } else if (previous && track.scrollTop <= previous.snapTop + (currentTop - previous.snapTop) * 0.32) {
-        bestIndex = presentedIndex - 1;
-      } else {
-        bestIndex = presentedIndex;
-      }
-    }
-    if (pageAnchorIndex >= 0) {
-      var lo = Math.max(0, pageAnchorIndex - 1);
-      var hi = Math.min(cardMetrics.length - 1, pageAnchorIndex + 1);
-      if (bestIndex < lo) bestIndex = lo;
-      if (bestIndex > hi) bestIndex = hi;
-    }
     return bestIndex;
+  }
+  function snapPadding() {
+    if (!track || typeof window.getComputedStyle !== 'function') return { top: 0, bottom: 0 };
+    var style = window.getComputedStyle(track);
+    return {
+      top: parseFloat(style.scrollPaddingTop) || parseFloat(style.paddingTop) || 0,
+      bottom: parseFloat(style.scrollPaddingBottom) || parseFloat(style.paddingBottom) || 0
+    };
+  }
+  function snapTopForNode(node, index, viewportHeight, padding) {
+    var top = typeof node.offsetTop === 'number' ? node.offsetTop : index * viewportHeight;
+    var height = typeof node.offsetHeight === 'number' ? node.offsetHeight : viewportHeight;
+    var inset = padding || snapPadding();
+    var snapport = Math.max(1, viewportHeight - inset.top - inset.bottom);
+    return Math.max(0, top + height / 2 - inset.top - snapport / 2);
   }
   function refreshCardMetrics() {
     if (!track || typeof track.querySelectorAll !== 'function') return;
@@ -2024,12 +2801,11 @@ const WATERFALL_JS: string = `
     metricsDirty = false;
     var nodes = track.querySelectorAll('[data-waterfall-id]');
     var viewportHeight = Math.max(1, track.clientHeight);
+    var padding = snapPadding();
     cardMetrics = [];
     for (var index = 0; index < nodes.length; index += 1) {
       var node = nodes[index];
-      var top = typeof node.offsetTop === 'number' ? node.offsetTop : index * viewportHeight;
-      var height = typeof node.offsetHeight === 'number' && node.offsetHeight > 0 ? node.offsetHeight : viewportHeight;
-      cardMetrics.push({ node: node, snapTop: Math.max(0, top - Math.max(0, viewportHeight - height) / 2) });
+      cardMetrics.push({ node: node, snapTop: snapTopForNode(node, index, viewportHeight, padding) });
     }
   }
   function updateCardPresentation(force) {
@@ -2038,6 +2814,9 @@ const WATERFALL_JS: string = `
     if (!nodes || nodes.length === 0) return 0;
     if (cardMetrics.length === 0) refreshCardMetrics();
     else if (cardMetrics.length !== nodes.length) syncCardsAfterPaint();
+    if (mode === 'reading' || mode === 'reader_closing' || mode === 'source_preferences') {
+      return presentedIndex < 0 ? 0 : presentedIndex;
+    }
     var activeIndex = visibleCardIndex();
     if (!force && activeIndex === presentedIndex) return activeIndex;
     if (activeIndex > nodes.length - 1) activeIndex = nodes.length - 1;
@@ -2121,34 +2900,43 @@ const WATERFALL_JS: string = `
   }
   function scrollTopForCard(index) {
     if (!track || index < 0) return 0;
+    if (cardMetrics.length === 0) refreshCardMetrics();
+    if (index < cardMetrics.length) return cardMetrics[index].snapTop;
     var nodes = typeof track.querySelectorAll === 'function' ? track.querySelectorAll('[data-waterfall-id]') : [];
     var node = nodes && nodes[index];
-    if (!node || typeof node.offsetTop !== 'number') return index * track.clientHeight;
-    var height = typeof node.offsetHeight === 'number' && node.offsetHeight > 0 ? node.offsetHeight : track.clientHeight;
-    return Math.max(0, node.offsetTop - Math.max(0, track.clientHeight - height) / 2);
+    if (!node) return index * track.clientHeight;
+    return snapTopForNode(node, index, Math.max(1, track.clientHeight));
   }
-  function clampPagingScroll() {
-    if (pageAnchorIndex < 0 || !track || cardMetrics.length === 0) return;
-    var lo = Math.max(0, pageAnchorIndex - 1);
-    var hi = Math.min(cardMetrics.length - 1, pageAnchorIndex + 1);
-    var minTop = cardMetrics[lo].snapTop;
-    var maxTop = cardMetrics[hi].snapTop;
-    if (track.scrollTop <= maxTop && track.scrollTop >= minTop) return;
-    pagingClamp = true;
-    track.scrollTop = track.scrollTop > maxTop ? maxTop : minTop;
-    pagingClamp = false;
+  function realignPresentedCard(snapToCard) {
+    var run = function () {
+      if (cardMetrics.length === 0) refreshCardMetrics();
+      if (snapToCard && track) track.scrollTop = scrollTopForCard(visibleCardIndex());
+      updateCardPresentation(true);
+    };
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(run);
+    else run();
   }
-  function snapPagingCard() {
-    if (pageAnchorIndex < 0 || !track || mode !== 'discovering') return;
-    if (cardMetrics.length === 0) refreshCardMetrics();
-    var index = visibleCardIndex();
-    var top = scrollTopForCard(index);
-    if (Math.abs(track.scrollTop - top) > 1) {
-      pagingClamp = true;
-      track.scrollTop = top;
-      pagingClamp = false;
+  function freezeFeedMotion() {
+    pageAnchorIndex = -1;
+    scrollActive = false;
+    if (payloadSettleTimer !== null) clearTimeout(payloadSettleTimer);
+    payloadSettleTimer = null;
+    if (presentationFrame !== null && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(presentationFrame);
     }
-    updateCardPresentation(true);
+    presentationFrame = null;
+  }
+  function scheduleIdleFlush(enabledOverride, forceRender) {
+    if (payloadSettleTimer !== null) clearTimeout(payloadSettleTimer);
+    payloadSettleTimer = setTimeout(function () {
+      payloadSettleTimer = null;
+      if (mode !== 'discovering' || scrollActive || interactionActive) {
+        if (pendingPayload || forceRender) scheduleIdleFlush(enabledOverride, forceRender);
+        return;
+      }
+      var flushed = flushPendingPayload(enabledOverride);
+      if (forceRender && !flushed) render();
+    }, 240);
   }
   function beginPagingGesture() {
     if (mode !== 'discovering') return;
@@ -2202,7 +2990,6 @@ const WATERFALL_JS: string = `
   }
   function mergePayload(payload) {
     if (!payload) return;
-    var oldCurrentId = state ? text(state.currentId) : '';
     var oldEnabledSources = state && state.enabledSources ? state.enabledSources.join('|') : '';
     if (typeof payload.aggregateHtml === 'string' && payload.aggregateHtml !== aggregateHtml) {
       aggregateHtml = payload.aggregateHtml;
@@ -2210,10 +2997,24 @@ const WATERFALL_JS: string = `
         applyDeferredAggregateHtml();
       }
     }
+    rememberUnavailableSourceStates(state && state.sources);
+    rememberUnavailableSourceStates(payload.sources);
     state = payload;
-    enabledSources = payload.enabledSources ? payload.enabledSources.slice() : [];
+    syncMetricSlots(payload);
+    var payloadSources = payload.enabledSources ? payload.enabledSources.slice() : [];
+    if (committedPreferenceSources) {
+      if (payloadSources.join('|') === committedPreferenceSources.join('|')) committedPreferenceSources = null;
+      else payloadSources = committedPreferenceSources.slice();
+    }
+    enabledSources = payloadSources;
     if (oldEnabledSources !== enabledSources.join('|')) alignToCurrent = true;
-    if (!oldCurrentId || oldCurrentId !== text(payload.currentId)) advancePending = false;
+    advancePending = false;
+  }
+  function syncReaderComments() {
+    if (mode !== 'reading' || !readerCandidateId || !reader || typeof reader.querySelector !== 'function') return;
+    var slot = reader.querySelector('[data-waterfall-comments-slot]');
+    var item = candidateById(readerCandidateId);
+    if (slot && item) slot.innerHTML = commentsMarkup(item);
   }
   function postSourceSelection() {
     if (!state || !window.AIPhoneHome || typeof window.AIPhoneHome.postAction !== 'function') return;
@@ -2228,22 +3029,38 @@ const WATERFALL_JS: string = `
     var currentId = state ? text(state.currentId) : '';
     var currentIndex = items.findIndex(function (item) { return text(item.id) === currentId; });
     var visibleIndex = typeof presentedIndex === 'number' ? presentedIndex : visibleCardIndex();
+    var visibleItem = visibleIndex >= 0 && visibleIndex < items.length ? items[visibleIndex] : null;
     if (mode !== 'discovering' || advancePending || currentIndex < 0 || visibleIndex <= currentIndex ||
       !window.AIPhoneHome || typeof window.AIPhoneHome.postAction !== 'function') return;
     pauseCurrentBehavior(true);
     advancePending = true;
     window.AIPhoneHome.postAction(JSON.stringify({
       id: 'waterfall.feed.advance', label: '下一条', prompt: '', variant: 'secondary', kind: 'client',
-      args: { surfaceId: state.surfaceId || '', currentId: currentId }
+      args: {
+        surfaceId: state.surfaceId || '', currentId: currentId,
+        visibleId: text(visibleItem && visibleItem.id)
+      }
     }));
   }
   function closeReader() {
     if (!reader || reader.classList.contains('closing')) return;
+    freezeFeedMotion();
     destroyInlinePlayer();
     reader.classList.add('closing');
+    readerReturnScrolled = false;
     ignoreNextFeedOpen = true;
     mode = 'reader_closing';
-    stopReaderMedia();
+    if (overlay) overlay.classList.remove('reading');
+    var completedReturnMode = readerReturnMode;
+    if (directDiscovery && completedReturnMode !== 'collection') setFullscreen(false);
+    if (playerCleanupTimer !== null) clearTimeout(playerCleanupTimer);
+    playerCleanupTimer = setTimeout(function () {
+      playerCleanupTimer = null;
+      stopReaderMedia();
+      if (reader && reader.classList.contains('closing') && reader.style) {
+        reader.style.pointerEvents = 'none';
+      }
+    }, 0);
     var completedCandidateId = readerCandidateId;
     if (readerCandidateId && readerStartedAt > 0) {
       readerDurationMs += Math.max(0, Date.now() - readerStartedAt);
@@ -2256,17 +3073,29 @@ const WATERFALL_JS: string = `
     readerCloseTimer = setTimeout(function () {
       reader.classList.remove('active');
       reader.classList.remove('closing');
-      if (overlay) overlay.classList.remove('reading');
+      if (reader.style) reader.style.pointerEvents = '';
       readerCloseTimer = null;
-      if (track) {
-        if (track.scrollTop !== readerFeedScrollTop) track.scrollTop = readerFeedScrollTop;
+      mode = completedReturnMode;
+      if (completedReturnMode === 'collection') {
+        if (pendingPayload) {
+          mergePayload(pendingPayload);
+          pendingPayload = null;
+        }
+        renderCollection();
+      } else if (!readerReturnScrolled && track && track.scrollTop !== readerFeedScrollTop) {
+        track.scrollTop = readerFeedScrollTop;
       }
-      mode = 'discovering';
-      if (directDiscovery) setFullscreen(false);
-      if (pendingPayload) {
-        settleInteraction();
+      if (completedReturnMode !== 'collection' && pendingPayload) {
+        if (interactionActive || scrollActive) settleInteraction();
+        else {
+          payloadSettleTimer = setTimeout(function () {
+            payloadSettleTimer = null;
+            if (interactionActive || scrollActive) settleInteraction();
+            else flushPendingPayload();
+          }, 0);
+        }
       }
-      resumeCurrentBehavior();
+      if (completedReturnMode === 'discovering') resumeCurrentBehavior();
       if (completedCandidateId && completedDurationMs >= 8000) {
         postBehavior(completedCandidateId, 'read_complete', completedDurationMs);
       }
@@ -2274,12 +3103,17 @@ const WATERFALL_JS: string = `
   }
   function openReader(id) {
     if (!reader || !track) return;
-    var item = candidates(state).find(function (candidate) { return text(candidate.id) === text(id); });
-    if (!item || ${WATERFALL_SOURCE_ONLY_SOURCES_JSON}.indexOf(item.source) >= 0) return;
+    var item = candidateById(id);
+    if (!item) return;
+    readerReturnMode = mode === 'collection' ? 'collection' : 'discovering';
+    stopStageMedia(track);
     destroyInlinePlayer();
     var format = candidateFormat(item);
     var summary = cleanSummary(item.summary) || cleanSummary(item.reason);
     var title = text(item.title).trim() || sourceLabel(item.source) + ' 内容';
+    var requestComments = waterfallCommentsSupported(item) && item.commentLoadState === undefined &&
+      (!Array.isArray(item.comments) || item.comments.length === 0);
+    if (requestComments) item.commentLoadState = 'loading';
     var readerClass = format === 'image_text' ? 'waterfall-reader--image-text' :
       (item.mediaType === 'video' ? 'waterfall-reader--video waterfall-reader--' +
         (format === 'portrait_video' ? 'portrait' : 'landscape') : 'waterfall-reader--text');
@@ -2289,36 +3123,41 @@ const WATERFALL_JS: string = `
     advanceTimer = null;
     if (playerCleanupTimer !== null) clearTimeout(playerCleanupTimer);
     playerCleanupTimer = null;
-    reader.classList.remove('active');
-    reader.classList.remove('closing');
+    if (overlay) overlay.classList.add('reading');
+    freezeFeedMotion();
+    if (reader.classList.contains('closing')) {
+      reader.classList.remove('closing');
+    }
+    if (reader.style) reader.style.pointerEvents = '';
     var videoStage = item.mediaType === 'video' ? videoStageMarkup(item, title,
       'waterfall-reader-media waterfall-reader-media--video', 'waterfall-reader-video-poster') : '';
     var media = format === 'image_text' ?
       '<div class="waterfall-reader-media"><img src="' + escapeHtml(item.coverUrl) + '" alt="' +
-      escapeHtml(title) + '" referrerpolicy="no-referrer" onerror="this.parentElement.hidden=true" /></div>' :
+      escapeHtml(title) + '" referrerpolicy="no-referrer" onerror="this.hidden=true" /></div>' :
       (item.mediaType === 'video' ? videoStage : '');
-    var sourceAction = item.url ? '<a class="waterfall-source-action" href="' + escapeHtml(item.url) +
-      '" rel="noopener noreferrer" aria-label="查看来源">' + uiIcon('external') + '</a>' : '<span></span>';
     var context = '<div class="waterfall-reader-context"><div class="waterfall-reader-source">' +
-      sourceLogoMarkup(item.source) + '<span>' + escapeHtml(sourceLabel(item.source)) + '</span></div><span>' +
+      sourceLogoMarkup(item.source) + '<span>' + escapeHtml(cardSourceLabel(item)) + '</span>' +
+      authorMarkup(item) + '</div><span>' +
       escapeHtml(publishedLabel(item.publishedAt)) + '</span></div>';
-    var copy = context + '<h2>' + escapeHtml(title) + '</h2>' +
-      (summary ? '<p>' + escapeHtml(summary) + '</p>' : '');
-    var content = item.mediaType === 'video' ? '<section class="waterfall-reader-video-card">' + media +
-      '<div class="waterfall-reader-video-copy">' + copy + '</div></section>' : media + copy;
+    var copy = '<div class="waterfall-reader-copy">' + context + '<h2>' + escapeHtml(title) + '</h2>' +
+      '<div data-waterfall-reader-metrics>' + metricsMarkup(item, true) + '</div>' +
+      readerParagraphs(summary) +
+      '<div data-waterfall-comments-slot>' + commentsMarkup(item) + '</div>' + feedbackBarMarkup(item) + '</div>';
+    var content = media + copy;
     var nextId = text(item.id);
     if (readerMountedId !== nextId) {
       reader.innerHTML = '<div class="waterfall-reader-head">' +
         '<button type="button" class="waterfall-chrome-btn" data-waterfall-reader-close ' +
         'aria-label="返回发现流">' + uiIcon('back') +
         '<span class="waterfall-reader-head-label">返回</span></button>' +
-        '<strong class="waterfall-reader-head-title">详情</strong>' + sourceAction +
+        '<strong class="waterfall-reader-head-title">详情</strong><span></span>' +
         '</div><article class="waterfall-reader-body"><div class="waterfall-reader-layout ' +
         readerClass + '">' + content + '</div></article>';
       readerMountedId = nextId;
     } else if (typeof reader.querySelector === 'function') {
       var readerBody = reader.querySelector('.waterfall-reader-body');
       if (readerBody) readerBody.scrollTop = 0;
+      syncCardActionControls(item.id);
     }
     pauseCurrentBehavior(false);
     readerFeedScrollTop = track.scrollTop;
@@ -2326,10 +3165,14 @@ const WATERFALL_JS: string = `
     readerStartedAt = Date.now();
     readerDurationMs = 0;
     mode = 'reading';
-    if (directDiscovery) setFullscreen(true);
+    if (directDiscovery && readerReturnMode !== 'collection') setFullscreen(true);
     ignoreNextFeedOpen = false;
-    if (overlay) overlay.classList.add('reading');
-    reader.classList.add('active');
+    var reveal = function () {
+      if (mode === 'reading' && !reader.classList.contains('active')) reader.classList.add('active');
+    };
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(reveal);
+    else reveal();
+    if (requestComments) setTimeout(function () { postCommentsLoad(nextId); }, 0);
   }
   function toggleVideoFullscreen(videoCard) {
     if (!videoCard) return;
@@ -2361,12 +3204,10 @@ const WATERFALL_JS: string = `
     var rawSummary = cleanSummary(item.summary);
     var summary = rawSummary || cleanSummary(item.reason);
     var reasonText = rawSummary && cleanSummary(item.reason) !== rawSummary ? cleanSummary(item.reason) : '';
-    var link = item.url ? '<a class="waterfall-source-action" href="' + escapeHtml(item.url) +
-      '" rel="noopener noreferrer" aria-label="查看来源">' + uiIcon('external') + '</a>' : '';
     var title = text(item.title).trim() || sourceLabel(item.source) + ' 内容';
     var cardClass = cardClassName(item);
     var meta = '<div class="waterfall-cinema-meta">' + sourceLogoMarkup(item.source) + '<span>' +
-      escapeHtml(sourceLabel(item.source)) + '</span></div>';
+      escapeHtml(cardSourceLabel(item)) + '</span>' + authorMarkup(item) + '</div>';
     var twitchEmbedUrl = item.source === 'twitch' ? twitchEmbedForUrl(text(item.url)) : '';
     var inlinePlay = twitchEmbedUrl ? '<button type="button" class="waterfall-inline-play" data-waterfall-inline-play="' +
       escapeHtml(item.id) + '" aria-label="播放 Twitch 直播">播放</button>' : '';
@@ -2386,17 +3227,177 @@ const WATERFALL_JS: string = `
       ((cover || inlineControls) ? '<div class="waterfall-cinema-stage">' + cover + inlineControls + '</div>' : '');
     var reason = reasonText ? '<span class="waterfall-recommendation" aria-label="推荐理由" data-waterfall-reason>' +
       escapeHtml(reasonText) + '</span>' : '<span></span>';
-    var openAttributes = sourceOnly ? '' : ' role="button" tabindex="0" data-waterfall-open="' +
-      escapeHtml(item.id) + '"';
+    var openAttr = ' data-waterfall-open="' + escapeHtml(item.id) + '"';
+    var shellAttrs = item.mediaType === 'video' || sourceOnly ? '' : ' role="button" tabindex="0"' + openAttr;
+    var copyAttrs = item.mediaType === 'video' || sourceOnly ? ' role="button" tabindex="0"' + openAttr : '';
     var shellClass = 'waterfall-card-shell' + (sourceOnly ? '' : ' waterfall-card-shell--interactive');
     if (twitchEmbedUrl) cardClass += ' waterfall-card--inline-player waterfall-card--inline-twitch';
     return '<article class="' + cardClass + '" data-waterfall-id="' + escapeHtml(item.id) + '" data-waterfall-media-type="' +
-      escapeHtml(item.mediaType) + '"><div class="' + shellClass + '"' + openAttributes + '>' +
-      stage + '<div class="waterfall-cinema-copy">' + meta + '<h2>' + escapeHtml(title) + '</h2>' +
+      escapeHtml(item.mediaType) + '"><div class="' + shellClass + '"' + shellAttrs + '>' + stage +
+      '<div class="waterfall-cinema-copy"' + copyAttrs + '>' + meta +
+      '<h2>' + escapeHtml(title) + '</h2>' +
       (summary ? '<p>' + escapeHtml(summary) + '</p>' : '') +
-      (item.publishedAt ? '<div class="waterfall-meta">' + escapeHtml(publishedLabel(item.publishedAt)) + '</div>' : '') +
-      '<div class="waterfall-copy-actions">' + reason + '<div class="waterfall-action-group">' +
-      link + '</div></div></div></div></article>';
+      (item.publishedAt ?
+        '<div class="waterfall-meta">' + escapeHtml(publishedLabel(item.publishedAt)) + '</div>' : '') +
+      '<div data-waterfall-card-metrics>' + metricsMarkup(item, false) + '</div>' +
+      '<div class="waterfall-copy-actions">' + reason + feedbackBarMarkup(item) +
+      '</div></div></div></article>';
+  }
+  function savedTimeLabel(value) {
+    var elapsed = Math.max(0, Date.now() - Number(value || 0));
+    if (elapsed < 3600000) return '刚刚收藏';
+    if (elapsed < 86400000) return Math.max(1, Math.floor(elapsed / 3600000)) + ' 小时前';
+    return Math.max(1, Math.floor(elapsed / 86400000)) + ' 天前';
+  }
+  function renderCollection() {
+    if (!collection || !state) return;
+    var saved = Array.isArray(state.savedCards) ? state.savedCards.slice() : [];
+    var sources = [];
+    saved.forEach(function (item) {
+      if (sources.indexOf(item.source) < 0) sources.push(item.source);
+    });
+    if (collectionSource !== 'all' && sources.indexOf(collectionSource) < 0) collectionSource = 'all';
+    var query = collectionQuery.trim().toLowerCase();
+    var visible = saved.filter(function (item) {
+      if (collectionSource !== 'all' && item.source !== collectionSource) return false;
+      if (!query) return true;
+      return [item.title, item.summary, item.authorName, sourceLabel(item.source)].some(function (value) {
+        return text(value).toLowerCase().indexOf(query) >= 0;
+      });
+    }).sort(function (left, right) {
+      return collectionSort === 'oldest' ? Number(left.savedAt) - Number(right.savedAt) :
+        Number(right.savedAt) - Number(left.savedAt);
+    });
+    var search = collectionSearchOpen ? '<div class="waterfall-collection-search"><input type="search" ' +
+      'data-waterfall-collection-query value="' + escapeHtml(collectionQuery) +
+      '" placeholder="搜索收藏" aria-label="搜索收藏" /></div>' : '';
+    var chips = '<button type="button" class="' + (collectionSource === 'all' ? 'is-selected' : '') +
+      '" data-waterfall-collection-source="all">全部</button>' + sources.map(function (source) {
+        return '<button type="button" class="' + (collectionSource === source ? 'is-selected' : '') +
+          '" data-waterfall-collection-source="' + escapeHtml(source) + '">' +
+          escapeHtml(sourceLabel(source)) + '</button>';
+      }).join('');
+    var rows = visible.map(function (item) {
+      var cover = item.coverUrl ? '<img src="' + escapeHtml(item.coverUrl) + '" alt="" loading="lazy" ' +
+        'referrerpolicy="no-referrer" onerror="this.hidden=true" />' : sourceLogoMarkup(item.source);
+      return '<article class="waterfall-collection-row" role="button" tabindex="0" ' +
+        'data-waterfall-collection-row="' + escapeHtml(item.id) + '"><div class="waterfall-collection-cover">' +
+        cover + '</div><div class="waterfall-collection-copy"><div class="waterfall-collection-meta">' +
+        escapeHtml(cardSourceLabel(item)) + (item.authorName ? ' · ' + escapeHtml(item.authorName) : '') +
+        '</div><h3>' + escapeHtml(text(item.title).trim() || sourceLabel(item.source) + ' 内容') +
+        '</h3><span>' + escapeHtml(savedTimeLabel(item.savedAt)) + '</span></div>' +
+        cardActionButton(item, 'save', '取消收藏', 'bookmark') + '</article>';
+    }).join('');
+    var empty = saved.length === 0 ? '<div class="waterfall-collection-empty">还没有收藏</div>' :
+      (visible.length === 0 ? '<div class="waterfall-collection-empty">没有匹配的收藏</div>' : '');
+    collection.innerHTML = '<div class="waterfall-collection-head"><button type="button" ' +
+      'data-waterfall-collection-close aria-label="返回发现流">' + uiIcon('back') +
+      '</button><strong>收藏</strong><button type="button" data-waterfall-collection-search ' +
+      'aria-label="搜索收藏">' + uiIcon('search') + '</button></div>' + search +
+      '<div class="waterfall-collection-filters"><div class="waterfall-collection-sources">' + chips +
+      '</div><button type="button" class="waterfall-collection-sort" data-waterfall-collection-sort>' +
+      (collectionSort === 'recent' ? '最新' : '最早') + '</button></div><div class="waterfall-collection-list">' +
+      rows + empty + '</div>';
+  }
+  function openCollection() {
+    if (!collection || mode !== 'discovering') return;
+    pauseCurrentBehavior(false);
+    destroyInlinePlayer();
+    collectionFeedScrollTop = track ? track.scrollTop : 0;
+    freezeFeedMotion();
+    renderCollection();
+    if (collectionCloseTimer !== null) clearTimeout(collectionCloseTimer);
+    collectionCloseTimer = null;
+    collection.classList.add('active');
+    if (overlay) overlay.classList.add('collection-open');
+    mode = 'collection';
+    if (directDiscovery) setFullscreen(true);
+  }
+  function closeCollection() {
+    if (!collection || mode !== 'collection') return;
+    collection.classList.remove('active');
+    mode = 'collection_closing';
+    if (directDiscovery) setFullscreen(false);
+    if (collectionCloseTimer !== null) clearTimeout(collectionCloseTimer);
+    collectionCloseTimer = setTimeout(function () {
+      collectionCloseTimer = null;
+      if (overlay) overlay.classList.remove('collection-open');
+      mode = 'discovering';
+      if (track && track.scrollTop !== collectionFeedScrollTop) track.scrollTop = collectionFeedScrollTop;
+      realignPresentedCard();
+      if (!flushPendingPayload()) resumeCurrentBehavior();
+    }, 160);
+  }
+  function showCollectionUndo() {
+    if (!toast || !collectionUndoCard) return;
+    toast.innerHTML = '<span>已取消收藏</span><button type="button" data-waterfall-collection-undo>撤销</button>';
+    toast.classList.add('active');
+    toast.classList.add('actionable');
+    if (toastTimer !== null) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      toast.classList.remove('active');
+      toast.classList.remove('actionable');
+      collectionUndoCard = null;
+      toastTimer = null;
+    }, 3200);
+  }
+  function undoCollectionRemoval() {
+    if (!collectionUndoCard) return;
+    var card = collectionUndoCard;
+    collectionUndoCard = null;
+    setLocalCardAction(card, 'save', true);
+    var restored = state.savedCards.find(function (item) { return text(item.id) === text(card.id); });
+    if (restored) restored.savedAt = card.savedAt;
+    postCardAction(text(card.id), 'save', true, true);
+    toast.classList.remove('active');
+    toast.classList.remove('actionable');
+    renderCollection();
+  }
+  function waterfallSourceState(sourceName, values) {
+    var sources = Array.isArray(values) ? values : [];
+    return sources.find(function (source) { return text(source.source) === sourceName; }) || null;
+  }
+  function sourceStateIsUnavailable(source) {
+    if (!source) return false;
+    var message = text(source.message).toLowerCase();
+    return source.phase === 'needs_auth' ||
+      /禁用|不支持|未配置|缺少.*(?:凭据|密钥|client)|unsupported|not configured|missing.*(?:credential|secret|client)/i.test(message);
+  }
+  function rememberUnavailableSourceStates(values) {
+    (Array.isArray(values) ? values : []).forEach(function (source) {
+      var sourceName = text(source.source);
+      if (!sourceName) return;
+      if (sourceStateIsUnavailable(source)) knownUnavailableSourceStates[sourceName] = source;
+      else delete knownUnavailableSourceStates[sourceName];
+    });
+  }
+  function sourceIsUnavailable(sourceName) {
+    var source = waterfallSourceState(sourceName, state && state.sources) || knownUnavailableSourceStates[sourceName];
+    return sourceStateIsUnavailable(source);
+  }
+  function sourceUnavailableReason(sourceName) {
+    var source = waterfallSourceState(sourceName, state && state.sources) || knownUnavailableSourceStates[sourceName];
+    var message = text(source && source.message).toLowerCase();
+    if (source && source.phase === 'needs_auth') return '需要授权';
+    if (/缺少|missing/.test(message)) return '缺少服务凭据';
+    return '暂不可用';
+  }
+  function renderSourceConvergence(values, title) {
+    var sources = (Array.isArray(values) ? values : []).filter(function (source) {
+      return enabledSources.indexOf(text(source.source)) >= 0;
+    });
+    var ready = sources.filter(function (source) {
+      return source.phase !== 'loading' && source.inFlight !== true;
+    }).length;
+    var icons = sources.map(function (source) {
+      var phase = source.phase === 'loading' || source.inFlight === true ? 'is-loading' :
+        (source.phase === 'error' || source.phase === 'needs_auth' ? 'is-failed' : 'is-ready');
+      return '<span class="waterfall-convergence-source ' + phase + '" aria-label="' +
+        escapeHtml(sourceLabel(source.source)) + '">' + sourceLogoMarkup(source.source) + '</span>';
+    }).join('');
+    return '<div class="waterfall-convergence"><div class="waterfall-convergence-orbit">' + icons +
+      '</div><div class="waterfall-convergence-copy"><strong>' + escapeHtml(title) +
+      '</strong><span>' + ready + ' / ' + sources.length + ' 个来源已响应</span></div></div>';
   }
   function renderPreferences() {
     if (!preferences || !state) return;
@@ -2405,17 +3406,30 @@ const WATERFALL_JS: string = `
     if (preferenceApplyTimer !== null) clearTimeout(preferenceApplyTimer);
     preferenceApplyTimer = null;
     preferenceBaseline = enabledSources.join('|');
-    if (!preferences.innerHTML) {
+    enabledSources = enabledSources.filter(function (sourceName) { return !sourceIsUnavailable(sourceName); });
+    var nextStatusKey = sourceNames.map(function (sourceName) {
+      return sourceName + ':' + (sourceIsUnavailable(sourceName) ? sourceUnavailableReason(sourceName) : 'ready');
+    }).join('|');
+    if (!preferences.innerHTML || preferenceStatusKey !== nextStatusKey) {
+      preferenceStatusKey = nextStatusKey;
       preferences.innerHTML = '<div class="waterfall-toolbar">' +
         '<button type="button" data-waterfall-close-preferences ' +
         'aria-label="返回发现流">' + uiIcon('back') + '</button><b>内容来源</b>' +
+        '<div class="waterfall-source-bulk" role="group" aria-label="批量选择来源">' +
+        '<button type="button" data-waterfall-sources-all>全选</button>' +
+        '<button type="button" data-waterfall-sources-none>全不选</button></div>' +
         '<button type="button" data-waterfall-apply-preferences>' +
         '完成</button></div>' +
         '<div class="waterfall-source-grid">' + sourceNames.map(function (sourceName) {
+          var unavailable = sourceIsUnavailable(sourceName);
           var checked = enabledSources.indexOf(sourceName) >= 0 ? ' checked' : '';
-          return '<label>' + sourceLogoMarkup(sourceName) + '<span class="waterfall-source-name">' +
-            escapeHtml(sourceLabel(sourceName)) + '</span><input type="checkbox" data-waterfall-source="' +
-            escapeHtml(sourceName) + '"' + checked + ' /></label>';
+          return '<label' + (unavailable ? ' class="is-unavailable"' : '') + '>' +
+            sourceLogoMarkup(sourceName) + '<span class="waterfall-source-copy"><span class="waterfall-source-name">' +
+            escapeHtml(sourceLabel(sourceName)) + '</span>' +
+            (unavailable ? '<small class="waterfall-source-reason">' +
+              escapeHtml(sourceUnavailableReason(sourceName)) + '</small>' : '') +
+            '</span><input type="checkbox" data-waterfall-source="' + escapeHtml(sourceName) + '"' + checked +
+            (unavailable ? ' disabled' : '') + ' /></label>';
         }).join('') + '</div>';
       preferences.querySelectorAll('[data-waterfall-source]').forEach(function (input) {
         input.addEventListener('change', function () {
@@ -2431,6 +3445,8 @@ const WATERFALL_JS: string = `
     }
     preferences.classList.add('active');
     if (overlay) overlay.classList.add('sheet-open');
+    if (track) preferencesFeedScrollTop = track.scrollTop;
+    freezeFeedMotion();
     mode = 'source_preferences';
     if (directDiscovery) setFullscreen(true);
   }
@@ -2440,20 +3456,27 @@ const WATERFALL_JS: string = `
     var changed = preferenceBaseline !== enabledSources.join('|');
     var selectedSources = enabledSources.slice();
     preferences.classList.remove('active');
-    mode = 'source_preferences_closing';
+    if (overlay) overlay.classList.remove('sheet-open');
+    mode = 'discovering';
+    if (track && track.scrollTop !== preferencesFeedScrollTop) {
+      track.scrollTop = preferencesFeedScrollTop;
+    }
+    enabledSources = selectedSources;
+    if (changed) committedPreferenceSources = selectedSources.slice();
+    if (changed) preserveLoadedCardOrder = false;
+    interactionActive = false;
+    scrollActive = false;
+    pageAnchorIndex = -1;
     if (preferenceApplyTimer !== null) clearTimeout(preferenceApplyTimer);
-    preferenceApplyTimer = setTimeout(function () {
-      preferenceApplyTimer = null;
-      if (overlay) overlay.classList.remove('sheet-open');
-      mode = 'discovering';
-      if (directDiscovery) setFullscreen(false);
-      var flushed = flushPendingPayload(selectedSources);
-      enabledSources = selectedSources;
-      if (changed) {
-        postSourceSelection();
-        if (!flushed) render();
-      }
-    }, 140);
+    preferenceApplyTimer = null;
+    if (changed) {
+      if (!flushPendingPayload(selectedSources)) render();
+      cardMetrics = [];
+    }
+    realignPresentedCard(changed);
+    if (changed) postSourceSelection();
+    if (pendingPayload) scheduleIdleFlush(selectedSources, false);
+    if (directDiscovery) setFullscreen(false);
   }
   function render() {
     if (!track || !state) return false;
@@ -2470,7 +3493,7 @@ const WATERFALL_JS: string = `
     if (enabledSources.length > 0 && items.length === 0) {
       status = state.exhausted ? '<div class="waterfall-status waterfall-status--empty"><span>\\u672c\\u8f6e\\u5185\\u5bb9\\u5df2\\u7ed3\\u675f</span>' +
         '<button type="button" data-waterfall-empty-sources>调整内容来源</button></div>' :
-        (state.replenishing ? '<div class="waterfall-status">\\u6b63\\u5728\\u8865\\u5145\\u5185\\u5bb9</div>' :
+        (state.replenishing ? renderSourceConvergence(state.sources, directDiscovery ? '正在获取内容' : '正在补充内容') :
           '<div class="waterfall-status">\\u6b63\\u5728\\u6c47\\u96c6\\u5185\\u5bb9\\u2026</div>');
     }
     var tailStatus = items.length > 0 && state.exhausted ?
@@ -2480,29 +3503,72 @@ const WATERFALL_JS: string = `
     var nodes = typeof track.querySelectorAll === 'function' ?
       track.querySelectorAll('[data-waterfall-id]') : [];
     var domChanged = dropRenderedCardsMissingFrom(items, nodes);
+    if (domChanged && typeof track.querySelectorAll === 'function') {
+      nodes = track.querySelectorAll('[data-waterfall-id]');
+    }
+    var layoutChanged = domChanged;
+    var cardsReplaced = false;
     var canPatch = items.length >= renderedCards.length && renderedCards.length > 0 &&
       (domChanged || nodes.length === renderedCards.length);
-    for (var i = 0; canPatch && i < renderedCards.length; i++) {
-      if (text(items[i].id) !== renderedCards[i].id) canPatch = false;
+    var matched = 0;
+    for (var i = 0; canPatch && i < items.length; i++) {
+      if (matched < renderedCards.length && text(items[i].id) === renderedCards[matched].id) matched += 1;
     }
+    if (matched !== renderedCards.length) canPatch = false;
     if (canPatch) {
+      var renderedIndexById = {};
+      for (var r = 0; r < renderedCards.length; r++) renderedIndexById['$' + renderedCards[r].id] = r;
+      var nextRendered = [];
       for (var j = 0; j < items.length; j++) {
-        if (j < renderedCards.length) {
-          if (items[j].source === 'applepodcasts' && renderedCards[j].html !== cardHtml[j]) {
-            if (activeInlineCard === nodes[j] || text(items[j].id) === activeInlineCandidateId) {
-              destroyInlinePlayer(false);
-            }
-            nodes[j].outerHTML = cardHtml[j];
-            renderedCards[j].html = cardHtml[j];
-          }
+        var id = text(items[j].id);
+        if (renderedIndexById['$' + id] !== undefined) continue;
+        var beforeNode = null;
+        for (var k = j + 1; k < items.length; k++) {
+          var ahead = renderedIndexById['$' + text(items[k].id)];
+          if (ahead === undefined) continue;
+          beforeNode = nodes[ahead];
+          break;
+        }
+        if (beforeNode && typeof beforeNode.insertAdjacentHTML === 'function') {
+          beforeNode.insertAdjacentHTML('beforebegin', cardHtml[j]);
         } else {
           var tail = track.querySelector('.waterfall-tail-status');
           if (tail) tail.insertAdjacentHTML('beforebegin', cardHtml[j]);
           else track.insertAdjacentHTML('beforeend', cardHtml[j]);
-          renderedCards.push({ id: text(items[j].id), html: cardHtml[j] });
-          domChanged = true;
         }
+        layoutChanged = true;
+        domChanged = true;
       }
+      if (typeof track.querySelectorAll === 'function') {
+        nodes = track.querySelectorAll('[data-waterfall-id]');
+      }
+      var liveById = {};
+      for (r = 0; r < nodes.length; r++) {
+        var liveId = nodes[r] && typeof nodes[r].getAttribute === 'function' ?
+          nodes[r].getAttribute('data-waterfall-id') : '';
+        if (liveId) liveById['$' + liveId] = nodes[r];
+      }
+      for (j = 0; j < items.length; j++) {
+        id = text(items[j].id);
+        var oldIndex = renderedIndexById['$' + id];
+        if (oldIndex === undefined) {
+          nextRendered.push({ id: id, html: cardHtml[j] });
+          continue;
+        }
+        if (items[j].source === 'applepodcasts' && renderedCards[oldIndex].html !== cardHtml[j]) {
+          var oldNode = liveById['$' + id] || nodes[oldIndex];
+          if (activeInlineCard === oldNode || id === activeInlineCandidateId) {
+            destroyInlinePlayer(false);
+          }
+          if (oldNode && 'outerHTML' in oldNode) {
+            oldNode.outerHTML = cardHtml[j];
+            cardsReplaced = true;
+            domChanged = true;
+          }
+        }
+        nextRendered.push({ id: id, html: cardHtml[j] });
+      }
+      renderedCards = nextRendered;
     } else if (track.innerHTML !== nextHtml) {
       var keepInlineCandidate = activeInlineCandidateId && items.some(function (item) {
         return text(item.id) === activeInlineCandidateId;
@@ -2510,19 +3576,24 @@ const WATERFALL_JS: string = `
       destroyInlinePlayer(keepInlineCandidate ? false : true);
       track.innerHTML = nextHtml;
       domChanged = true;
+      layoutChanged = true;
       renderedCards = items.map(function (item, index) {
         return { id: text(item.id), html: cardHtml[index] };
       });
-      if (!renderedCurrentId && nextCurrentId) {
-        track.scrollTop = scrollTopForCard(Math.max(0, currentIndex));
-      } else {
-        track.scrollTop = Math.min(nextScrollTop, maxScrollTop);
+      if (mode !== 'reading' && mode !== 'reader_closing') {
+        if (!renderedCurrentId && nextCurrentId) {
+          track.scrollTop = scrollTopForCard(Math.max(0, currentIndex));
+        } else {
+          track.scrollTop = Math.min(nextScrollTop, maxScrollTop);
+        }
       }
     }
     if (alignToCurrent || alignToCandidateId) {
-      var alignId = alignToCandidateId || nextCurrentId;
-      var alignIndex = items.findIndex(function (item) { return text(item.id) === alignId; });
-      track.scrollTop = scrollTopForCard(alignIndex >= 0 ? alignIndex : Math.max(0, items.length - 1));
+      if (mode !== 'reading' && mode !== 'reader_closing') {
+        var alignId = alignToCandidateId || nextCurrentId;
+        var alignIndex = items.findIndex(function (item) { return text(item.id) === alignId; });
+        track.scrollTop = scrollTopForCard(alignIndex >= 0 ? alignIndex : Math.max(0, items.length - 1));
+      }
       alignToCurrent = false;
       alignToCandidateId = '';
     }
@@ -2536,7 +3607,11 @@ const WATERFALL_JS: string = `
       var sourceLogoHtml = items.length > 0 ? sourceLogoMarkup(items[0].source) : '';
       if (sourceControl.innerHTML !== sourceLogoHtml) sourceControl.innerHTML = sourceLogoHtml;
     }
-    if (domChanged) syncCardsAfterPaint();
+    if (cardsReplaced && !layoutChanged) {
+      cardMetrics = [];
+      refreshCardMetrics();
+      updateCardPresentation(true);
+    } else if (domChanged) syncCardsAfterPaint();
     else updateCardPresentation(false);
     syncActiveInlinePlayer();
     return domChanged;
@@ -2577,10 +3652,12 @@ const WATERFALL_JS: string = `
     if (payloadSettleTimer !== null) clearTimeout(payloadSettleTimer);
     payloadSettleTimer = setTimeout(function () {
       payloadSettleTimer = null;
+      var settledIndex = mode === 'discovering' ? updateCardPresentation(true) : presentedIndex;
       scrollActive = false;
       if (!interactionActive) pageAnchorIndex = -1;
       if (!interactionActive && mode !== 'reading' && mode !== 'reader_closing' &&
-        mode !== 'source_preferences' && mode !== 'source_preferences_closing') flushPendingPayload();
+        mode !== 'source_preferences' &&
+        !flushPendingPayload() && mode === 'discovering') scheduleAdvance(settledIndex);
     }, 96);
   }
   document.addEventListener('touchstart', function () {
@@ -2592,19 +3669,21 @@ const WATERFALL_JS: string = `
   }, { passive: true });
   document.addEventListener('touchend', function () {
     interactionActive = false;
-    snapPagingCard();
     if (scrollActive || pendingPayload || pageAnchorIndex >= 0) settleInteraction();
   }, { passive: true });
   document.addEventListener('touchcancel', function () {
     interactionActive = false;
-    snapPagingCard();
     if (scrollActive || pendingPayload || pageAnchorIndex >= 0) settleInteraction();
   }, { passive: true });
   track.addEventListener('scroll', function () {
-    if (pagingClamp) return;
+    if (mode === 'reader_closing') {
+      readerReturnScrolled = true;
+      scrollActive = true;
+      settleInteraction();
+      return;
+    }
     if (mode !== 'discovering') return;
     if (cardMetrics.length === 0) refreshCardMetrics();
-    clampPagingScroll();
     scrollActive = true;
     settleInteraction();
     if (presentationFrame !== null) return;
@@ -2612,20 +3691,18 @@ const WATERFALL_JS: string = `
       presentationFrame = window.requestAnimationFrame(function () {
         presentationFrame = null;
         if (metricsDirty) refreshMetricsAfterSettle();
-        scheduleAdvance(updateCardPresentation());
+        updateCardPresentation();
       });
       return;
     }
     if (metricsDirty) refreshMetricsAfterSettle();
-    scheduleAdvance(updateCardPresentation());
+    updateCardPresentation();
   });
   track.addEventListener('error', function (event) {
     var image = event.target;
     if (!image || !image.classList || !image.classList.contains('waterfall-media-cover') ||
       typeof image.closest !== 'function') return;
-    var stage = image.closest('.waterfall-cinema-stage');
-    if (stage) stage.hidden = true;
-    refreshMetricsAfterSettle();
+    image.hidden = true;
   }, true);
   track.addEventListener('ended', function (event) {
     var media = event.target;
@@ -2638,6 +3715,8 @@ const WATERFALL_JS: string = `
   bindFastTap(track, function (event) {
     var target = event.target;
     if (!target || typeof target.closest !== 'function') return false;
+    var cardAction = target.closest('[data-waterfall-card-action]');
+    if (cardAction) return handleCardAction(cardAction);
     var applePlay = target.closest('[data-waterfall-apple-play]');
     if (applePlay) {
       activateApplePodcast(applePlay);
@@ -2657,7 +3736,12 @@ const WATERFALL_JS: string = `
     var play = target.closest('[data-waterfall-video-play]');
     if (play) {
       playVideo(play);
-      return true;
+      return 'media';
+    }
+    var stage = target.closest('.waterfall-reader-video-stage');
+    if (stage) {
+      playVideo(stage);
+      return 'media';
     }
     var fullscreen = target.closest('[data-waterfall-video-fullscreen]');
     if (fullscreen) {
@@ -2688,6 +3772,7 @@ const WATERFALL_JS: string = `
     var target = event.target;
     if (!target || typeof target.closest !== 'function' ||
       target.closest('.waterfall-source-action') || target.closest('.waterfall-media-frame') ||
+      target.closest('[data-waterfall-card-action]') ||
       target.closest('[data-waterfall-video-fullscreen]')) return;
     var open = target.closest('[data-waterfall-open]');
     if (!open) return;
@@ -2704,12 +3789,24 @@ const WATERFALL_JS: string = `
         closeReader();
         return true;
       }
+      var cardAction = target.closest('[data-waterfall-card-action]');
+      if (cardAction) return handleCardAction(cardAction);
+      var comment = target.closest('[data-waterfall-comment-toggle]');
+      if (comment && typeof comment.getAttribute === 'function' && typeof comment.setAttribute === 'function') {
+        comment.setAttribute('aria-expanded', comment.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
+        return true;
+      }
       var source = target.closest('.waterfall-source-action');
       if (source && openSource(source, event)) return true;
       var play = target.closest('[data-waterfall-video-play]');
       if (play) {
         playVideo(play);
-        return true;
+        return 'media';
+      }
+      var stage = target.closest('.waterfall-reader-video-stage');
+      if (stage) {
+        playVideo(stage);
+        return 'media';
       }
       if (!target.closest('.waterfall-reader-layout')) {
         closeReader();
@@ -2721,9 +3818,89 @@ const WATERFALL_JS: string = `
   if (preferences) {
     bindFastTap(preferences, function (event) {
       var target = event.target;
-      if (!target || typeof target.closest !== 'function' ||
-        !target.closest('[data-waterfall-close-preferences], [data-waterfall-apply-preferences]')) return false;
+      if (!target || typeof target.closest !== 'function') return false;
+      var selectAll = target.closest('[data-waterfall-sources-all]');
+      var selectNone = target.closest('[data-waterfall-sources-none]');
+      if (selectAll || selectNone) {
+        preferences.querySelectorAll('[data-waterfall-source]').forEach(function (input) {
+          input.checked = !!selectAll && !input.disabled;
+        });
+        enabledSources = Array.prototype.slice.call(
+          preferences.querySelectorAll('[data-waterfall-source]:checked')
+        ).map(function (node) { return node.getAttribute('data-waterfall-source'); });
+        return true;
+      }
+      if (!target.closest('[data-waterfall-close-preferences], [data-waterfall-apply-preferences]')) return false;
+      interactionActive = false;
+      if (typeof event.stopPropagation === 'function') event.stopPropagation();
       closePreferences();
+      return true;
+    });
+  }
+  if (collection) {
+    collection.addEventListener('input', function (event) {
+      var input = event.target;
+      if (!input || typeof input.matches !== 'function' || !input.matches('[data-waterfall-collection-query]')) return;
+      collectionQuery = text(input.value);
+      renderCollection();
+      var nextInput = collection.querySelector('[data-waterfall-collection-query]');
+      if (nextInput && typeof nextInput.focus === 'function') {
+        nextInput.focus();
+        if (typeof nextInput.setSelectionRange === 'function') {
+          nextInput.setSelectionRange(collectionQuery.length, collectionQuery.length);
+        }
+      }
+    });
+    bindFastTap(collection, function (event) {
+      var target = event.target;
+      if (!target || typeof target.closest !== 'function') return false;
+      if (target.closest('[data-waterfall-collection-close]')) {
+        closeCollection();
+        return true;
+      }
+      if (target.closest('[data-waterfall-collection-search]')) {
+        collectionSearchOpen = !collectionSearchOpen;
+        if (!collectionSearchOpen) collectionQuery = '';
+        renderCollection();
+        var searchInput = collection.querySelector('[data-waterfall-collection-query]');
+        if (searchInput && typeof searchInput.focus === 'function') searchInput.focus();
+        return true;
+      }
+      var source = target.closest('[data-waterfall-collection-source]');
+      if (source) {
+        collectionSource = text(source.getAttribute('data-waterfall-collection-source')) || 'all';
+        renderCollection();
+        return true;
+      }
+      if (target.closest('[data-waterfall-collection-sort]')) {
+        collectionSort = collectionSort === 'recent' ? 'oldest' : 'recent';
+        renderCollection();
+        return true;
+      }
+      var cardAction = target.closest('[data-waterfall-card-action]');
+      if (cardAction) return handleCardAction(cardAction);
+      var row = target.closest('[data-waterfall-collection-row]');
+      if (row) {
+        openReader(row.getAttribute('data-waterfall-collection-row'));
+        return true;
+      }
+      return false;
+    });
+    collection.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      var row = event.target && typeof event.target.closest === 'function' ?
+        event.target.closest('[data-waterfall-collection-row]') : null;
+      if (!row || event.target.closest('[data-waterfall-card-action]')) return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      openReader(row.getAttribute('data-waterfall-collection-row'));
+    });
+  }
+  if (toast) {
+    bindFastTap(toast, function (event) {
+      var target = event.target;
+      if (!target || typeof target.closest !== 'function' ||
+        !target.closest('[data-waterfall-collection-undo]')) return false;
+      undoCollectionRemoval();
       return true;
     });
   }
@@ -2754,6 +3931,24 @@ const WATERFALL_JS: string = `
       return true;
     });
   });
+  document.querySelectorAll('[data-waterfall-search-open]').forEach(function (button) {
+    bindFastTap(button, function () {
+      openSearch();
+      return true;
+    });
+  });
+  if (searchForm) {
+    searchForm.addEventListener('submit', function (event) {
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      submitSearch();
+    });
+  }
+  document.querySelectorAll('[data-waterfall-collection-open]').forEach(function (button) {
+    bindFastTap(button, function () {
+      openCollection();
+      return true;
+    });
+  });
   function closeDiscovery() {
     destroyInlinePlayer();
     if (directDiscovery && state && window.AIPhoneHome &&
@@ -2769,9 +3964,11 @@ const WATERFALL_JS: string = `
     mode = 'entry';
     pauseCurrentBehavior(false);
     if (preferences) preferences.classList.remove('active');
+    if (collection) collection.classList.remove('active');
     if (overlay) {
       overlay.classList.remove('reading');
       overlay.classList.remove('sheet-open');
+      overlay.classList.remove('collection-open');
     }
     if (closeTimer !== null) clearTimeout(closeTimer);
     overlay.classList.add('closing');
@@ -2786,7 +3983,7 @@ const WATERFALL_JS: string = `
   }
   window.__aiphoneHandleWaterfallBack = function () {
     if (mode === 'reader_closing') return true;
-    if (mode === 'source_preferences_closing') return true;
+    if (mode === 'collection_closing') return true;
     if (mode === 'reading') {
       closeReader();
       return true;
@@ -2799,6 +3996,11 @@ const WATERFALL_JS: string = `
       closePreferences();
       return true;
     }
+    if (mode === 'collection') {
+      closeCollection();
+      return true;
+    }
+    if (searchActive) return exitSearch();
     if (mode === 'discovering') {
       closeDiscovery();
       return true;
@@ -2878,6 +4080,21 @@ export function waterfallEnabledSourcesFromAction(action: A2uiAction, surfaceId:
   return enabledSources;
 }
 
+export function waterfallSearchQueryFromAction(action: A2uiAction, surfaceId: string): string | null {
+  const args = waterfallArgsFromAction(action, 'waterfall.search.submit', surfaceId);
+  if (args === null || Object.keys(args).sort().join(',') !== 'query,surfaceId' ||
+    typeof args['query'] !== 'string') {
+    return null;
+  }
+  const query = (args['query'] as string).trim();
+  return query.length > 0 && query.length <= 160 ? query : null;
+}
+
+export function waterfallSearchExitFromAction(action: A2uiAction, surfaceId: string): boolean {
+  const args = waterfallArgsFromAction(action, 'waterfall.search.exit', surfaceId);
+  return args !== null && Object.keys(args).sort().join(',') === 'surfaceId';
+}
+
 export function waterfallAdvanceCurrentFromAction(action: A2uiAction, surfaceId: string): string | null {
   const args = waterfallArgsFromAction(action, 'waterfall.feed.advance', surfaceId);
   if (args === null || typeof args['currentId'] !== 'string') {
@@ -2895,6 +4112,25 @@ export function waterfallApplePodcastCandidateFromAction(action: A2uiAction, sur
   }
   const candidateId = (args['candidateId'] as string).trim();
   return candidateId.length > 0 ? candidateId : null;
+}
+
+export function waterfallCommentsCandidateFromAction(action: A2uiAction, surfaceId: string): string | null {
+  const args = waterfallArgsFromAction(action, 'waterfall.comments.load', surfaceId);
+  if (args === null || Object.keys(args).sort().join(',') !== 'candidateId,surfaceId' ||
+    typeof args['candidateId'] !== 'string') {
+    return null;
+  }
+  const candidateId = (args['candidateId'] as string).trim();
+  return candidateId.length > 0 ? candidateId : null;
+}
+
+export function waterfallAdvanceVisibleFromAction(action: A2uiAction, surfaceId: string): string | null {
+  const args = waterfallArgsFromAction(action, 'waterfall.feed.advance', surfaceId);
+  if (args === null || typeof args['visibleId'] !== 'string') {
+    return null;
+  }
+  const visibleId = (args['visibleId'] as string).trim();
+  return visibleId.length > 0 ? visibleId : null;
 }
 
 export function waterfallBehaviorFromAction(
@@ -2935,10 +4171,33 @@ export function waterfallBehaviorFromAction(
   };
 }
 
+export function waterfallCardActionFromAction(
+  action: A2uiAction,
+  surfaceId: string
+): WaterfallCardActionArgs | null {
+  const args = waterfallArgsFromAction(action, 'waterfall.card.action', surfaceId);
+  if (args === null || typeof args['candidateId'] !== 'string' ||
+    (args['candidateId'] as string).trim().length === 0 || typeof args['action'] !== 'string' ||
+    (args['action'] !== 'like' && args['action'] !== 'dislike' && args['action'] !== 'save') ||
+    typeof args['active'] !== 'boolean') return null;
+  const keys = Object.keys(args).sort().join(',');
+  const hasRestore = keys === 'action,active,candidateId,restoreSavedAt,surfaceId';
+  if (keys !== 'action,active,candidateId,surfaceId' && !hasRestore) return null;
+  if (hasRestore && (args['action'] !== 'save' || typeof args['restoreSavedAt'] !== 'boolean')) return null;
+  return {
+    surfaceId,
+    candidateId: (args['candidateId'] as string).trim(),
+    action: args['action'] as 'like' | 'dislike' | 'save',
+    active: args['active'] as boolean,
+    restoreSavedAt: hasRestore ? args['restoreSavedAt'] as boolean : false
+  };
+}
+
 export function buildWaterfallHomePayload(
   document: HtmlHomeDocument,
   isBusy: boolean,
-  waterfallState: WaterfallFeedState | null = null
+  waterfallState: WaterfallFeedState | null = null,
+  cardRecords: WaterfallCardRecord[] = []
 ): WaterfallHomePayload | null {
   const state = waterfallState ?? document.waterfall;
   if (state === undefined) {
@@ -2980,6 +4239,14 @@ export function buildWaterfallHomePayload(
     relevantSources.length === state.enabledSources.length && relevantSources.every((source: WaterfallSourceState): boolean =>
     source.continuation === null && (source.phase === 'empty' || source.phase === 'needs_auth' ||
     source.phase === 'error' || source.phase === 'exhausted' || source.phase === 'success'));
+  const cardStates: WaterfallCardViewState[] = cardRecords.map(
+    (record: WaterfallCardRecord): WaterfallCardViewState => ({
+      candidateId: record.candidateId,
+      reaction: record.reaction,
+      saved: record.saved
+    }));
+  const savedRecords = cardRecords.filter((record: WaterfallCardRecord): boolean => record.saved)
+    .sort((left: WaterfallCardRecord, right: WaterfallCardRecord): number => right.savedAt - left.savedAt);
   return {
     surfaceId: document.surfaceId ?? '',
     query: state.query,
@@ -2989,6 +4256,32 @@ export function buildWaterfallHomePayload(
     mediaEmbeds: waterfallMediaEmbeds(document),
     enabledSources: state.enabledSources.slice(),
     sources: state.sources,
+    cardStates,
+    savedCards: savedRecords.map((record: WaterfallCardRecord): WaterfallSavedCardView => {
+      const card: WaterfallSavedCard = record.snapshot;
+      const savedCard: WaterfallSavedCardView = {
+        id: card.id,
+        source: card.source,
+        provider: card.provider,
+        mediaType: card.mediaType,
+        title: card.title,
+        summary: card.summary,
+        url: card.url,
+        coverUrl: card.coverUrl,
+        mediaUrl: card.mediaUrl ?? '',
+        providerItemId: card.providerItemId,
+        comments: card.comments,
+        commentLoadState: card.commentLoadState,
+        publishedAt: card.publishedAt,
+        authorName: card.authorName,
+        authorAvatarUrl: card.authorAvatarUrl,
+        metrics: card.metrics,
+        topics: card.topics,
+        format: card.format,
+        savedAt: record.savedAt
+      };
+      return savedCard;
+    }),
     replenishing: replenishing,
     exhausted: exhausted
   };
@@ -3052,6 +4345,34 @@ function waterfallUiIconMarkup(name: string): string {
   } else if (name === 'sources') {
     paths = '<path d="M4 7h5M13 7h7M4 17h9M17 17h3" />' +
       '<circle cx="11" cy="7" r="2" /><circle cx="15" cy="17" r="2" />';
+  } else if (name === 'heart') {
+    paths = '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />';
+  } else if (name === 'star') {
+    paths = '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z" />';
+  } else if (name === 'comment') {
+    paths = '<path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />';
+  } else if (name === 'eye') {
+    paths = '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" />';
+  } else if (name === 'thumbsUp') {
+    paths = '<path d="M7 10v11H3V10h4Zm0 9h10.5a2 2 0 0 0 2-1.7l1.2-7A2 2 0 0 0 18.7 8H14l.7-3.4A2.2 2.2 0 0 0 12.5 2L7 10v9Z" />';
+  } else if (name === 'thumbsDown') {
+    paths = '<path d="M7 14V3H3v11h4Zm0-9h10.5a2 2 0 0 1 2 1.7l1.2 7a2 2 0 0 1-2 2.3H14l.7 3.4a2.2 2.2 0 0 1-2.2 2.6L7 14V5Z" />';
+  } else if (name === 'bookmark') {
+    paths = '<path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4V4Z" />';
+  } else if (name === 'search') {
+    paths = '<circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" />';
+  } else if (name === 'upvote') {
+    paths = '<path d="m5 11 7-7 7 7h-4v8H9v-8Z" />';
+  } else if (name === 'repost') {
+    paths = '<path d="m17 2 4 4-4 4" /><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4" /><path d="M21 13v2a3 3 0 0 1-3 3H3" />';
+  } else if (name === 'quote') {
+    paths = '<path d="M8 9H4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-6Zm10 0h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-6Z" />';
+  } else if (name === 'coin') {
+    paths = '<circle cx="12" cy="12" r="9" /><path d="M9 8h4.5a2 2 0 0 1 0 4H9m0 0h5a2 2 0 0 1 0 4H9V8m3-2v2m0 8v2" />';
+  } else if (name === 'danmaku') {
+    paths = '<rect x="3" y="5" width="18" height="14" rx="3" /><path d="M7 10h6M7 14h10M16 10h1" />';
+  } else if (name === 'share') {
+    paths = '<circle cx="18" cy="5" r="2" /><circle cx="6" cy="12" r="2" /><circle cx="18" cy="19" r="2" /><path d="m8 11 8-5m-8 7 8 5" />';
   }
   return '<span class="waterfall-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false">' +
     paths + '</svg></span>';
@@ -3060,10 +4381,12 @@ function waterfallUiIconMarkup(name: string): string {
 export function renderAggregateSearchHomeDocument(
   document: HtmlHomeDocument,
   isBusy: boolean = false,
-  startInDiscovery: boolean = false
+  startInDiscovery: boolean = false,
+  deferInitialPayload: boolean = false
 ): string {
   const waterfall = buildWaterfallHomePayload(document, isBusy);
-  const waterfallJson = waterfall === null ? 'null' : JSON.stringify(waterfall).replace(/</g, '\\u003c');
+  const waterfallJson = waterfall === null || deferInitialPayload ? 'null' :
+    JSON.stringify(waterfall).replace(/</g, '\\u003c');
   const sourceLogosJson = JSON.stringify({
     youtube: APP_LOGO_YOUTUBE,
     bilibili: APP_LOGO_BILIBILI,
@@ -3072,14 +4395,32 @@ export function renderAggregateSearchHomeDocument(
     reddit: APP_LOGO_REDDIT,
     zhihu: APP_LOGO_ZHIHU,
     applepodcasts: APP_LOGO_APPLE_PODCASTS,
-    twitch: APP_LOGO_TWITCH
+    twitch: APP_LOGO_TWITCH,
+    github: APP_LOGO_GITHUB,
+    steam: APP_LOGO_STEAM,
+    cnnews: APP_LOGO_CNNEWS,
+    globalnews: APP_LOGO_GLOBALNEWS
   }).replace(/</g, '\\u003c');
   const uiIconsJson = JSON.stringify({
     back: waterfallUiIconMarkup('back'),
     external: waterfallUiIconMarkup('external'),
     expand: waterfallUiIconMarkup('expand'),
     play: waterfallUiIconMarkup('play'),
-    sources: waterfallUiIconMarkup('sources')
+    sources: waterfallUiIconMarkup('sources'),
+    heart: waterfallUiIconMarkup('heart'),
+    star: waterfallUiIconMarkup('star'),
+    comment: waterfallUiIconMarkup('comment'),
+    eye: waterfallUiIconMarkup('eye'),
+    thumbsUp: waterfallUiIconMarkup('thumbsUp'),
+    thumbsDown: waterfallUiIconMarkup('thumbsDown'),
+    bookmark: waterfallUiIconMarkup('bookmark'),
+    search: waterfallUiIconMarkup('search'),
+    upvote: waterfallUiIconMarkup('upvote'),
+    repost: waterfallUiIconMarkup('repost'),
+    quote: waterfallUiIconMarkup('quote'),
+    coin: waterfallUiIconMarkup('coin'),
+    danmaku: waterfallUiIconMarkup('danmaku'),
+    share: waterfallUiIconMarkup('share')
   }).replace(/</g, '\\u003c');
   const waterfallStatus = waterfall !== null && waterfall.replenishing ? '<div class="waterfall-status">正在补充内容</div>' :
     (waterfall !== null && waterfall.exhausted ? '<div class="waterfall-status">本轮内容已结束</div>' : '');
@@ -3088,9 +4429,11 @@ export function renderAggregateSearchHomeDocument(
     '<html lang="zh-CN"><head><meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />',
     '<title>', escapeHtml(document.title), '</title>',
-    '<style>', AGGREGATE_CSS, WATERFALL_CSS, '</style></head><body>',
+    '<style>', AGGREGATE_CSS, WATERFALL_CSS, '</style></head><body',
+    startInDiscovery ? ' class="waterfall-direct"' : '', '>',
     '<main class="aggregate-shell">',
-    waterfall === null ? renderAggregateMainContent(document, isBusy, false) : waterfall.aggregateHtml,
+    deferInitialPayload ? '' :
+      (waterfall === null ? renderAggregateMainContent(document, isBusy, false) : waterfall.aggregateHtml),
     '</main>', waterfall !== null ? '<section id="waterfall-discovery" class="waterfall-overlay' +
       (startInDiscovery ? ' active' : '') + '">' +
       '<div id="waterfall-toolbar" class="waterfall-toolbar">' +
@@ -3100,12 +4443,24 @@ export function renderAggregateSearchHomeDocument(
       '<span class="waterfall-toolbar-label">返回</span></button>' +
       '<span class="waterfall-toolbar-title">发现</span>' +
       '<div class="waterfall-toolbar-tools">' +
+      (startInDiscovery ? '<button type="button" class="waterfall-toolbar-secondary" ' +
+        'aria-label="搜索" data-waterfall-search-open>' + waterfallUiIconMarkup('search') + '</button>' : '') +
+      '<button type="button" class="waterfall-toolbar-secondary" ' +
+      'aria-label="收藏" data-waterfall-collection-open>' + waterfallUiIconMarkup('bookmark') + '</button>' +
       '<button type="button" class="waterfall-toolbar-secondary" ' +
       'aria-label="内容来源" data-waterfall-preferences>' + waterfallUiIconMarkup('sources') +
-      '<span class="waterfall-toolbar-label">设置</span></button></div></div>' +
+      '</button></div>' +
+      (startInDiscovery ? '<form id="waterfall-search-form" class="waterfall-search-form" role="search">' +
+        waterfallUiIconMarkup('search') + '<input id="waterfall-search-input" type="search" maxlength="160" ' +
+        'enterkeyhint="search" autocomplete="off" aria-label="搜索发现内容" placeholder="搜索内容" /></form>' : '') +
+      '</div>' +
+      (startInDiscovery ? '<div id="waterfall-search-status" class="waterfall-search-status"></div>' : '') +
       '<div id="waterfall-track" class="waterfall-track">' + waterfallStatus + '</div>' +
+      '<div class="waterfall-edge-fade waterfall-edge-fade--top" aria-hidden="true"></div>' +
+      '<div class="waterfall-edge-fade waterfall-edge-fade--bottom" aria-hidden="true"></div>' +
       '<div id="waterfall-preferences" class="waterfall-preferences"></div>' +
       '<div id="waterfall-reader" class="waterfall-reader"></div>' +
+      '<div id="waterfall-collection" class="waterfall-collection"></div>' +
       '<div id="waterfall-toast" class="waterfall-toast" role="status" aria-live="polite"></div></section>' : '',
     '<script>', AGGREGATE_JS, waterfall !== null ? 'window.__aiphoneWaterfallDirect=' +
       (startInDiscovery ? 'true' : 'false') + ';window.__aiphoneWaterfallSourceLogos=' + sourceLogosJson +
@@ -3260,6 +4615,12 @@ function renderEmbed(block: HtmlHomeBlock): string {
   if (block.mediaEmbed === undefined || block.mediaEmbed === null || text(block.mediaEmbed.embedUrl).length === 0) {
     return '';
   }
+  const thumbnail = text(block.mediaEmbed.thumbnail);
+  if (text(block.source) === 'youtube' && thumbnail.length > 0) {
+    return '<a href="' + escapeAttribute(block.mediaEmbed.embedUrl) +
+      '" target="_blank" rel="noopener noreferrer"><img class="aggregate-embed" src="' + escapeAttribute(thumbnail) +
+      '" alt="' + escapeAttribute(block.mediaEmbed.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" /></a>';
+  }
   return '<iframe class="aggregate-embed" src="' + escapeAttribute(block.mediaEmbed.embedUrl) +
     '" title="' + escapeAttribute(block.mediaEmbed.title) +
     '" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>';
@@ -3279,7 +4640,8 @@ function renderPostMedia(block: HtmlHomeBlock): string {
     return '';
   }
   return '<div class="aggregate-post-media-grid">' + urls.map((url: string) => {
-    return '<img class="aggregate-post-media" src="' + escapeAttribute(url) + '" alt="帖子图片" loading="lazy" />';
+    return '<img class="aggregate-post-media" src="' + escapeAttribute(url) +
+      '" alt="帖子图片" loading="lazy" onerror="this.hidden=true" />';
   }).join('') + '</div>';
 }
 
@@ -3374,18 +4736,30 @@ function sourceLogoUrl(source: string): string {
   if (source === 'twitch') {
     return APP_LOGO_TWITCH;
   }
+  if (source === 'github') {
+    return APP_LOGO_GITHUB;
+  }
+  if (source === 'steam') {
+    return APP_LOGO_STEAM;
+  }
+  if (source === 'cnnews') {
+    return APP_LOGO_CNNEWS;
+  }
+  if (source === 'globalnews') {
+    return APP_LOGO_GLOBALNEWS;
+  }
   return '';
 }
 
-export function shouldShowWaterfallReaderAction(source: AggregateSearchSource, _mediaType: string): boolean {
-  return WATERFALL_SOURCE_ONLY_SOURCES.indexOf(source) < 0;
+export function shouldShowWaterfallReaderAction(_source: AggregateSearchSource, _mediaType: string): boolean {
+  return true;
 }
 
 function sourceCssValue(source: string): string {
   const clean = source.trim().toLowerCase();
   if (clean === 'youtube' || clean === 'bilibili' || clean === 'x' || clean === 'hackernews' ||
     clean === 'reddit' || clean === 'zhihu' || clean === 'douban' || clean === 'applepodcasts' ||
-    clean === 'twitch') {
+    clean === 'twitch' || clean === 'github' || clean === 'steam' || clean === 'cnnews' || clean === 'globalnews') {
     return clean;
   }
   return 'unknown';
@@ -3418,6 +4792,18 @@ function aggregateSourceLabel(source: string, fallback: string): string {
   }
   if (source === 'twitch') {
     return 'Twitch';
+  }
+  if (source === 'github') {
+    return 'GitHub';
+  }
+  if (source === 'steam') {
+    return 'Steam';
+  }
+  if (source === 'cnnews') {
+    return 'CNNews';
+  }
+  if (source === 'globalnews') {
+    return 'GlobalNews';
   }
   return fallback;
 }

@@ -16,6 +16,7 @@ import {
 import { A2uiButtonView } from './common/A2uiButtonView';
 import { HistoryPanelView } from './HistoryPanelView';
 import { HtmlHomeSurfaceView } from './HtmlHomeSurfaceView';
+import { FoodStoreMapView } from './FoodStoreMapView';
 import { A2uiSurfaceView } from './A2uiSurfaceView';
 import { CheckoutWebKind, CheckoutWebOverlay } from './CheckoutWebOverlay';
 import { DeepSearchPanel } from './DeepSearchPanel';
@@ -204,6 +205,10 @@ export struct HomePage {
   @Prop messages: A2uiMessage[] = [];
   @Prop currentSurface: A2uiSurfaceState = emptyA2uiSurface();
   @Prop htmlHomeHtml: string = '';
+  @Prop foodStoreMapOpen: boolean = false;
+  @Prop foodStoreMapAmapKey: string = '';
+  @Prop foodStoreMapSnapshotJson: string = '';
+  @Prop foodStoreMapSnapshotTick: number = 0;
   @Prop multiTaskPayloadJson: string = '';
   @Prop multiTaskPayloadTick: number = 0;
   @Prop waterfallPayloadJson: string = '';
@@ -242,6 +247,7 @@ export struct HomePage {
   @Prop deepSearchQuery: string = '';
   @Prop deepSearchSettingsJson: string = '';
   @Prop deepSearchContextJson: string = '';
+  @Prop locationServiceNotice: string = '';
   @State sendSpinnerRotation: number = 0;
   @State voicePulseTick: number = 0;
   @State waterfallFullscreen: boolean = false;
@@ -259,6 +265,9 @@ export struct HomePage {
   onStartVoiceInput: () => void = () => {};
   onStopVoiceInput: () => void = () => {};
   onResetSession: () => void = () => {};
+  onCloseFoodStoreMap: () => void = () => {};
+  onFoodStoreMapLocationConfirm: (longitude: number, latitude: number, name: string, address: string) => void =
+    (_longitude: number, _latitude: number, _name: string, _address: string): void => {};
   onCloseDeepSearch: () => void = () => {};
   onCloseCheckoutWeb: (taskId: string) => void = (_taskId: string): void => {};
   onCheckoutWebReturn: (url: string) => void = (_url: string): void => {};
@@ -702,6 +711,43 @@ export struct HomePage {
           .clip(true)
       } else if (this.showWelcome) {
         this.WelcomeHero()
+      } else if (this.foodStoreMapOpen && this.currentSurface.intent === 'food') {
+        Column() {
+          Row() {
+            Button('‹')
+              .width(40)
+              .height(40)
+              .fontSize(28)
+              .fontColor('#5E4D43')
+              .backgroundColor('#F5EFE9')
+              .borderRadius(20)
+              .onClick(() => {
+                this.onCloseFoodStoreMap();
+              })
+            Text('店铺地图')
+              .layoutWeight(1)
+              .fontSize(19)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#332821')
+              .margin({ left: 10 })
+          }
+          .width('100%')
+          .height(48)
+          .alignItems(VerticalAlign.Center)
+
+          FoodStoreMapView({
+            amapKey: this.foodStoreMapAmapKey,
+            snapshotJson: this.foodStoreMapSnapshotJson,
+            snapshotTick: this.foodStoreMapSnapshotTick,
+            onLocationConfirm: this.onFoodStoreMapLocationConfirm
+          })
+            .width('100%')
+            .layoutWeight(1)
+            .borderRadius(18)
+            .clip(true)
+        }
+        .layoutWeight(1)
+        .margin({ top: this.surfaceTopGap() })
       } else if (this.useNativeSurface()) {
         A2uiSurfaceView({
           surface: this.currentSurface,
@@ -742,6 +788,22 @@ export struct HomePage {
 
       if (shouldShowHomeChrome(this.waterfallFullscreen)) {
       Column() {
+        if (this.locationServiceNotice.length > 0) {
+          Text('定位服务未开启，附近结果可能不够准确。')
+            .width('100%')
+            .fontSize(11)
+            .lineHeight(16)
+            .fontColor('#7A665B')
+            .textAlign(TextAlign.Center)
+            .margin({ bottom: 2 })
+        }
+
+        PageStateIndicator({
+          currentPage: 0,
+          reduceMotion: this.reduceMotion
+        })
+          .margin({ bottom: 2 })
+
         Stack({ alignContent: Alignment.Center }) {
           if (this.isVoiceListening) {
             this.VoiceWaveRing('#80F39A79', 0)
@@ -888,5 +950,53 @@ export struct HomePage {
     .width('100%')
     .height('100%')
     .backgroundColor(A2UI_HOME_SHELL_BACKGROUND)
+  }
+}
+
+@Component
+export struct PageStateIndicator {
+  @Prop currentPage: number = 0;
+  @Prop reduceMotion: boolean = false;
+  @State private discoveryHintOffset: number = 0;
+  private hintTimerId: number = -1;
+
+  aboutToAppear(): void {
+    if (this.currentPage !== 0 || this.reduceMotion) return;
+    this.hintTimerId = setTimeout((): void => {
+      this.discoveryHintOffset = 3;
+      this.hintTimerId = setTimeout((): void => {
+        this.discoveryHintOffset = 0;
+        this.hintTimerId = -1;
+      }, 240);
+    }, 520);
+  }
+
+  aboutToDisappear(): void {
+    if (this.hintTimerId >= 0) clearTimeout(this.hintTimerId);
+    this.hintTimerId = -1;
+  }
+
+  build() {
+    Row({ space: 5 }) {
+      Row() {}
+        .width(this.currentPage === 0 ? 14 : 3)
+        .height(3)
+        .borderRadius(2)
+        .backgroundColor(this.currentPage === 0 ? '#8E6558' : '#8A786E')
+
+      Row() {}
+        .width(this.currentPage === 1 ? 14 : 3)
+        .height(3)
+        .borderRadius(2)
+        .backgroundColor(this.currentPage === 1 ? '#8E6558' : '#8A786E')
+        .translate({ x: this.currentPage === 0 ? this.discoveryHintOffset : 0 })
+        .animation({ duration: this.reduceMotion ? 0 : 240, curve: A2UI_MOTION_MOVE_CURVE })
+    }
+    .width('100%')
+    .height(10)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .opacity(0.72)
+    .hitTestBehavior(HitTestMode.Transparent)
   }
 }

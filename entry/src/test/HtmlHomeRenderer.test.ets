@@ -16,8 +16,13 @@ import {
   shouldShowWaterfallReaderAction,
   waterfallAdvanceCurrentFromAction,
   waterfallApplePodcastCandidateFromAction,
+  waterfallAdvanceVisibleFromAction,
   waterfallBehaviorFromAction,
-  waterfallEnabledSourcesFromAction
+  waterfallCardActionFromAction,
+  waterfallCommentsCandidateFromAction,
+  waterfallEnabledSourcesFromAction,
+  waterfallSearchExitFromAction,
+  waterfallSearchQueryFromAction
 } from '../main/ets/pages/A2uiHome/html/HtmlAggregateSearchHomeRenderer';
 import { buildMultiTaskHomePayload } from '../main/ets/pages/A2uiHome/html/HtmlMultiTaskHomeRenderer';
 import { createFirecrawlPendingDocument } from '../main/ets/pages/A2uiHome/html/HtmlFirecrawlHomeRenderer';
@@ -53,6 +58,7 @@ import {
   HtmlHomeDocument,
   HtmlHomeMetric
 } from '../main/ets/pages/A2uiHome/html/HtmlHomeTypes';
+import { WaterfallCardRecord } from '../main/ets/pages/A2uiHome/waterfall/WaterfallPreferencesStore';
 import {
   parseHtmlHomeAction,
   popupSubtitleFromTitle,
@@ -692,7 +698,7 @@ function aggregateSearchDocumentFixture(): HtmlHomeDocument {
       title: 'Codex demo',
       embedUrl: 'https://www.youtube.com/embed/abc123',
       pageUrl: 'https://www.youtube.com/watch?v=abc123',
-      thumbnail: ''
+      thumbnail: 'https://wsrv.nl/?url=i.ytimg.com/vi/abc123/mqdefault.jpg'
     }
   }, {
     id: 'post-1',
@@ -2445,6 +2451,10 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf("type: 'confirm'")).assertLarger(-1);
       expect(html.indexOf('114.063873')).assertLarger(-1);
       expect(html.indexOf('22.631273')).assertLarger(-1);
+      expect(html.indexOf('class="coord"')).assertEqual(-1);
+      expect(html.indexOf('id="coord"')).assertEqual(-1);
+      expect(html.indexOf("getElementById('coord')")).assertEqual(-1);
+      expect(html.indexOf('font-size: 20px')).assertLarger(-1);
     });
 
     it('renders ride driver map with fullscreen control and eta detail row', 0, () => {
@@ -2569,6 +2579,13 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('异常或提示')).assertEqual(-1);
       expect(html.indexOf('返回日报')).assertEqual(-1);
       expect(html.indexOf('data-aggregate-action="')).assertEqual(-1);
+      expect(html.indexOf('<a href="https://www.youtube.com/embed/abc123" target="_blank" rel="noopener noreferrer"><img class="aggregate-embed"'))
+        .assertLarger(-1);
+      expect(html.indexOf('<a href="https://www.youtube.com/watch?v=abc123"')).assertEqual(-1);
+      expect(html.indexOf('<img class="aggregate-embed" src="https://wsrv.nl/?url=i.ytimg.com/vi/abc123/mqdefault.jpg"'))
+        .assertLarger(-1);
+      expect(html.indexOf('<iframe class="aggregate-embed" src="https://www.youtube.com/embed/abc123"'))
+        .assertEqual(-1);
       expect(html.indexOf('class="aggregate-link-preview" href="https://news.ycombinator.com/item?id=123" target="_blank"'))
         .assertLarger(-1);
       expect(html.indexOf('class="aggregate-link-preview" href="https://news.ycombinator.com/item?id=123" target="_self"'))
@@ -2748,6 +2765,7 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('food_address_book_delete')).assertLarger(-1);
       expect(html.indexOf('food-favorites-icon')).assertLarger(-1);
       expect(html.indexOf('food-favorites-overlay')).assertLarger(-1);
+      expect(html.indexOf('food_store_map_open')).assertLarger(-1);
       expect(html.indexOf('food-menu-overlay')).assertLarger(-1);
       expect(html.indexOf('AIPhoneFoodMenu')).assertLarger(-1);
       expect(html.indexOf('function applyMenuPatch(patchJson)')).assertLarger(-1);
@@ -3568,7 +3586,7 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('https://i1.hdslb.com/bfs/archive/cover.jpg')).assertLarger(-1);
     });
 
-    it('renders official local icons for active new aggregate search sources', 0, () => {
+    it('renders local icons and secondary publishers for the four new aggregate sources', 0, () => {
       const doc = aggregateSearchDocumentFixture();
       doc.blocks.push({
         id: 'status-applepodcasts', kind: 'aggregate-source-status', title: 'Apple Podcasts', subtitle: 'ok',
@@ -3576,8 +3594,29 @@ export default function htmlHomeRendererTest() {
       }, {
         id: 'status-twitch', kind: 'aggregate-source-status', title: 'Twitch', subtitle: 'ok',
         status: 'success', source: 'twitch', metrics: [], rows: [], actions: []
+      }, {
+        id: 'status-github', kind: 'aggregate-source-status', title: 'GitHub', subtitle: 'ok',
+        status: 'success', source: 'github', metrics: [], rows: [], actions: []
+      }, {
+        id: 'status-steam', kind: 'aggregate-source-status', title: 'Steam', subtitle: 'ok',
+        status: 'success', source: 'steam', metrics: [], rows: [], actions: []
+      }, {
+        id: 'status-cnnews', kind: 'aggregate-source-status', title: 'CNNews', subtitle: 'ok',
+        status: 'success', source: 'cnnews', metrics: [], rows: [], actions: []
+      }, {
+        id: 'status-globalnews', kind: 'aggregate-source-status', title: 'GlobalNews', subtitle: 'ok',
+        status: 'success', source: 'globalnews', metrics: [], rows: [], actions: []
       });
-      doc.waterfall = waterfallRendererFixture().waterfall;
+      const state = waterfallRendererFixture().waterfall;
+      if (state?.current !== null && state?.current !== undefined) {
+        state.current.source = 'cnnews';
+        state.current.provider = 'IT 之家';
+      }
+      if (state !== undefined && state.stable.length > 0) {
+        state.stable[0].source = 'globalnews';
+        state.stable[0].provider = 'The Guardian';
+      }
+      doc.waterfall = state;
 
       const html = renderHtmlHomeDocument(doc);
 
@@ -3585,6 +3624,18 @@ export default function htmlHomeRendererTest() {
         .assertLarger(-1);
       expect(html.indexOf('data-source="twitch" aria-label="Twitch"><img src="data:image/svg+xml;base64,'))
         .assertLarger(-1);
+      expect(html.indexOf('data-source="github" aria-label="GitHub"><img src="data:image/svg+xml;base64,'))
+        .assertLarger(-1);
+      expect(html.indexOf('data-source="steam" aria-label="Steam"><img src="data:image/svg+xml;base64,'))
+        .assertLarger(-1);
+      expect(html.indexOf('data-source="cnnews" aria-label="CNNews"><img src="data:image/svg+xml;base64,'))
+        .assertLarger(-1);
+      expect(html.indexOf('data-source="globalnews" aria-label="GlobalNews"><img src="data:image/svg+xml;base64,'))
+        .assertLarger(-1);
+      expect(html.indexOf('"provider":"IT 之家"')).assertLarger(-1);
+      expect(html.indexOf('"provider":"The Guardian"')).assertLarger(-1);
+      expect(html.indexOf('"chinanews"')).assertEqual(-1);
+      expect(html.indexOf('"ithome"')).assertEqual(-1);
       expect(html.indexOf('data-source="douban"')).assertEqual(-1);
       expect(html.indexOf('"douban":"data:image')).assertEqual(-1);
       expect(html.indexOf('"applepodcasts":"data:image/png;base64,')).assertLarger(-1);
@@ -3679,7 +3730,7 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('waterfall-status waterfall-status--empty')).assertLarger(-1);
       expect(html.indexOf('var sourceNames = sources.map')).assertEqual(-1);
       expect(html.indexOf('var sourceNames = directDiscovery ? ["youtube"')).assertLarger(-1);
-      expect(html.indexOf('"applepodcasts","twitch"] : ["youtube"')).assertLarger(-1);
+      expect(html.indexOf('"applepodcasts","twitch","github","steam","cnnews","globalnews"] : ["youtube"')).assertLarger(-1);
       expect(html.indexOf('target="_blank" rel="noopener noreferrer">查看来源</a>')).assertEqual(-1);
       expect(html.indexOf('target="_self" rel="noopener noreferrer">查看来源</a>')).assertEqual(-1);
       expect(html.indexOf('data-waterfall-reason')).assertLarger(-1);
@@ -3693,13 +3744,13 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('Codex demo')).assertLarger(-1);
       expect(html.indexOf('OpenAI Codex discussion')).assertLarger(-1);
       expect(html.indexOf('https://www.youtube.com/watch?v=abc123')).assertLarger(-1);
-      expect(html.indexOf('正在补充内容')).assertEqual(-1);
+      expect(html.indexOf('<div id="waterfall-track" class="waterfall-track">正在补充内容')).assertEqual(-1);
       expect(html.indexOf('<div id="waterfall-track" class="waterfall-track"></div>')).assertLarger(-1);
       expect(html.indexOf('result 3')).assertEqual(-1);
 
       const busyHtml = renderHtmlHomeDocument(doc, true);
       expect(busyHtml.indexOf('正在更新')).assertLarger(-1);
-      expect(busyHtml.indexOf('正在补充内容')).assertEqual(-1);
+      expect(busyHtml.indexOf('<div id="waterfall-track" class="waterfall-track">正在补充内容')).assertEqual(-1);
     });
 
     it('formats the light home clock and greeting from local device time', 0, () => {
@@ -3768,14 +3819,14 @@ export default function htmlHomeRendererTest() {
 
       const html = renderHtmlHomeDocument(doc);
 
-      expect(shouldShowWaterfallReaderAction('applepodcasts', 'image_text')).assertFalse();
-      expect(shouldShowWaterfallReaderAction('twitch', 'image_text')).assertFalse();
+      expect(shouldShowWaterfallReaderAction('applepodcasts', 'image_text')).assertTrue();
+      expect(shouldShowWaterfallReaderAction('twitch', 'image_text')).assertTrue();
       expect(shouldShowWaterfallReaderAction('youtube', 'video')).assertTrue();
       expect(shouldShowWaterfallReaderAction('youtube', 'image_text')).assertTrue();
       expect(shouldShowWaterfallReaderAction('hackernews', 'post')).assertTrue();
       expect(html.indexOf('var sourceOnly = ["applepodcasts","twitch"].indexOf(item.source) >= 0'))
         .assertLarger(-1);
-      expect(html.indexOf('var openAttributes = sourceOnly ?')).assertLarger(-1);
+      expect(html.indexOf("var openAttr = ' data-waterfall-open=\"")).assertLarger(-1);
       expect(html.indexOf("var shellClass = 'waterfall-card-shell' + (sourceOnly ? '' : " +
         "' waterfall-card-shell--interactive')")).assertLarger(-1);
       expect(html.indexOf('.waterfall-card-shell--interactive { cursor: pointer; }')).assertLarger(-1);
@@ -3785,8 +3836,9 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('-webkit-tap-highlight-color: transparent')).assertLarger(-1);
       expect(html.indexOf('-webkit-user-select: none')).assertLarger(-1);
       expect(html.indexOf('user-select: none')).assertLarger(-1);
+      expect(html.indexOf('var item = candidateById(id)')).assertLarger(-1);
       expect(html.indexOf('if (!item || ["applepodcasts","twitch"].indexOf(item.source) >= 0) return'))
-        .assertLarger(-1);
+        .assertEqual(-1);
       expect(html.indexOf('https://podcasts.apple.com/us/podcast/apple-events-video/id275834665')).assertLarger(-1);
       expect(html.indexOf('https://www.twitch.tv/example')).assertLarger(-1);
       expect(html.indexOf('-webkit-line-clamp: 4;')).assertLarger(-1);
@@ -3806,6 +3858,11 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('id="waterfall-toast"')).assertLarger(-1);
       expect(html.indexOf("shownAudioErrors[text(loadingItem.id)] = ''")).assertLarger(-1);
       expect(html.indexOf('shownAudioErrors[key] === message')).assertLarger(-1);
+      expect(html.indexOf('评论精选')).assertLarger(-1);
+      expect(html.indexOf('data-waterfall-comments-slot')).assertLarger(-1);
+      expect(html.indexOf('data-waterfall-comment-toggle')).assertLarger(-1);
+      expect(html.indexOf('waterfall-comment-skeleton')).assertLarger(-1);
+      expect(html.indexOf("id: 'waterfall.comments.load'")).assertLarger(-1);
       expect(html.indexOf('TWITCH_CLIENT_ID')).assertEqual(-1);
       expect(html.indexOf('TWITCH_CLIENT_SECRET')).assertEqual(-1);
       expect(html.indexOf('access_token')).assertEqual(-1);
@@ -3820,6 +3877,14 @@ export default function htmlHomeRendererTest() {
       expect(html.indexOf('window.__aiphoneWaterfallDirect=true')).assertLarger(-1);
       expect(html.indexOf('aria-label="返回首页"')).assertLarger(-1);
       expect(html.indexOf('waterfall.home.back')).assertLarger(-1);
+    });
+
+    it('loads a stable aggregate shell before pushing the first waterfall payload', 0, () => {
+      const html = renderAggregateSearchHomeDocument(waterfallRendererFixture(), false, false, true);
+
+      expect(html.indexOf('window.__aiphoneWaterfallInitial=null')).assertLarger(-1);
+      expect(html.indexOf('window.__aiphoneApplyWaterfallUpdate')).assertLarger(-1);
+      expect(html.indexOf('video-1 title')).assertEqual(-1);
     });
 
     it('labels ordinary source windows as content instead of payment', 0, () => {
@@ -3952,6 +4017,29 @@ export default function htmlHomeRendererTest() {
       expect(waterfallEnabledSourcesFromAction(action as A2uiAction, 'other-surface')).assertEqual(null);
     });
 
+    it('accepts only bounded discovery-search actions from the current surface', 0, () => {
+      const submit = parseHtmlHomeAction('{"id":"waterfall.search.submit","label":"搜索",' +
+        '"prompt":"","variant":"secondary","kind":"client","args":{"surfaceId":"surface-1",' +
+        '"query":"  HarmonyOS AI  "}}') as A2uiAction;
+      const exit = parseHtmlHomeAction('{"id":"waterfall.search.exit","label":"退出搜索",' +
+        '"prompt":"","variant":"secondary","kind":"client","args":{"surfaceId":"surface-1"}}') as A2uiAction;
+
+      expect(waterfallSearchQueryFromAction(submit, 'surface-1')).assertEqual('HarmonyOS AI');
+      expect(waterfallSearchQueryFromAction(submit, 'other')).assertEqual(null);
+      expect(waterfallSearchExitFromAction(exit, 'surface-1')).assertTrue();
+      expect(waterfallSearchExitFromAction(exit, 'other')).assertFalse();
+
+      const blank = JSON.parse(JSON.stringify(submit)) as A2uiAction;
+      (blank.args as Record<string, string>).query = '   ';
+      expect(waterfallSearchQueryFromAction(blank, 'surface-1')).assertEqual(null);
+      const long = JSON.parse(JSON.stringify(submit)) as A2uiAction;
+      (long.args as Record<string, string>).query = new Array(162).join('a');
+      expect(waterfallSearchQueryFromAction(long, 'surface-1')).assertEqual(null);
+      const injected = JSON.parse(JSON.stringify(submit)) as A2uiAction;
+      (injected.args as Record<string, string>).url = 'https://attacker.example';
+      expect(waterfallSearchQueryFromAction(injected, 'surface-1')).assertEqual(null);
+    });
+
     it('turns the posted Waterfall scroll action into one current-card advance', 0, () => {
       const doc = waterfallRendererFixture();
       const state = doc.waterfall as WaterfallFeedState;
@@ -3959,15 +4047,18 @@ export default function htmlHomeRendererTest() {
       const html = renderHtmlHomeDocument(doc);
       const action = parseHtmlHomeAction(
         '{"id":"waterfall.feed.advance","label":"下一条","prompt":"","variant":"secondary",' +
-        '"kind":"client","args":{"surfaceId":"' + surfaceId + '","currentId":"video-1"}}'
+        '"kind":"client","args":{"surfaceId":"' + surfaceId +
+        '","currentId":"video-1","visibleId":"post-3"}}'
       );
       const currentId = waterfallAdvanceCurrentFromAction(action as A2uiAction, surfaceId);
-      const update = advanceWaterfallFeed(state, Date.parse('2026-08-06T12:00:00.000Z'));
+      const visibleId = waterfallAdvanceVisibleFromAction(action as A2uiAction, surfaceId);
+      const update = advanceWaterfallFeed(state, Date.parse('2026-08-06T12:00:00.000Z'), visibleId ?? '');
 
       expect(currentId).assertEqual('video-1');
-      expect(update.state.shown.map((item) => item.id).join(',')).assertEqual('video-1');
-      expect(update.state.current?.id).assertEqual('image-2');
-      expect(update.state.stable.map((item) => item.id).join(',')).assertEqual('post-3');
+      expect(visibleId).assertEqual('post-3');
+      expect(update.state.shown.map((item) => item.id).join(',')).assertEqual('video-1,image-2');
+      expect(update.state.current?.id).assertEqual('post-3');
+      expect(update.state.stable.length).assertEqual(0);
       expect(html.indexOf('waterfall.feed.advance')).assertLarger(-1);
       expect(html.indexOf("track.addEventListener('scroll'")).assertLarger(-1);
       expect(html.indexOf('data-waterfall-id')).assertLarger(-1);
@@ -3982,6 +4073,17 @@ export default function htmlHomeRendererTest() {
       const injected = JSON.parse(JSON.stringify(action)) as A2uiAction;
       (injected.args as Record<string, Object | string>)['feedUrl'] = 'https://attacker.example/feed.xml';
       expect(waterfallApplePodcastCandidateFromAction(injected, 'surface-1')).assertEqual(null);
+    });
+
+    it('accepts only a current-surface comment candidate action', 0, () => {
+      const action = parseHtmlHomeAction('{"id":"waterfall.comments.load","label":"加载评论",' +
+        '"prompt":"","variant":"secondary","kind":"client","args":{"surfaceId":"surface-1",' +
+        '"candidateId":"youtube-video-1"}}') as A2uiAction;
+      expect(waterfallCommentsCandidateFromAction(action, 'surface-1')).assertEqual('youtube-video-1');
+      expect(waterfallCommentsCandidateFromAction(action, 'stale-surface')).assertEqual(null);
+      const injected = JSON.parse(JSON.stringify(action)) as A2uiAction;
+      (injected.args as Record<string, Object | string>)['providerItemId'] = 'attacker-controlled';
+      expect(waterfallCommentsCandidateFromAction(injected, 'surface-1')).assertEqual(null);
     });
 
     it('validates Waterfall behavior actions at the existing client bridge', 0, () => {
@@ -4007,6 +4109,58 @@ export default function htmlHomeRendererTest() {
       const unexpectedId = JSON.parse(JSON.stringify(valid)) as A2uiAction;
       (unexpectedId.args as Record<string, Object | string | number>).candidateId = '';
       expect(waterfallBehaviorFromAction(unexpectedId, 'surface-1')).assertEqual(null);
+    });
+
+    it('accepts only bounded Waterfall card actions from the current surface', 0, () => {
+      const valid = parseHtmlHomeAction('{"id":"waterfall.card.action","label":"偏好",' +
+        '"prompt":"","variant":"secondary","kind":"client","args":{"surfaceId":"surface-1",' +
+        '"candidateId":"candidate-1","action":"like","active":true}}') as A2uiAction;
+      expect(waterfallCardActionFromAction(valid, 'surface-1')?.action).assertEqual('like');
+      expect(waterfallCardActionFromAction(valid, 'other')).assertEqual(null);
+
+      const undo = parseHtmlHomeAction('{"id":"waterfall.card.action","label":"撤销",' +
+        '"prompt":"","variant":"secondary","kind":"client","args":{"surfaceId":"surface-1",' +
+        '"candidateId":"candidate-1","action":"save","active":true,"restoreSavedAt":true}}') as A2uiAction;
+      expect(waterfallCardActionFromAction(undo, 'surface-1')?.restoreSavedAt).assertTrue();
+
+      const unknown = JSON.parse(JSON.stringify(valid)) as A2uiAction;
+      (unknown.args as Record<string, Object | string | boolean>).action = 'hide';
+      expect(waterfallCardActionFromAction(unknown, 'surface-1')).assertEqual(null);
+      const injected = JSON.parse(JSON.stringify(valid)) as A2uiAction;
+      (injected.args as Record<string, Object | string | boolean>).title = 'forged';
+      expect(waterfallCardActionFromAction(injected, 'surface-1')).assertEqual(null);
+    });
+
+    it('publishes card state and newest-first saved snapshots without mixing platform metrics', 0, () => {
+      const doc = waterfallRendererFixture();
+      const first: WaterfallCardRecord = {
+        candidateId: 'video-1', reaction: 'like', reactedAt: 1000, saved: true, savedAt: 1000,
+        snapshot: {
+          id: 'video-1', source: 'youtube', mediaType: 'video', title: 'Older', summary: 'Summary',
+          url: 'https://www.youtube.com/watch?v=older', coverUrl: 'https://i.example/older.jpg',
+          publishedAt: '2026-08-20T00:00:00.000Z', authorName: 'Creator', authorAvatarUrl: '',
+          metrics: [{ kind: 'like', value: 999 }], topics: ['AI'], format: 'landscape_video'
+        }
+      };
+      first.snapshot.mediaUrl = 'https://cdn.example/older.mp4';
+      const second: WaterfallCardRecord = {
+        candidateId: 'saved-2', reaction: 'none', reactedAt: 0, saved: true, savedAt: 2000,
+        snapshot: {
+          id: 'saved-2', source: 'reddit', mediaType: 'post', title: 'Newer', summary: 'Second',
+          url: 'https://reddit.com/r/test/2', coverUrl: '', publishedAt: '2026-08-21T00:00:00.000Z',
+          authorName: 'Redditor', authorAvatarUrl: '', metrics: [], topics: ['科技'], format: 'text'
+        }
+      };
+      const payload = buildWaterfallHomePayload(doc, false, null, [first, second]);
+
+      expect(payload?.cardStates.length).assertEqual(2);
+      expect(payload?.cardStates[0].reaction).assertEqual('like');
+      expect(payload?.cardStates[0].saved).assertTrue();
+      expect(payload?.savedCards[0].id).assertEqual('saved-2');
+      expect(payload?.savedCards[1].id).assertEqual('video-1');
+      expect(payload?.savedCards[1].savedAt).assertEqual(1000);
+      expect(payload?.savedCards[1].mediaUrl).assertEqual('https://cdn.example/older.mp4');
+      expect(JSON.stringify(payload?.cardStates).indexOf('metrics')).assertEqual(-1);
     });
 
     it('keeps the Waterfall entry hidden when no candidate is valid', 0, () => {
