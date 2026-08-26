@@ -250,6 +250,37 @@ export default function phoneLocalMemoryRuntimeTest() {
       expect(store.records[store.records.length - 1].sceneId).assertEqual('global');
     });
 
+    it('uses explicit recall topK bounds and scales the bounded projection past five items', 0, async () => {
+      const store = new RuntimeMemoryStore();
+      const runtime = new PhoneLocalMemoryRuntime(null, {
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      await runtime.recall('initialize');
+      const facts: string[] = [];
+      for (let index = 0; index < 20; index += 1) {
+        facts.push('召回边界偏好 ' + index.toString());
+      }
+      for (let offset = 0; offset < facts.length; offset += 5) {
+        await runtime.remember(
+          facts.slice(offset, offset + 5),
+          'turn-runtime-top-k-' + offset.toString(),
+          'work_companion'
+        );
+      }
+
+      const defaultHits = await runtime.recall('召回边界偏好');
+      const oneHit = await runtime.recall('召回边界偏好', 1);
+      const tenHits = await runtime.recall('召回边界偏好', 10);
+      const twentyHits = await runtime.recall('召回边界偏好', 20);
+
+      expect(defaultHits.length).assertEqual(5);
+      expect(oneHit.length).assertEqual(1);
+      expect(tenHits.length).assertEqual(10);
+      expect(twentyHits.length).assertEqual(20);
+    });
+
     it('leaves the marker unset after a partial seed failure and fills the gap next startup', 0, async () => {
       const store = new RuntimeMemoryStore();
       store.failOnceFact = '用户出行时偏好少换乘。';

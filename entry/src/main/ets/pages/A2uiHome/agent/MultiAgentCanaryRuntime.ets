@@ -25,6 +25,8 @@ import {
   LeaderDataTaskInputNormalizer,
   LeaderDecisionDataTask,
   LeaderMemoryMutation,
+  LeaderMemoryRecallToolExecutor,
+  LeaderMemoryRecallToolRequest,
   LeaderMemoryToolExecutionGuard,
   LeaderMemoryToolExecutor,
   LeaderMemoryToolRequest,
@@ -35,9 +37,16 @@ import {
   LeaderToolMetadata,
   LinkedMessageBus,
   LocalModel,
+  MEMORY_RECALL_DEFAULT_TOP_K,
+  MEMORY_RECALL_FACT_MAX_CHARS,
+  MEMORY_RECALL_MAX_TOP_K,
+  memoryRecallTotalMaxChars,
   MemoryBatchResult,
   MemoryCommitGuard,
   MemorySelectionPayload,
+  MemoryRecallItem,
+  MEMORY_RECALL_OBSERVATION_QUERY_MAX_CHARS,
+  MemoryRecallObservation,
   MemoryWriteResult,
   MailDetail,
   MailDetailRequest,
@@ -807,7 +816,9 @@ function normalizeCanaryTaskInput(
   const originalInput: InputUserPayload = {
     text: originalQueryFromBimPrompt(input.text),
     recentMessages: input.recentMessages,
-    previousPersonaId: input.previousPersonaId,
+    sessionSummary: input.sessionSummary,
+    lastTurnPersonaId: input.lastTurnPersonaId,
+    memoryRecallObservation: input.memoryRecallObservation,
     currentSurfaceSummary: input.currentSurfaceSummary,
     recentObservations: input.recentObservations,
     orderedContinuationAuthorized: input.orderedContinuationAuthorized
@@ -1327,11 +1338,88 @@ class CanaryRegisteredExecutor implements RegisteredActionExecutor {
   }
 }
 
-class PhoneLocalLeaderMemoryToolExecutor implements LeaderMemoryToolExecutor {
+class PhoneLocalLeaderMemoryToolExecutor implements LeaderMemoryToolExecutor,
+  LeaderMemoryRecallToolExecutor {
   private readonly runtime: PhoneLocalMemoryRuntimePort | null;
+  private readonly recallObserver: ((
+    request: LeaderMemoryRecallToolRequest,
+    observation: MemoryRecallObservation
+  ) => void) | null;
 
-  constructor(runtime: PhoneLocalMemoryRuntimePort | null) {
+  constructor(
+    runtime: PhoneLocalMemoryRuntimePort | null,
+    recallObserver?: (
+      request: LeaderMemoryRecallToolRequest,
+      observation: MemoryRecallObservation
+    ) => void
+  ) {
     this.runtime = runtime;
+    this.recallObserver = recallObserver === undefined ? null : recallObserver;
+  }
+
+  async recall(
+    request: LeaderMemoryRecallToolRequest,
+    guard: LeaderMemoryToolExecutionGuard
+  ): Promise<MemoryRecallObservation> {
+    if (!guard.isActive() || this.runtime === null) {
+      return this.observedRecall(request, 'error', []);
+    }
+    try {
+      const recalled: PhoneLocalRecalledMemory[] = await this.runtime.recall(request.query, request.topK);
+      if (!guard.isActive()) return this.observedRecall(request, 'error', []);
+      return this.observedRecall(
+        request,
+        recalled.length === 0 ? 'empty' : 'success',
+        recalled
+      );
+    } catch (_error) {
+      return this.observedRecall(request, 'error', []);
+    }
+  }
+
+  private observedRecall(
+    request: LeaderMemoryRecallToolRequest,
+    status: 'success' | 'empty' | 'error',
+    recalled: PhoneLocalRecalledMemory[]
+  ): MemoryRecallObservation {
+    const observation: MemoryRecallObservation = this.recallObservation(request, status, recalled);
+    const observer = this.recallObserver;
+    if (observer !== null) {
+      try {
+        observer(request, observation);
+      } catch (_error) {
+        // Observation bookkeeping must never turn a read-only recall into a turn failure.
+      }
+    }
+    return observation;
+  }
+
+  private recallObservation(
+    request: LeaderMemoryRecallToolRequest,
+    status: 'success' | 'empty' | 'error',
+    recalled: PhoneLocalRecalledMemory[]
+  ): MemoryRecallObservation {
+    const items: MemoryRecallItem[] = [];
+    let remaining: number = memoryRecallTotalMaxChars(request.topK);
+    for (let index = 0; index < recalled.length && items.length < request.topK && remaining > 0; index++) {
+      const memory: PhoneLocalRecalledMemory = recalled[index];
+      const fact: string = memory.fact.substring(0, Math.min(MEMORY_RECALL_FACT_MAX_CHARS, remaining));
+      if (fact.length === 0) break;
+      items.push({
+        memoryId: memory.memoryId,
+        fact,
+        personaTag: memory.personaTag,
+        authority: memory.authority
+      });
+      remaining -= fact.length;
+    }
+    return {
+      callId: request.callId,
+      origin: request.origin,
+      query: request.query.substring(0, MEMORY_RECALL_OBSERVATION_QUERY_MAX_CHARS),
+      status: status === 'success' && items.length === 0 ? 'empty' : status,
+      items
+    };
   }
 
   async execute(
@@ -1436,6 +1524,12 @@ class CallbackMemoryCommitGuard implements MemoryCommitGuard {
 
   isActive(): boolean {
     return this.active();
+  }
+}
+
+class AlwaysActiveLeaderMemoryToolExecutionGuard implements LeaderMemoryToolExecutionGuard {
+  isActive(): boolean {
+    return true;
   }
 }
 
@@ -1558,6 +1652,8 @@ export class MultiAgentCanaryRuntime {
   private pageFingerprint: string = '';
   private gmailDraftApplyCandidate: GmailDraftApplyCandidate | null = null;
   private pendingMemoryForgetSelection: PendingMemoryForgetSelection | null = null;
+  private readonly manualRecallItemsBySourceTaskId: Map<string, RecalledMemoryContext[]> =
+    new Map<string, RecalledMemoryContext[]>();
   private memorySelectionSequence: number = 0;
   private surfaceGeneration: number = 0;
   private lastLeaderPersonaId: string = '';
@@ -1687,6 +1783,13 @@ export class MultiAgentCanaryRuntime {
       undefined,
       dataTaskInputNormalizer
     );
+    const leaderMemoryTools = new PhoneLocalLeaderMemoryToolExecutor(
+      options.memoryRuntime === undefined ? null : options.memoryRuntime,
+      (
+        request: LeaderMemoryRecallToolRequest,
+        observation: MemoryRecallObservation
+      ): void => this.recordManualRecallObservation(request, observation)
+    );
     this.runtime = new MultiAgentRuntime({
       conversationId,
       bus: options.bus,
@@ -1733,9 +1836,8 @@ export class MultiAgentCanaryRuntime {
         currentGmailDraftApply
       ),
       virtualActionResolver: new CanaryVirtualActionIntentResolver(currentGmailDraftApply),
-      memoryToolExecutor: new PhoneLocalLeaderMemoryToolExecutor(
-        options.memoryRuntime === undefined ? null : options.memoryRuntime
-      ),
+      memoryToolExecutor: leaderMemoryTools,
+      memoryRecallToolExecutor: leaderMemoryTools,
       submitTimeoutMs: options.submitTimeoutMs,
       actionTimeoutMs: options.actionTimeoutMs,
       settingsFingerprint: options.settingsFingerprint,
@@ -1758,6 +1860,7 @@ export class MultiAgentCanaryRuntime {
   ): Promise<MultiAgentTurnOutcome> {
     const capturedGeneration = Number.isSafeInteger(hostGeneration) && hostGeneration > 0 ?
       hostGeneration : 0;
+    this.manualRecallItemsBySourceTaskId.clear();
     this.pendingMemoryForgetSelection = null;
     if (capturedGeneration > 0 &&
       capturedGeneration === this.currentHostGeneration() &&
@@ -1770,11 +1873,28 @@ export class MultiAgentCanaryRuntime {
     const recallStartedAt: number = Date.now();
     const guardRecallGeneration: boolean = this.memoryRuntime !== null && capturedGeneration > 0 &&
       capturedGeneration === this.currentHostGeneration();
-    const recall: Promise<PhoneLocalRecalledMemory[]> = this.memoryRuntime === null ?
-      Promise.resolve([]) : this.memoryRuntime.recall(text).catch(
-        (_error: Object): PhoneLocalRecalledMemory[] => []
-      );
-    return recall.then((memories: PhoneLocalRecalledMemory[]): Promise<MultiAgentTurnOutcome> => {
+    const prefetchQuery: string = originalQueryFromBimPrompt(text).trim();
+    const prefetchRequest: LeaderMemoryRecallToolRequest = {
+      callId: 'memory-recall-prefetch-' + submissionSequence.toString(),
+      conversationId: this.conversationId,
+      turnId: 'pending-' + submissionSequence.toString(),
+      sourceTaskId: 'host-prefetch',
+      origin: 'prefetch',
+      query: prefetchQuery,
+      topK: MEMORY_RECALL_DEFAULT_TOP_K
+    };
+    const recallExecutor = new PhoneLocalLeaderMemoryToolExecutor(this.memoryRuntime);
+    const emptyObservation: MemoryRecallObservation = {
+      callId: prefetchRequest.callId,
+      origin: 'prefetch',
+      query: prefetchQuery.substring(0, MEMORY_RECALL_OBSERVATION_QUERY_MAX_CHARS),
+      status: 'empty',
+      items: []
+    };
+    const recallGuard: LeaderMemoryToolExecutionGuard = new AlwaysActiveLeaderMemoryToolExecutionGuard();
+    const recall: Promise<MemoryRecallObservation> = prefetchQuery.length === 0 ?
+      Promise.resolve(emptyObservation) : recallExecutor.recall(prefetchRequest, recallGuard);
+    return recall.then((observation: MemoryRecallObservation): Promise<MultiAgentTurnOutcome> => {
       if (submissionSequence !== this.submissionSequence ||
         (guardRecallGeneration && capturedGeneration !== this.currentHostGeneration())) {
         aiLogInfo('[AIPhone][LeaderMemoryRecall] status=canceled count=0 durationMs=' +
@@ -1790,19 +1910,21 @@ export class MultiAgentCanaryRuntime {
         };
         return Promise.resolve(canceled);
       }
-      aiLogInfo('[AIPhone][LeaderMemoryRecall] status=' + (memories.length > 0 ? 'hit' : 'miss') +
-        ' count=' + memories.length.toString() + ' durationMs=' +
+      aiLogInfo('[AIPhone][LeaderMemoryRecall] status=' + observation.status +
+        ' count=' + observation.items.length.toString() + ' durationMs=' +
         Math.max(0, Date.now() - recallStartedAt).toString());
       const input: UserInputPayload = {
         text: context.text,
         recentMessages: context.recentMessages,
-        recalledMemories: memories.map((memory: PhoneLocalRecalledMemory): RecalledMemoryContext => ({
+        sessionSummary: context.sessionSummary,
+        recalledMemories: observation.items.map((memory: MemoryRecallItem): RecalledMemoryContext => ({
           memoryId: memory.memoryId,
           fact: memory.fact,
           personaTag: memory.personaTag,
           authority: memory.authority
         })),
-        previousPersonaId: this.lastLeaderPersonaId,
+        lastTurnPersonaId: this.lastLeaderPersonaId,
+        memoryRecallObservation: observation,
         currentSurfaceSummary: context.currentSurfaceSummary,
         recentObservations: context.recentObservations
       };
@@ -1817,13 +1939,39 @@ export class MultiAgentCanaryRuntime {
         );
         if (submissionSequence === this.submissionSequence && outcome.ok &&
           outcome.memorySelection !== undefined) {
-          const surface = this.installMemoryForgetSelection(
-            outcome.memorySelection, recalledForSubmission, capturedGeneration
+          const manualRecalled = this.manualRecallItemsBySourceTaskId.get(
+            outcome.memorySelection.sourceTaskId
           );
+          const trustedRecalled: RecalledMemoryContext[] = manualRecalled === undefined ?
+            recalledForSubmission : manualRecalled;
+          const surface = this.installMemoryForgetSelection(
+            outcome.memorySelection, trustedRecalled, capturedGeneration
+          );
+          this.manualRecallItemsBySourceTaskId.delete(outcome.memorySelection.sourceTaskId);
           if (surface !== null) outcome.surfaceId = surface.surfaceId;
         }
         return outcome;
       });
+  }
+
+  private recordManualRecallObservation(
+    request: LeaderMemoryRecallToolRequest,
+    observation: MemoryRecallObservation
+  ): void {
+    if (request.origin !== 'leader' || request.sourceTaskId.trim().length === 0 ||
+      observation.callId !== request.callId || observation.origin !== 'leader' ||
+      observation.query !== request.query) {
+      return;
+    }
+    const recalled: RecalledMemoryContext[] = observation.items.map(
+      (item: MemoryRecallItem): RecalledMemoryContext => ({
+        memoryId: item.memoryId,
+        fact: item.fact,
+        personaTag: item.personaTag,
+        authority: item.authority
+      })
+    );
+    this.manualRecallItemsBySourceTaskId.set(request.sourceTaskId, recalled);
   }
 
   private installMemoryForgetSelection(
@@ -1833,7 +1981,7 @@ export class MultiAgentCanaryRuntime {
   ): A2uiSurfaceState | null {
     if (selection.operation !== 'forget' || selection.originTurnId.trim().length === 0 ||
       selection.sourceTaskId.trim().length === 0 || selection.personaId.trim().length === 0 ||
-      selection.candidates.length < 1 || selection.candidates.length > 5 ||
+      selection.candidates.length < 1 || selection.candidates.length > MEMORY_RECALL_MAX_TOP_K ||
       !Number.isSafeInteger(hostGeneration) || hostGeneration <= 0 ||
       this.currentHostGeneration() !== hostGeneration ||
       this.turnHostGenerations.get(selection.originTurnId) !== hostGeneration ||
@@ -2175,6 +2323,7 @@ export class MultiAgentCanaryRuntime {
     this.pageFingerprint = '';
     this.gmailDraftApplyCandidate = null;
     this.pendingMemoryForgetSelection = null;
+    this.manualRecallItemsBySourceTaskId.clear();
     this.surfaceGeneration = 0;
     this.turnHostGenerations.clear();
     this.validOriginTurnIds.clear();

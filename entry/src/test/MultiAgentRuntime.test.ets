@@ -1292,8 +1292,8 @@ export default function multiAgentRuntimeTest() {
       expect(result.surfaceId).assertEqual('');
       const input = planner.lastInput as InputUserPayload;
       expect(input.text).assertEqual('查询天气');
-      expect(input.recentMessages!.length).assertEqual(8);
-      expect(input.recentMessages![0].content).assertEqual('message-2');
+      expect(input.recentMessages!.length).assertEqual(10);
+      expect(input.recentMessages![0].content).assertEqual('message-0');
       expect(input.previousPersonaId).assertEqual('travel_companion');
       expect(input.currentSurfaceSummary!.surfaceId).assertEqual('surface-previous');
       runtime.dispose();

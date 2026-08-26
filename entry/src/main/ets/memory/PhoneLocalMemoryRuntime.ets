@@ -8,7 +8,12 @@ import {
   MemoryDraft,
   MemoryError,
   MemoryHit,
-  MemoryWriteResult
+  MemoryWriteResult,
+  MEMORY_RECALL_DEFAULT_TOP_K,
+  MEMORY_RECALL_FACT_MAX_CHARS,
+  MEMORY_RECALL_MAX_TOP_K,
+  memoryRecallTotalMaxChars,
+  validMemoryRecallTopK
 } from '@loop/agent-core';
 import { BertWordPieceTokenizer } from './BertWordPieceTokenizer';
 import { BgeMindSporeEmbeddingPort } from './BgeMindSporeEmbeddingPort';
@@ -17,10 +22,15 @@ import { ArkDataPhoneLocalMemoryStore, PhoneLocalMemoryStore } from './PhoneLoca
 
 export const PHONE_LOCAL_MEMORY_OWNER_ID: string = 'local-user-v1';
 export const PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID: string = 'global';
-export const PHONE_LOCAL_MEMORY_RECALL_TOP_K: number = 5;
+export const PHONE_LOCAL_MEMORY_RECALL_TOP_K: number = MEMORY_RECALL_DEFAULT_TOP_K;
 export const PHONE_LOCAL_MEMORY_RECALL_TIMEOUT_MS: number = 2500;
-export const PHONE_LOCAL_MEMORY_RECALL_FACT_LIMIT: number = 240;
-export const PHONE_LOCAL_MEMORY_RECALL_TOTAL_LIMIT: number = 1200;
+export const PHONE_LOCAL_MEMORY_RECALL_FACT_LIMIT: number = MEMORY_RECALL_FACT_MAX_CHARS;
+export const PHONE_LOCAL_MEMORY_RECALL_TOTAL_LIMIT: number = memoryRecallTotalMaxChars(
+  MEMORY_RECALL_DEFAULT_TOP_K
+);
+export const PHONE_LOCAL_MEMORY_RECALL_MAX_TOTAL_LIMIT: number = memoryRecallTotalMaxChars(
+  MEMORY_RECALL_MAX_TOP_K
+);
 export const PHONE_LOCAL_MEMORY_SEED_MARKER: string = 'seed:persona-test-preferences:v1';
 
 const MEMORY_RUNTIME_LOG_DOMAIN: number = 0x0000;
@@ -47,7 +57,7 @@ export interface PhoneLocalMemoryRuntimeOptions {
 }
 
 export interface PhoneLocalMemoryRuntimePort {
-  recall(text: string): Promise<PhoneLocalRecalledMemory[]>;
+  recall(text: string, topK?: number): Promise<PhoneLocalRecalledMemory[]>;
   remember(facts: string[], sourceTurnId: string, personaTag: string,
     guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
   update(memoryId: string, fact: string, sourceTurnId: string,
@@ -125,13 +135,13 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     this.logger = options.logger ?? new HilogPhoneLocalMemoryRuntimeLogger();
   }
 
-  async recall(text: string): Promise<PhoneLocalRecalledMemory[]> {
+  async recall(text: string, topK: number = MEMORY_RECALL_DEFAULT_TOP_K): Promise<PhoneLocalRecalledMemory[]> {
     const query = text.trim();
-    if (query.length === 0) return [];
+    if (query.length === 0 || !validMemoryRecallTopK(topK)) return [];
     try {
-      const hits = await this.withTimeout(this.search(query));
+      const hits = await this.withTimeout(this.search(query, topK));
       const output: PhoneLocalRecalledMemory[] = [];
-      let remaining = PHONE_LOCAL_MEMORY_RECALL_TOTAL_LIMIT;
+      let remaining = memoryRecallTotalMaxChars(topK);
       for (let index = 0; index < hits.length && remaining > 0; index += 1) {
         const fact = boundedFact(hits[index].record.fact, remaining);
         if (fact.length === 0) break;
@@ -229,13 +239,13 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     return provider;
   }
 
-  private async search(query: string): Promise<MemoryHit[]> {
+  private async search(query: string, topK: number): Promise<MemoryHit[]> {
     const provider = await this.provider();
     return await provider.search({
       ownerId: PHONE_LOCAL_MEMORY_OWNER_ID,
       text: query,
       sceneIds: [],
-      topK: PHONE_LOCAL_MEMORY_RECALL_TOP_K
+      topK
     });
   }
 

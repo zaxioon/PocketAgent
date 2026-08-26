@@ -1,8 +1,27 @@
-import { AgentMessage, UserInputPayload } from '../message/AgentMessage';
+import {
+  AgentMessage,
+  MemoryRecallObservation,
+  MemoryRecallOrigin,
+  UserInputPayload
+} from '../message/AgentMessage';
 import { ToolBackendType, ToolRiskLevel } from '../../aiphone/runtime/ToolDefinitionTypes';
 
 export const MAX_LEADER_DATA_TASKS_PER_ROUND: number = 8;
 export const MAX_LEADER_DATA_TASKS_PER_TURN: number = 24;
+export const MEMORY_RECALL_DEFAULT_TOP_K: number = 5;
+export const MEMORY_RECALL_MIN_TOP_K: number = 1;
+export const MEMORY_RECALL_MAX_TOP_K: number = 20;
+export const MEMORY_RECALL_FACT_MAX_CHARS: number = 240;
+export const MEMORY_RECALL_TOTAL_MAX_CHARS: number = 4800;
+
+export function validMemoryRecallTopK(topK: number): boolean {
+  return Number.isSafeInteger(topK) && topK >= MEMORY_RECALL_MIN_TOP_K &&
+    topK <= MEMORY_RECALL_MAX_TOP_K;
+}
+
+export function memoryRecallTotalMaxChars(topK: number): number {
+  return Math.min(topK * MEMORY_RECALL_FACT_MAX_CHARS, MEMORY_RECALL_TOTAL_MAX_CHARS);
+}
 
 export type InputUserPayload = UserInputPayload;
 
@@ -75,6 +94,29 @@ export interface LeaderMemoryToolExecutor {
     request: LeaderMemoryToolRequest,
     guard: LeaderMemoryToolExecutionGuard
   ): Promise<LeaderMemoryToolResult>;
+}
+
+export interface LeaderMemoryRecallToolCall {
+  toolId: 'memory.recall';
+  query: string;
+  topK?: number;
+}
+
+export interface LeaderMemoryRecallToolRequest {
+  callId: string;
+  conversationId: string;
+  turnId: string;
+  sourceTaskId: string;
+  origin: MemoryRecallOrigin;
+  query: string;
+  topK: number;
+}
+
+export interface LeaderMemoryRecallToolExecutor {
+  recall(
+    request: LeaderMemoryRecallToolRequest,
+    guard: LeaderMemoryToolExecutionGuard
+  ): Promise<MemoryRecallObservation>;
 }
 
 export interface LeaderDecisionDataTask {
@@ -169,6 +211,7 @@ export interface LeaderDecision {
   actionIntent?: LeaderActionIntent;
   memoryMutation?: LeaderMemoryMutation;
   memoryClarification?: LeaderMemoryForgetClarification;
+  leaderToolCall?: LeaderMemoryRecallToolCall;
   answer?: string;
   bimSuggestion?: LeaderBimSuggestion;
   bimContextUpdate?: LeaderBimContextUpdate;

@@ -1,5 +1,6 @@
 import localUnitTest from './LocalUnit.test';
 import conversationContextTest from './ConversationContext.test';
+import sessionContextCompactionTest from './SessionContextCompaction.test';
 import agentCorePublicContractTest from './AgentCorePublicContract.test';
 import a2uiParserTest from './A2uiParser.test';
 import a2uiSurfaceStoreTest from './A2uiSurfaceStore.test';
@@ -138,6 +139,7 @@ export default function testsuite() {
   movieDemoContractTest();
   localUnitTest();
   conversationContextTest();
+  sessionContextCompactionTest();
   agentCorePublicContractTest();
   a2uiParserTest();
   a2uiSurfaceStoreTest();

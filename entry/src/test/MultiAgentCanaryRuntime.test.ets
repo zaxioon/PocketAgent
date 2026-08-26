@@ -29,6 +29,7 @@ import {
   LinkedMessageBus,
   MemoryBatchResult,
   MemoryCommitGuard,
+  MemoryRecallObservation,
   MemoryWriteResult,
   ObservationDigest,
   TaskErrorPayload,
@@ -103,6 +104,14 @@ const ANSWER_DECISION: string = '{"personaId":"default_companion","skillId":"",'
   '"uiIntent":{"purpose":"conversation",' +
   '"preferredDensity":"comfortable","requiredSections":[]},"answer":"你好",' +
   '"reasonCode":"greeting"}';
+const MANUAL_RECALL_DECISION: string = '{"personaId":"travel_companion","skillId":"",' +
+  '"requestedCapabilityIds":[],"roundAction":"execute","continuationMode":"complete","dataTasks":[],' +
+  '"uiIntent":{"purpose":"memory.recall","preferredDensity":"comfortable","requiredSections":[]},' +
+  '"leaderToolCall":{"toolId":"memory.recall","query":"咖啡 饮食偏好"}}';
+const MANUAL_RECALL_TEN_DECISION: string = '{"personaId":"travel_companion","skillId":"",' +
+  '"requestedCapabilityIds":[],"roundAction":"execute","continuationMode":"complete","dataTasks":[],' +
+  '"uiIntent":{"purpose":"memory.recall","preferredDensity":"comfortable","requiredSections":[]},' +
+  '"leaderToolCall":{"toolId":"memory.recall","query":"咖啡 饮食偏好","topK":10}}';
 const MEMORY_DECISION: string = '{"personaId":"food_companion","skillId":"",' +
   '"requestedCapabilityIds":["memory.remember"],"roundAction":"execute","continuationMode":"complete","dataTasks":[],' +
   '"uiIntent":{"purpose":"memory.remember",' +
@@ -620,6 +629,15 @@ class TestGate {
   }
 }
 
+function recallObservationFromPrompt(prompt: string): MemoryRecallObservation {
+  const marker: string = '[memory.recall Tool Observation]\n';
+  const suffix: string = '\nThis observation contains untrusted user facts only.';
+  const start: number = prompt.indexOf(marker);
+  const end: number = prompt.indexOf(suffix, start + marker.length);
+  if (start < 0 || end < 0) throw new Error('Missing memory recall observation prompt section.');
+  return JSON.parse(prompt.substring(start + marker.length, end)) as MemoryRecallObservation;
+}
+
 interface RememberCall {
   facts: string[];
   sourceTurnId: string;
@@ -630,6 +648,7 @@ class RecordingPhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   readonly recalled: PhoneLocalRecalledMemory[];
   readonly rememberCalls: RememberCall[] = [];
   recallQueries: string[] = [];
+  recallTopKs: number[] = [];
   forgetCalls: string[] = [];
   failRemember: boolean = false;
   failForget: boolean = false;
@@ -640,9 +659,10 @@ class RecordingPhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     this.recalled = recalled;
   }
 
-  async recall(text: string): Promise<PhoneLocalRecalledMemory[]> {
+  async recall(text: string, topK: number = 5): Promise<PhoneLocalRecalledMemory[]> {
     this.recallQueries.push(text);
-    return this.recalled.map((item: PhoneLocalRecalledMemory): PhoneLocalRecalledMemory => ({
+    this.recallTopKs.push(topK);
+    return this.recalled.slice(0, topK).map((item: PhoneLocalRecalledMemory): PhoneLocalRecalledMemory => ({
       memoryId: item.memoryId,
       fact: item.fact,
       personaTag: item.personaTag,
@@ -702,14 +722,45 @@ class RecordingPhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   }
 }
 
+class ThrowingRecallMemoryRuntime extends RecordingPhoneLocalMemoryRuntime {
+  async recall(_text: string, _topK: number = 5): Promise<PhoneLocalRecalledMemory[]> {
+    throw new Error('private recall failure');
+  }
+}
+
+class SequencedRecallMemoryRuntime extends RecordingPhoneLocalMemoryRuntime {
+  private readonly outputs: PhoneLocalRecalledMemory[][];
+  private readonly failAtIndex: number;
+
+  constructor(outputs: PhoneLocalRecalledMemory[][], failAtIndex: number = -1) {
+    super();
+    this.outputs = outputs;
+    this.failAtIndex = failAtIndex;
+  }
+
+  async recall(text: string, topK: number = 5): Promise<PhoneLocalRecalledMemory[]> {
+    this.recallQueries.push(text);
+    this.recallTopKs.push(topK);
+    const index: number = this.recallQueries.length - 1;
+    if (index === this.failAtIndex) throw new Error('private sequenced recall failure');
+    const selected: PhoneLocalRecalledMemory[] = index < this.outputs.length ? this.outputs[index] : [];
+    return selected.map((item: PhoneLocalRecalledMemory): PhoneLocalRecalledMemory => ({
+      memoryId: item.memoryId,
+      fact: item.fact,
+      personaTag: item.personaTag,
+      authority: item.authority
+    }));
+  }
+}
+
 class GatedRecallMemoryRuntime extends RecordingPhoneLocalMemoryRuntime {
   readonly recallStarted: TestGate = new TestGate();
   readonly recallRelease: TestGate = new TestGate();
 
-  async recall(text: string): Promise<PhoneLocalRecalledMemory[]> {
+  async recall(text: string, topK: number = 5): Promise<PhoneLocalRecalledMemory[]> {
     this.recallStarted.open();
     await this.recallRelease.promise;
-    return super.recall(text);
+    return super.recall(text, topK);
   }
 }
 
@@ -1743,7 +1794,7 @@ export default function multiAgentCanaryRuntimeTest() {
 
       expect(outcome.status).assertEqual('success');
       expect(externalCalls).assertEqual(0);
-      expect(model.prompts[0].indexOf('"toolId":"time"')).assertLarger(-1);
+      expect(model.systemPrompts[0].indexOf('"toolId":"time"')).assertLarger(-1);
       expect(surfaces.length).assertLarger(0);
       runtime.dispose();
     });
@@ -2301,7 +2352,7 @@ export default function multiAgentCanaryRuntimeTest() {
           message.type === AgentMessageType.TASK_CREATE_UI ||
           message.type === AgentMessageType.ACTION_PLAN_REQUEST
       ).length).assertEqual(0);
-      expect(model.prompts[0].indexOf('"requestedCapabilityIds"') >= 0).assertTrue();
+      expect(model.systemPrompts[0].indexOf('"requestedCapabilityIds"') >= 0).assertTrue();
       runtime.dispose();
     });
 
@@ -2374,7 +2425,7 @@ export default function multiAgentCanaryRuntimeTest() {
 
       await runtime.submit('帮我查看我今天 X 和 Slack 上的消息', { text: '' });
 
-      const prompt = model.prompts[0];
+      const prompt = model.systemPrompts[0];
       expect(prompt.indexOf('SocialHub inbox')).assertLarger(-1);
       expect(prompt.indexOf('private-message')).assertLarger(-1);
       expect(prompt.indexOf('dataTasks[].input.platforms')).assertLarger(-1);
@@ -2396,7 +2447,7 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(prompt.indexOf('"toolId":"memory.update","domain":"memory"')).assertLarger(-1);
       expect(prompt.indexOf('"toolId":"memory.forget","domain":"memory"')).assertLarger(-1);
       const catalogStart = prompt.indexOf('Registry capabilities: ');
-      const catalogEnd = prompt.indexOf('\nPersonas: ', catalogStart);
+      const catalogEnd = prompt.indexOf('\nAvailable Data owner IDs: ', catalogStart);
       expect(catalogStart).assertLarger(-1);
       expect(catalogEnd).assertLarger(catalogStart);
       const catalog = prompt.substring(catalogStart, catalogEnd);
@@ -2407,7 +2458,7 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(catalog.indexOf('"toolId":"gmail.message.send"')).assertEqual(-1);
       expect(catalog.indexOf('"toolId":"social.reply.draft"')).assertEqual(-1);
       expect(catalogEnd - catalogStart).assertLess(64001);
-      expect(prompt.length).assertLess(100001);
+      expect(prompt.length + model.prompts[0].length).assertLess(100001);
       expect(model.prompts.length).assertEqual(1);
       runtime.dispose();
     });
@@ -2426,8 +2477,8 @@ export default function multiAgentCanaryRuntimeTest() {
 
       await runtime.submit('为 GitHub 用户 sindresorhus 生成数据看板', { text: '' });
 
-      expect(model.prompts[0].indexOf('github.user.dashboard')).assertLarger(-1);
-      expect(model.prompts[0].indexOf('operationTarget')).assertLarger(-1);
+      expect(model.systemPrompts[0].indexOf('github.user.dashboard')).assertLarger(-1);
+      expect(model.systemPrompts[0].indexOf('operationTarget')).assertLarger(-1);
       runtime.dispose();
     });
 
@@ -2713,11 +2764,11 @@ export default function multiAgentCanaryRuntimeTest() {
         []
       ));
       await priceRuntime.submit('瑞幸生椰拿铁多少钱', { text: '' });
-      const priceCatalogStart = priceModel.prompts[0].indexOf('Registry capabilities: ');
-      const priceCatalogEnd = priceModel.prompts[0].indexOf(
-        '\nPersonas: ', priceCatalogStart
+      const priceCatalogStart = priceModel.systemPrompts[0].indexOf('Registry capabilities: ');
+      const priceCatalogEnd = priceModel.systemPrompts[0].indexOf(
+        '\nAvailable Data owner IDs: ', priceCatalogStart
       );
-      const priceCatalog = priceModel.prompts[0].substring(priceCatalogStart, priceCatalogEnd);
+      const priceCatalog = priceModel.systemPrompts[0].substring(priceCatalogStart, priceCatalogEnd);
       expect(priceCatalog.indexOf('"toolId":"food.search"')).assertLarger(-1);
       expect(priceCatalog.indexOf('"toolId":"luckin.order.preview"')).assertLarger(-1);
       expect(priceCatalog.indexOf('"toolId":"luckin.order.create"')).assertLarger(-1);
@@ -2733,11 +2784,11 @@ export default function multiAgentCanaryRuntimeTest() {
         []
       ));
       await orderRuntime.submit('帮我点一杯瑞幸生椰拿铁，半糖少冰', { text: '' });
-      const orderCatalogStart = orderModel.prompts[0].indexOf('Registry capabilities: ');
-      const orderCatalogEnd = orderModel.prompts[0].indexOf(
-        '\nPersonas: ', orderCatalogStart
+      const orderCatalogStart = orderModel.systemPrompts[0].indexOf('Registry capabilities: ');
+      const orderCatalogEnd = orderModel.systemPrompts[0].indexOf(
+        '\nAvailable Data owner IDs: ', orderCatalogStart
       );
-      const orderCatalog = orderModel.prompts[0].substring(orderCatalogStart, orderCatalogEnd);
+      const orderCatalog = orderModel.systemPrompts[0].substring(orderCatalogStart, orderCatalogEnd);
       expect(orderCatalog.indexOf('"toolId":"luckin.order.preview"')).assertLarger(-1);
       expect(orderCatalog.indexOf('"toolId":"luckin.order.create"')).assertLarger(-1);
       expect(orderCatalog.indexOf('"toolId":"luckin.order.status"')).assertLarger(-1);
@@ -2752,11 +2803,11 @@ export default function multiAgentCanaryRuntimeTest() {
         []
       ));
       await statusRuntime.submit('查询瑞幸订单状态', { text: '' });
-      const statusCatalogStart = statusModel.prompts[0].indexOf('Registry capabilities: ');
-      const statusCatalogEnd = statusModel.prompts[0].indexOf(
-        '\nPersonas: ', statusCatalogStart
+      const statusCatalogStart = statusModel.systemPrompts[0].indexOf('Registry capabilities: ');
+      const statusCatalogEnd = statusModel.systemPrompts[0].indexOf(
+        '\nAvailable Data owner IDs: ', statusCatalogStart
       );
-      const statusCatalog = statusModel.prompts[0].substring(statusCatalogStart, statusCatalogEnd);
+      const statusCatalog = statusModel.systemPrompts[0].substring(statusCatalogStart, statusCatalogEnd);
       expect(statusCatalog.indexOf('"toolId":"luckin.order.preview"')).assertLarger(-1);
       expect(statusCatalog.indexOf('"toolId":"luckin.order.create"')).assertLarger(-1);
       expect(statusCatalog.indexOf('"toolId":"luckin.order.status"')).assertLarger(-1);
@@ -2775,7 +2826,7 @@ export default function multiAgentCanaryRuntimeTest() {
 
       await runtime.submit('帮我看看 Reddit 上对 Appless 的讨论', { text: '' });
 
-      const prompt = model.prompts[0];
+      const prompt = model.systemPrompts[0];
       expect(prompt.indexOf('"toolId":"social.community.search"')).assertLarger(-1);
       expect(prompt.indexOf('"toolId":"social.post.preview"')).assertLarger(-1);
       expect(prompt.indexOf('"toolId":"social.reply.draft"')).assertEqual(-1);
@@ -3112,10 +3163,10 @@ export default function multiAgentCanaryRuntimeTest() {
 
       expect(outcome.kind).assertEqual('settled');
       expect((outcome as MultiAgentSettledOutcome).status).assertEqual('error');
-      expect(model.prompts[0].indexOf('gmail.thread.read') >= 0).assertTrue();
-      expect(model.prompts[0].indexOf('gmail.draft.create') >= 0).assertTrue();
-      expect(model.prompts[0].indexOf('gmail.open.web') >= 0).assertTrue();
-      expect(model.prompts[0].indexOf('gmail.authorize') >= 0).assertFalse();
+      expect(model.systemPrompts[0].indexOf('gmail.thread.read') >= 0).assertTrue();
+      expect(model.systemPrompts[0].indexOf('gmail.draft.create') >= 0).assertTrue();
+      expect(model.systemPrompts[0].indexOf('gmail.open.web') >= 0).assertTrue();
+      expect(model.systemPrompts[0].indexOf('gmail.authorize') >= 0).assertFalse();
       runtime.dispose();
     });
 
@@ -4493,7 +4544,7 @@ export default function multiAgentCanaryRuntimeTest() {
 
       expect(outcome.status).assertEqual('success');
       expect(review === null).assertFalse();
-      expect(model.prompts[0].indexOf(
+      expect(model.systemPrompts[0].indexOf(
         'Calendar update contract: for a natural-language update or move without a real Event ID'
       )).assertLarger(-1);
       expect(executor.tasks[0].toolId).assertEqual('calendar.events.search');
@@ -4656,7 +4707,7 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(outcome.status).assertEqual('success');
       expect(executor.tasks.length).assertEqual(1);
       expect(executor.tasks[0].toolId).assertEqual('calendar.events.search');
-      expect(model.prompts[0].indexOf(
+      expect(model.systemPrompts[0].indexOf(
         'Calendar delete contract: for a natural-language delete without a real Event ID'
       )).assertLarger(-1);
       expect(taskJson.indexOf('Appless QA run-1')).assertLarger(-1);
@@ -4807,6 +4858,287 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(memory.recallQueries.length).assertEqual(2);
       expect(model.prompts.length).assertEqual(2);
       expect(model.secondTurnUsedRecalledMemory).assertTrue();
+      runtime.dispose();
+    });
+
+    it('prefetches ranked items without scores then permits one manual recall without consuming a business round', 0,
+      async () => {
+        const model = new QueueModel([MANUAL_RECALL_DECISION, ANSWER_DECISION]);
+        const memory = new RecordingPhoneLocalMemoryRuntime([{
+          memoryId: 'memory-coffee', fact: '用户喝咖啡时只选择瑞幸。',
+          personaTag: 'food_companion', authority: 'leader'
+        }]);
+        const bus = new TrackingBus();
+        const options = canaryOptions(
+          model, new CanaryHotelExecutor(), new RecordingOpener(), [], [], bus
+        );
+        options.memoryRuntime = memory;
+        const runtime = new MultiAgentCanaryRuntime(options);
+
+        const outcome = await runtime.submit('这些记忆呢', {
+          text: '这些记忆呢',
+          recentMessages: [{ role: 'user', content: '刚才说的饮食习惯' }]
+        }) as MultiAgentSettledOutcome;
+        const terminals = bus.messages.filter((message: AgentMessage): boolean =>
+          message.type === AgentMessageType.TURN_RESULT
+        );
+        const terminal = terminals[terminals.length - 1].payload as TurnResultPayload;
+
+        expect(outcome.status).assertEqual('success');
+        expect(outcome.personaId).assertEqual('default_companion');
+        expect(memory.recallQueries.length).assertEqual(2);
+        expect(memory.recallQueries[0]).assertEqual('这些记忆呢');
+        expect(memory.recallQueries[0].indexOf('刚才说的饮食习惯')).assertEqual(-1);
+        expect(memory.recallQueries[1]).assertEqual('咖啡 饮食偏好');
+        expect(memory.recallTopKs.join(',')).assertEqual('5,5');
+        expect(model.prompts[0].indexOf('"origin":"prefetch"')).assertLarger(-1);
+        expect(model.prompts[0].indexOf('"score"')).assertEqual(-1);
+        expect(model.prompts[1].indexOf('"origin":"leader"')).assertLarger(-1);
+        expect(terminal.roundCount).assertEqual(1);
+        runtime.dispose();
+      });
+
+    it('keeps prefetch at five and passes an explicit topK ten through manual recall observation', 0, async () => {
+      const recalled: PhoneLocalRecalledMemory[] = [];
+      for (let index = 0; index < 10; index += 1) {
+        recalled.push({
+          memoryId: 'memory-top-k-' + index.toString(),
+          fact: '召回偏好 ' + index.toString(),
+          personaTag: 'food_companion',
+          authority: 'leader'
+        });
+      }
+      const model = new QueueModel([MANUAL_RECALL_TEN_DECISION, ANSWER_DECISION]);
+      const memory = new RecordingPhoneLocalMemoryRuntime(recalled);
+      const options = canaryOptions(model, new CanaryHotelExecutor(), new RecordingOpener(), [], []);
+      options.memoryRuntime = memory;
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('这些记忆呢', { text: '这些记忆呢' }) as MultiAgentSettledOutcome;
+      const prefetchObservation = recallObservationFromPrompt(model.prompts[0]);
+      const manualObservation = recallObservationFromPrompt(model.prompts[1]);
+
+      expect(outcome.status).assertEqual('success');
+      expect(memory.recallTopKs.join(',')).assertEqual('5,10');
+      expect(prefetchObservation.items.length).assertEqual(5);
+      expect(manualObservation.items.length).assertEqual(10);
+      runtime.dispose();
+    });
+
+    it('keeps a prefetch provenance query longer than the manual 240-char limit', 0, async () => {
+      const longQuery: string = '长'.repeat(241);
+      const model = new QueueModel([ANSWER_DECISION]);
+      const memory = new RecordingPhoneLocalMemoryRuntime([{
+        memoryId: 'memory-long-query', fact: '用户偏好简洁回答。',
+        personaTag: 'work_companion', authority: 'leader'
+      }]);
+      const options = canaryOptions(
+        model, new CanaryHotelExecutor(), new RecordingOpener(), [], []
+      );
+      options.memoryRuntime = memory;
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit(longQuery, { text: longQuery }) as MultiAgentSettledOutcome;
+      const observation = recallObservationFromPrompt(model.prompts[0]);
+
+      expect(outcome.status).assertEqual('success');
+      expect(memory.recallQueries[0]).assertEqual(longQuery);
+      expect(observation.callId.indexOf('memory-recall-prefetch-')).assertEqual(0);
+      expect(observation.query).assertEqual(longQuery);
+      expect(observation.items.length).assertEqual(1);
+      expect(model.prompts[0].indexOf('legacy-prefetch')).assertEqual(-1);
+      runtime.dispose();
+    });
+
+    it('searches the full prefetch query while bounding model-visible provenance to 2000 chars', 0, async () => {
+      const longQuery: string = '界'.repeat(2000) + '检索尾部';
+      const model = new QueueModel([ANSWER_DECISION]);
+      const memory = new RecordingPhoneLocalMemoryRuntime([{
+        memoryId: 'memory-bounded-query', fact: '用户偏好本地检索。',
+        personaTag: 'work_companion', authority: 'leader'
+      }]);
+      const options = canaryOptions(
+        model, new CanaryHotelExecutor(), new RecordingOpener(), [], []
+      );
+      options.memoryRuntime = memory;
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit(longQuery, { text: longQuery }) as MultiAgentSettledOutcome;
+      const observation = recallObservationFromPrompt(model.prompts[0]);
+
+      expect(outcome.status).assertEqual('success');
+      expect(memory.recallQueries[0]).assertEqual(longQuery);
+      expect(observation.query.length).assertEqual(2000);
+      expect(observation.query).assertEqual(longQuery.substring(0, 2000));
+      expect(observation.items.length).assertEqual(1);
+      expect(model.prompts[0].indexOf('legacy-prefetch')).assertEqual(-1);
+      runtime.dispose();
+    });
+
+    it('uses only final manual recall candidates for a subsequent forget selection', 0, async () => {
+      const prefetch: PhoneLocalRecalledMemory = {
+        memoryId: 'memory-prefetch-a', fact: '用户以前偏好美式咖啡。',
+        personaTag: 'food_companion', authority: 'leader'
+      };
+      const refined: PhoneLocalRecalledMemory = {
+        memoryId: 'memory-manual-b', fact: '用户现在偏好燕麦拿铁。',
+        personaTag: 'food_companion', authority: 'leader'
+      };
+      const memory = new SequencedRecallMemoryRuntime([[prefetch], [refined]]);
+      const surfaces: A2uiSurfaceState[] = [];
+      const options = canaryOptions(
+        new QueueModel([MANUAL_RECALL_DECISION, MEMORY_FORGET_SELECTION_DECISION]),
+        new CanaryHotelExecutor(), new RecordingOpener(), surfaces, []
+      );
+      options.memoryRuntime = memory;
+      options.currentHostGeneration = (): number => 12;
+      options.currentHostSurface = (): A2uiSurfaceState | null =>
+        surfaces.length === 0 ? null : surfaces[surfaces.length - 1];
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('忘掉咖啡偏好', { text: '忘掉咖啡偏好' }, 12) as
+        MultiAgentSettledOutcome;
+      const surface = surfaces[surfaces.length - 1];
+      const selected = finalMemoryForgetAction(surface, [0]);
+
+      expect(outcome.memorySelection?.candidates.length).assertEqual(1);
+      expect(outcome.memorySelection?.candidates[0].memoryId).assertEqual('memory-manual-b');
+      expect(surface.dataModelJson.indexOf('用户现在偏好燕麦拿铁。')).assertLarger(-1);
+      expect(surface.dataModelJson.indexOf('用户以前偏好美式咖啡。')).assertEqual(-1);
+      expect(selected === null || selected.args === undefined).assertFalse();
+      if (selected === null || selected.args === undefined) {
+        runtime.dispose();
+        return;
+      }
+      const selectedArgs = selected.args as MemoryCandidatesForgetActionArgs;
+      const forged: A2uiAction = {
+        id: selected.id, label: selected.label, prompt: selected.prompt,
+        variant: selected.variant, kind: selected.kind,
+        args: {
+          selectionId: selectedArgs.selectionId,
+          revision: selectedArgs.revision,
+          candidateKeys: ['memory-prefetch-a']
+        } as MemoryCandidatesForgetActionArgs
+      };
+
+      expect((await runtime.handleMemoryCandidateAction(forged)).status).assertEqual('rejected');
+      expect(memory.forgetCalls.length).assertEqual(0);
+      expect((await runtime.handleMemoryCandidateAction(selected)).status).assertEqual('success');
+      expect(memory.forgetCalls.join(',')).assertEqual('memory-manual-b');
+      runtime.dispose();
+    });
+
+    it('uses all expanded final manual recall candidates for forget selection', 0, async () => {
+      const prefetch: PhoneLocalRecalledMemory = {
+        memoryId: 'memory-prefetch-only', fact: '旧的召回候选。',
+        personaTag: 'food_companion', authority: 'leader'
+      };
+      const refined: PhoneLocalRecalledMemory[] = [];
+      for (let index = 0; index < 6; index += 1) {
+        refined.push({
+          memoryId: 'memory-manual-expanded-' + index.toString(),
+          fact: '最终召回候选 ' + index.toString(),
+          personaTag: 'food_companion', authority: 'leader'
+        });
+      }
+      const memory = new SequencedRecallMemoryRuntime([[prefetch], refined]);
+      const surfaces: A2uiSurfaceState[] = [];
+      const options = canaryOptions(
+        new QueueModel([MANUAL_RECALL_TEN_DECISION, MEMORY_FORGET_SELECTION_DECISION]),
+        new CanaryHotelExecutor(), new RecordingOpener(), surfaces, []
+      );
+      options.memoryRuntime = memory;
+      options.currentHostGeneration = (): number => 13;
+      options.currentHostSurface = (): A2uiSurfaceState | null =>
+        surfaces.length === 0 ? null : surfaces[surfaces.length - 1];
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('忘掉这些偏好', { text: '忘掉这些偏好' }, 13) as
+        MultiAgentSettledOutcome;
+      const surface = surfaces[surfaces.length - 1];
+      const selected = finalMemoryForgetAction(surface, [5]);
+
+      expect(memory.recallTopKs.join(',')).assertEqual('5,10');
+      expect(outcome.memorySelection?.candidates.length).assertEqual(6);
+      expect(surface.dataModelJson.indexOf('最终召回候选 5')).assertLarger(-1);
+      expect(surface.dataModelJson.indexOf('旧的召回候选')).assertEqual(-1);
+      expect(selected === null).assertFalse();
+      if (selected !== null) {
+        expect((await runtime.handleMemoryCandidateAction(selected)).status).assertEqual('success');
+      }
+      expect(memory.forgetCalls.join(',')).assertEqual('memory-manual-expanded-5');
+      runtime.dispose();
+    });
+
+    it('fails open after manual recall error without reusing prefetch candidates for forget', 0, async () => {
+      const prefetch: PhoneLocalRecalledMemory = {
+        memoryId: 'memory-prefetch-a', fact: '用户以前偏好美式咖啡。',
+        personaTag: 'food_companion', authority: 'leader'
+      };
+      const memory = new SequencedRecallMemoryRuntime([[prefetch]], 1);
+      const surfaces: A2uiSurfaceState[] = [];
+      const options = canaryOptions(
+        new QueueModel([MANUAL_RECALL_DECISION, ANSWER_DECISION]),
+        new CanaryHotelExecutor(), new RecordingOpener(), surfaces, []
+      );
+      options.memoryRuntime = memory;
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('忘掉咖啡偏好', { text: '忘掉咖啡偏好' }) as
+        MultiAgentSettledOutcome;
+
+      expect(outcome.status).assertEqual('success');
+      expect(outcome.memorySelection).assertUndefined();
+      expect(surfaces.length).assertEqual(0);
+      expect(memory.forgetCalls.length).assertEqual(0);
+      runtime.dispose();
+    });
+
+    it('continues to a normal answer after a failed automatic recall observation', 0, async () => {
+      const model = new QueueModel([ANSWER_DECISION]);
+      const options = canaryOptions(
+        model, new CanaryHotelExecutor(), new RecordingOpener(), [], []
+      );
+      options.memoryRuntime = new ThrowingRecallMemoryRuntime();
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      const outcome = await runtime.submit('你好', { text: '你好' }) as MultiAgentSettledOutcome;
+
+      expect(outcome.status).assertEqual('success');
+      expect(model.prompts[0].indexOf('"status":"error"')).assertLarger(-1);
+      expect(model.prompts[0].indexOf('"items":[]')).assertLarger(-1);
+      runtime.dispose();
+    });
+
+    it('publishes only the previous turn persona as the next-turn hint', 0, async () => {
+      const model = new QueueModel([ANSWER_DECISION, ANSWER_DECISION]);
+      const runtime = new MultiAgentCanaryRuntime(canaryOptions(
+        model, new CanaryHotelExecutor(), new RecordingOpener(), [], []
+      ));
+
+      await runtime.submit('第一轮', { text: '第一轮' });
+      await runtime.submit('第二轮', { text: '第二轮' });
+
+      expect(model.prompts[0].indexOf('"lastTurnPersonaId":""')).assertLarger(-1);
+      expect(model.prompts[1].indexOf(
+        '"lastTurnPersonaId":"default_companion"'
+      )).assertLarger(-1);
+      runtime.dispose();
+    });
+
+    it('removes the BIM snapshot wrapper before automatic memory recall', 0, async () => {
+      const memory = new RecordingPhoneLocalMemoryRuntime();
+      const options = canaryOptions(
+        new QueueModel([ANSWER_DECISION]), new CanaryHotelExecutor(), new RecordingOpener(), [], []
+      );
+      options.memoryRuntime = memory;
+      const runtime = new MultiAgentCanaryRuntime(options);
+
+      await runtime.submit(bimSnapshotPrompt('继续查这些'), { text: '继续查这些' });
+
+      expect(memory.recallQueries.length).assertEqual(1);
+      expect(memory.recallQueries[0]).assertEqual('继续查这些');
+      expect(memory.recallQueries[0].indexOf('BIM_SNAPSHOTS')).assertEqual(-1);
       runtime.dispose();
     });
 

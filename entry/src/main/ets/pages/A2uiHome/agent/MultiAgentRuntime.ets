@@ -25,6 +25,7 @@ import {
   LeaderAgent,
   LeaderPlanningContext,
   LinkedMessageBus,
+  MEMORY_RECALL_MAX_TOP_K,
   ObservationDigest,
   RecalledMemoryContext,
   TaskErrorPayload,
@@ -53,7 +54,8 @@ import { StructuredToolUiRenderer } from './StructuredToolUiRenderer';
 const DEFAULT_SUBMIT_TIMEOUT_MS: number = 30000;
 const DEFAULT_ACTION_TIMEOUT_MS: number = 15000;
 const MAX_TIMEOUT_MS: number = 120000;
-const CONTEXT_MESSAGE_LIMIT: number = 8;
+const CONTEXT_MESSAGE_LIMIT: number = 512;
+const CONTEXT_SUMMARY_LIMIT: number = 4000;
 const CONTEXT_OBSERVATION_LIMIT: number = 8;
 const CONTEXT_MEMORY_LIMIT: number = 5;
 const CONTEXT_MEMORY_FACT_LIMIT: number = 240;
@@ -529,7 +531,8 @@ export class MultiAgentRuntime {
         conversationId, turnId, taskId, requestedCapabilityIds, personaId, skillId
       ),
       options.currentLocalDateProvider,
-      options.memoryToolExecutor
+      options.memoryToolExecutor,
+      options.memoryRecallToolExecutor
     );
     this.planningContextProvider = options.planningContextProvider === undefined ?
       null : options.planningContextProvider;
@@ -1385,7 +1388,7 @@ export class MultiAgentRuntime {
       value.operation !== 'forget' || !this.validBoundedText(value.originTurnId, 128) ||
       !this.validBoundedText(value.sourceTaskId, 256) ||
       !this.validBoundedText(value.personaId, 128) || !Array.isArray(value.candidates) ||
-      value.candidates.length < 1 || value.candidates.length > 5) {
+      value.candidates.length < 1 || value.candidates.length > MEMORY_RECALL_MAX_TOP_K) {
       return false;
     }
     const ids: Set<string> = new Set<string>();
@@ -1483,8 +1486,14 @@ export class MultiAgentRuntime {
     const result: UserInputPayload = {
       text,
       recentMessages: this.boundedMessages(context.recentMessages),
+      sessionSummary: context.sessionSummary === undefined ? '' :
+        context.sessionSummary.trim().substring(0, CONTEXT_SUMMARY_LIMIT),
       recalledMemories: this.boundedRecalledMemories(context.recalledMemories),
-      previousPersonaId: context.previousPersonaId === undefined ? '' : context.previousPersonaId,
+      lastTurnPersonaId: context.lastTurnPersonaId === undefined ?
+        (context.previousPersonaId === undefined ? '' : context.previousPersonaId) : context.lastTurnPersonaId,
+      previousPersonaId: context.lastTurnPersonaId === undefined ?
+        (context.previousPersonaId === undefined ? '' : context.previousPersonaId) : context.lastTurnPersonaId,
+      memoryRecallObservation: context.memoryRecallObservation,
       currentSurfaceSummary: this.copySurface(context.currentSurfaceSummary),
       recentObservations: this.boundedObservations(context.recentObservations)
     };

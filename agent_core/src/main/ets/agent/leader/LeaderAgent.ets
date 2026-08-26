@@ -4,6 +4,9 @@ import {
   AgentMessageType,
   ConversationTurnMessage,
   CurrentSurfaceSummary,
+  MEMORY_RECALL_OBSERVATION_QUERY_MAX_CHARS,
+  MemoryRecallItem,
+  MemoryRecallObservation,
   MemorySelectionPayload,
   ObservationDigest,
   RecalledMemoryContext,
@@ -22,6 +25,8 @@ import {
   LeaderDecision,
   LeaderDecisionDataTask,
   LeaderMemoryRememberFact,
+  LeaderMemoryRecallToolExecutor,
+  LeaderMemoryRecallToolRequest,
   LeaderMemoryForgetClarification,
   LeaderMemoryMutation,
   LeaderMemoryToolExecutor,
@@ -38,7 +43,12 @@ import {
   LeaderToolMetadata,
   LeaderUiTask,
   MAX_LEADER_DATA_TASKS_PER_ROUND,
-  MAX_LEADER_DATA_TASKS_PER_TURN
+  MAX_LEADER_DATA_TASKS_PER_TURN,
+  MEMORY_RECALL_DEFAULT_TOP_K,
+  MEMORY_RECALL_FACT_MAX_CHARS,
+  MEMORY_RECALL_MAX_TOP_K,
+  memoryRecallTotalMaxChars,
+  validMemoryRecallTopK
 } from './LeaderTypes';
 import {
   leaderInputHasEntityAuthority,
@@ -91,6 +101,7 @@ interface LeaderTurnState {
   pendingAnswer: string | null;
   memoryActionStatus: '' | 'success' | 'partial' | 'error';
   memoryExecutionGeneration: number;
+  leaderRecallAttempted: boolean;
   bimSuggestion: LeaderBimSuggestion | null;
   bimContextUpdate: LeaderBimContextUpdate | null;
   dataDone: boolean;
@@ -138,6 +149,7 @@ export class LeaderAgent extends MessageDrivenAgent {
   private readonly dataTaskInputNormalizer: LeaderDataTaskInputNormalizer | null;
   private readonly currentLocalDate: LeaderCurrentLocalDateProvider;
   private readonly memoryToolExecutor: LeaderMemoryToolExecutor | null;
+  private readonly memoryRecallToolExecutor: LeaderMemoryRecallToolExecutor | null;
   private readonly decisionObserver: ((
     conversationId: string,
     turnId: string,
@@ -166,7 +178,8 @@ export class LeaderAgent extends MessageDrivenAgent {
       skillId: string
     ) => void,
     currentLocalDate?: LeaderCurrentLocalDateProvider,
-    memoryToolExecutor?: LeaderMemoryToolExecutor
+    memoryToolExecutor?: LeaderMemoryToolExecutor,
+    memoryRecallToolExecutor?: LeaderMemoryRecallToolExecutor
   ) {
     super(bus);
     this.bus = bus;
@@ -183,6 +196,7 @@ export class LeaderAgent extends MessageDrivenAgent {
       return now.getFullYear().toString() + '-' + month + '-' + day;
     } : currentLocalDate;
     this.memoryToolExecutor = memoryToolExecutor === undefined ? null : memoryToolExecutor;
+    this.memoryRecallToolExecutor = memoryRecallToolExecutor === undefined ? null : memoryRecallToolExecutor;
   }
 
   stop(): void {
@@ -274,16 +288,24 @@ export class LeaderAgent extends MessageDrivenAgent {
       return;
     }
     const recentMessages = inputRecord['recentMessages'];
+    const sessionSummary = inputRecord['sessionSummary'];
     const recalledMemories = inputRecord['recalledMemories'];
     const previousPersonaId = inputRecord['previousPersonaId'];
+    const lastTurnPersonaId = inputRecord['lastTurnPersonaId'];
+    const memoryRecallObservation = inputRecord['memoryRecallObservation'];
     const currentSurfaceSummary = inputRecord['currentSurfaceSummary'];
     const recentObservations = inputRecord['recentObservations'];
     const input: InputUserPayload = {
       text: inputText,
       recentMessages: Array.isArray(recentMessages) ? recentMessages as ConversationTurnMessage[] : [],
+      sessionSummary: typeof sessionSummary === 'string' ? this.boundedText(sessionSummary, 4000) : '',
       recalledMemories: Array.isArray(recalledMemories) ?
         this.boundedRecalledMemories(recalledMemories as Object[]) : [],
-      previousPersonaId: typeof previousPersonaId === 'string' ? previousPersonaId : '',
+      lastTurnPersonaId: typeof lastTurnPersonaId === 'string' ? lastTurnPersonaId :
+        (typeof previousPersonaId === 'string' ? previousPersonaId : ''),
+      previousPersonaId: typeof lastTurnPersonaId === 'string' ? lastTurnPersonaId :
+        (typeof previousPersonaId === 'string' ? previousPersonaId : ''),
+      memoryRecallObservation: this.boundedMemoryRecallObservation(memoryRecallObservation),
       currentSurfaceSummary: currentSurfaceSummary !== null &&
         typeof currentSurfaceSummary === 'object' && !Array.isArray(currentSurfaceSummary) ?
         currentSurfaceSummary as CurrentSurfaceSummary : {
@@ -327,6 +349,7 @@ export class LeaderAgent extends MessageDrivenAgent {
       pendingAnswer: null,
       memoryActionStatus: '',
       memoryExecutionGeneration: 0,
+      leaderRecallAttempted: false,
       bimSuggestion: null,
       bimContextUpdate: null,
       dataDone: false,
@@ -544,6 +567,22 @@ export class LeaderAgent extends MessageDrivenAgent {
       );
       return;
     }
+    if (decision.leaderToolCall !== undefined) {
+      if (state.leaderRecallAttempted) {
+        this.finishTurn(state);
+        this.publishError(message, 'LEADER_MEMORY_RECALL_DUPLICATE',
+          'Leader can refine long-term memory recall at most once per turn');
+        return;
+      }
+      state.leaderRecallAttempted = true;
+      this.startLeaderMemoryRecall(
+        message,
+        state,
+        decision.leaderToolCall.query.trim(),
+        decision.leaderToolCall.topK === undefined ? MEMORY_RECALL_DEFAULT_TOP_K : decision.leaderToolCall.topK
+      );
+      return;
+    }
     if (this.decisionObserver !== null) {
       this.decisionObserver(
         message.conversationId,
@@ -647,6 +686,79 @@ export class LeaderAgent extends MessageDrivenAgent {
     if (dataTaskIds.length === 0 && state.pendingMemoryMutation !== null) {
       this.startMemoryExecution(message, state);
     }
+  }
+
+  private startLeaderMemoryRecall(
+    message: AgentMessage,
+    state: LeaderTurnState,
+    query: string,
+    topK: number
+  ): void {
+    const request: LeaderMemoryRecallToolRequest = {
+      callId: state.inputTaskId + ':memory-recall',
+      conversationId: state.conversationId,
+      turnId: state.turnId,
+      sourceTaskId: state.inputTaskId,
+      origin: 'leader',
+      query,
+      topK
+    };
+    state.memoryExecutionGeneration++;
+    const generation: number = state.memoryExecutionGeneration;
+    const key: string = this.turnKey(message);
+    const active: LeaderPlanningSignal = (): boolean =>
+      this.turns.get(key) === state && !state.terminal &&
+        state.memoryExecutionGeneration === generation;
+    const executor: LeaderMemoryRecallToolExecutor | null = this.memoryRecallToolExecutor;
+    const task: Promise<MemoryRecallObservation> = executor === null ?
+      Promise.resolve(this.failedRecallObservation(request)) :
+      executor.recall(request, new CallbackLeaderMemoryToolExecutionGuard(active)).catch(
+        (_error: Object): MemoryRecallObservation => this.failedRecallObservation(request)
+      );
+    task.then((raw: MemoryRecallObservation): void => {
+      if (!active()) return;
+      const bounded: MemoryRecallObservation | undefined = this.boundedMemoryRecallObservation(raw);
+      const observation: MemoryRecallObservation = bounded !== undefined &&
+        bounded.callId === request.callId && bounded.origin === 'leader' &&
+        bounded.query === request.query ? bounded : this.failedRecallObservation(request);
+      state.input = this.inputWithRecallObservation(state.input, observation);
+      // memory.recall is a pre-round Leader continuation. It does not consume one
+      // of the three Data rounds or lock the tentative recall-only persona/skill.
+      this.startPlanning(this.inputMessage(state), state.input, state);
+    });
+  }
+
+  private failedRecallObservation(request: LeaderMemoryRecallToolRequest): MemoryRecallObservation {
+    return {
+      callId: request.callId,
+      origin: request.origin,
+      query: request.query,
+      status: 'error',
+      items: []
+    };
+  }
+
+  private inputWithRecallObservation(
+    input: InputUserPayload,
+    observation: MemoryRecallObservation
+  ): InputUserPayload {
+    return {
+      text: input.text,
+      recentMessages: input.recentMessages,
+      sessionSummary: input.sessionSummary,
+      recalledMemories: observation.items.map((item: MemoryRecallItem): RecalledMemoryContext => ({
+        memoryId: item.memoryId,
+        fact: item.fact,
+        personaTag: item.personaTag,
+        authority: item.authority
+      })),
+      lastTurnPersonaId: input.lastTurnPersonaId,
+      previousPersonaId: input.lastTurnPersonaId,
+      memoryRecallObservation: observation,
+      currentSurfaceSummary: input.currentSurfaceSummary,
+      recentObservations: input.recentObservations,
+      orderedContinuationAuthorized: input.orderedContinuationAuthorized
+    };
   }
 
   private normalizeSameRoundDependency(decision: LeaderDecision): boolean {
@@ -981,8 +1093,11 @@ export class LeaderAgent extends MessageDrivenAgent {
     return {
       text: input.text,
       recentMessages: input.recentMessages,
+      sessionSummary: input.sessionSummary,
       recalledMemories: input.recalledMemories,
-      previousPersonaId: input.previousPersonaId,
+      lastTurnPersonaId: input.lastTurnPersonaId,
+      previousPersonaId: input.lastTurnPersonaId,
+      memoryRecallObservation: input.memoryRecallObservation,
       currentSurfaceSummary: input.currentSurfaceSummary,
       recentObservations: this.boundedObservations(observations as Object[]),
       orderedContinuationAuthorized
@@ -1096,10 +1211,12 @@ export class LeaderAgent extends MessageDrivenAgent {
     const hasBimContextUpdate: boolean = hasOwnKey(decision, 'bimContextUpdate');
     const hasMemoryMutation: boolean = hasOwnKey(decision, 'memoryMutation');
     const hasMemoryClarification: boolean = hasOwnKey(decision, 'memoryClarification');
+    const hasLeaderToolCall: boolean = hasOwnKey(decision, 'leaderToolCall');
     if ((!hasBimSuggestion && hasKey(decision, 'bimSuggestion')) ||
       (!hasBimContextUpdate && hasKey(decision, 'bimContextUpdate')) ||
       (!hasMemoryMutation && hasKey(decision, 'memoryMutation')) ||
-      (!hasMemoryClarification && hasKey(decision, 'memoryClarification'))) {
+      (!hasMemoryClarification && hasKey(decision, 'memoryClarification')) ||
+      (!hasLeaderToolCall && hasKey(decision, 'leaderToolCall'))) {
       return false;
     }
     const normalizationDateMatchesAuthority: boolean =
@@ -1124,6 +1241,7 @@ export class LeaderAgent extends MessageDrivenAgent {
       .filter((key: string): boolean => key !== 'bimContextUpdate')
       .filter((key: string): boolean => key !== 'memoryMutation')
       .filter((key: string): boolean => key !== 'memoryClarification')
+      .filter((key: string): boolean => key !== 'leaderToolCall')
       .sort()
       .join(',');
     if (keys !== 'dataTasks,personaId,reasonCode,requestedCapabilityIds,roundAction,skillId,uiIntent' &&
@@ -1143,7 +1261,7 @@ export class LeaderAgent extends MessageDrivenAgent {
     }
     if ((decision.roundAction === 'execute' && decision.dataTasks.length === 0 &&
       decision.actionIntent === undefined && decision.memoryMutation === undefined &&
-      decision.memoryClarification === undefined) ||
+      decision.memoryClarification === undefined && decision.leaderToolCall === undefined) ||
       (decision.roundAction !== 'execute' && decision.dataTasks.length !== 0)) {
       return false;
     }
@@ -1165,7 +1283,36 @@ export class LeaderAgent extends MessageDrivenAgent {
       (!hasBimContextUpdate || (decision.bimContextUpdate !== undefined &&
         this.validBimContextUpdate(decision.bimContextUpdate))) &&
       this.validMemoryMutationContract(decision, input, hasMemoryMutation, hasMemoryClarification) &&
+      this.validLeaderToolCallContract(decision, input, hasLeaderToolCall) &&
       this.requestedCapabilitiesMatchExecution(decision);
+  }
+
+  private validLeaderToolCallContract(
+    decision: LeaderDecision,
+    input: InputUserPayload,
+    hasLeaderToolCall: boolean
+  ): boolean {
+    if (!hasLeaderToolCall) return decision.leaderToolCall === undefined;
+    const call = decision.leaderToolCall;
+    const callKeys: string = call === undefined ? '' : Object.keys(call).sort().join(',');
+    if (call === undefined || (callKeys !== 'query,toolId' && callKeys !== 'query,toolId,topK') ||
+      call.toolId !== 'memory.recall' || typeof call.query !== 'string' ||
+      call.query.trim().length === 0 || call.query.length > 240 ||
+      (call.topK !== undefined && !validMemoryRecallTopK(call.topK)) ||
+      decision.roundAction !== 'execute' || decision.requestedCapabilityIds.length !== 0 ||
+      decision.dataTasks.length !== 0 || decision.actionIntent !== undefined ||
+      decision.memoryMutation !== undefined || decision.memoryClarification !== undefined ||
+      decision.answer !== undefined || decision.bimSuggestion !== undefined ||
+      decision.bimContextUpdate !== undefined) {
+      return false;
+    }
+    const observation: MemoryRecallObservation | undefined = input.memoryRecallObservation;
+    if (observation === undefined || observation.origin === 'leader') return false;
+    return this.normalizeRecallQuery(call.query) !== this.normalizeRecallQuery(observation.query);
+  }
+
+  private normalizeRecallQuery(value: string): string {
+    return value.replace(/[\r\n\t ]+/g, ' ').trim().toLowerCase();
   }
 
   private validMemoryMutationContract(
@@ -1189,7 +1336,7 @@ export class LeaderAgent extends MessageDrivenAgent {
         memoryActionIds[0] !== 'memory.forget' ||
         Object.keys(clarification).join(',') !== 'operation' ||
         clarification.operation !== 'forget' || input.recalledMemories === undefined ||
-        input.recalledMemories.length < 1 || input.recalledMemories.length > 5) {
+        input.recalledMemories.length < 1 || input.recalledMemories.length > MEMORY_RECALL_MAX_TOP_K) {
         return false;
       }
       return leaderIsMemoryCapability(this.planningContext, 'memory.forget');
@@ -1661,6 +1808,64 @@ export class LeaderAgent extends MessageDrivenAgent {
     return result;
   }
 
+  private boundedMemoryRecallObservation(
+    value: Object | string | number | boolean | null | undefined
+  ): MemoryRecallObservation | undefined {
+    if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+    const fields = value as Record<string, Object | string | number | boolean | null | undefined>;
+    const callId = fields['callId'];
+    const origin = fields['origin'];
+    const query = fields['query'];
+    const status = fields['status'];
+    const rawItems = fields['items'];
+    if (typeof callId !== 'string' || callId.trim().length === 0 || callId.length > 256 ||
+      (origin !== 'prefetch' && origin !== 'leader') || typeof query !== 'string' ||
+      query.length > MEMORY_RECALL_OBSERVATION_QUERY_MAX_CHARS ||
+      (status !== 'success' && status !== 'empty' && status !== 'error') || !Array.isArray(rawItems)) {
+      return undefined;
+    }
+    const rawItemValues = rawItems as Object[];
+    const items: MemoryRecallItem[] = [];
+    const seen: Set<string> = new Set<string>();
+    let factChars: number = 0;
+    const maximumItems: number = origin === 'leader' ?
+      MEMORY_RECALL_MAX_TOP_K : MEMORY_RECALL_DEFAULT_TOP_K;
+    const maximumFactChars: number = memoryRecallTotalMaxChars(maximumItems);
+    for (let index = 0; index < rawItemValues.length && items.length < maximumItems; index++) {
+      const rawValue = rawItemValues[index];
+      if (rawValue === null || typeof rawValue !== 'object' || Array.isArray(rawValue)) continue;
+      const raw = rawValue as Record<string, Object | string | number | boolean | null | undefined>;
+      const memoryId = raw['memoryId'];
+      const fact = raw['fact'];
+      const personaTag = raw['personaTag'];
+      const authority = raw['authority'];
+      if (typeof memoryId !== 'string' || memoryId.trim().length === 0 || memoryId.length > 128 ||
+        seen.has(memoryId) || typeof fact !== 'string' || fact.trim().length === 0 ||
+        typeof personaTag !== 'string' || personaTag.trim().length === 0 || personaTag.length > 64 ||
+        (authority !== 'leader' && authority !== 'seed')) continue;
+      const boundedFact: string = this.boundedText(fact, MEMORY_RECALL_FACT_MAX_CHARS);
+      if (factChars + boundedFact.length > maximumFactChars) break;
+      items.push({
+        memoryId: this.boundedText(memoryId, 128),
+        fact: boundedFact,
+        personaTag: this.boundedText(personaTag, 64),
+        authority: authority as MemoryAuthority
+      });
+      seen.add(memoryId);
+      factChars += boundedFact.length;
+    }
+    return {
+      callId: this.boundedText(callId, 256),
+      origin: origin === 'prefetch' ? 'prefetch' : 'leader',
+      query: this.boundedText(query, MEMORY_RECALL_OBSERVATION_QUERY_MAX_CHARS),
+      status: status === 'success' ? (items.length === 0 ? 'empty' : 'success') :
+        (status === 'empty' ? 'empty' : 'error'),
+      items
+    };
+  }
+
   private boundedStrings(values: Object[], maximum: number, length: number): string[] {
     const result: string[] = [];
     for (let index = 0; index < values.length && result.length < maximum; index++) {
@@ -2024,7 +2229,7 @@ export class LeaderAgent extends MessageDrivenAgent {
         authority: matched.authority
       });
     }
-    if (candidates.length < 1 || candidates.length > 5) return null;
+    if (candidates.length < 1 || candidates.length > MEMORY_RECALL_MAX_TOP_K) return null;
     return {
       operation: 'forget',
       originTurnId: input.turnId,

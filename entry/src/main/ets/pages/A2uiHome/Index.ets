@@ -2,7 +2,6 @@ import {
   AGENT_CORE_DEBUG,
   A2uiAgentRunner,
   ActionExecutionResult,
-  ConversationTurnMessage,
   CurrentSurfaceSummary,
   DataResult,
   LlmProvider,
@@ -99,6 +98,10 @@ import {
   callDirectModel,
   DirectModelCallResult
 } from '../../model/LocalModelClient';
+import {
+  ActiveSessionContext,
+  SessionContextCompactor
+} from './agent/SessionContextCompaction';
 import { GMAIL_MCP_AUTH_SETUP_URL, GMAIL_WEB_URL, GOOGLE_CALENDAR_WEB_URL, GOOGLE_OAUTH_SETUP_URL } from '@loop/agent-core';
 import { A2uiSurfaceStore, createSeedA2uiSurface } from '@loop/agent-core';
 import {
@@ -1152,6 +1155,8 @@ struct Index {
     this.bimReduceMotion = enabled;
   };
   private multiAgentModel: LocalModel | null = null;
+  private readonly sessionContextCompactor: SessionContextCompactor =
+    new SessionContextCompactor((): LocalModel => this.canaryModel());
   private hotelAgentRuntimeFingerprint: string = '';
   private runtimeGeneration: number = 0;
   private readonly mailDetailSuggestionGuard: MailDetailSuggestionGuard =
@@ -4571,6 +4576,7 @@ struct Index {
     this.isBusy = false;
     this.isAwaitingFirstSurface = false;
     this.messages = [];
+    this.sessionContextCompactor.reset();
     this.waterfallSessionTopicWeights = [];
     this.waterfallSessionSourceWeights = [];
     this.waterfallSessionFormatWeights = [];
@@ -4617,18 +4623,11 @@ struct Index {
     return this.messages.slice(this.messages.length - 8);
   }
 
-  private multiAgentInput(text: string): UserInputPayload {
-    const recentMessages: ConversationTurnMessage[] = [];
-    const pageMessages = this.recentMessages();
-    for (let index = 0; index < pageMessages.length; index++) {
-      const role = pageMessages[index].role;
-      if (role === 'user' || role === 'assistant') {
-        recentMessages.push({
-          role: role === 'user' ? 'user' : 'assistant',
-          content: pageMessages[index].content
-        });
-      }
-    }
+  private async multiAgentInput(text: string, currentUserMessageId: string): Promise<UserInputPayload> {
+    const activeContext: ActiveSessionContext = await this.sessionContextCompactor.activeContext(
+      this.messages,
+      currentUserMessageId
+    );
     const surface: CurrentSurfaceSummary = {
       surfaceId: this.currentSurface.surfaceId,
       kind: this.currentSurface.intent,
@@ -4638,21 +4637,23 @@ struct Index {
     };
     return {
       text,
-      recentMessages,
-      previousPersonaId: '',
+      recentMessages: activeContext.recentMessages,
+      sessionSummary: activeContext.rollingSummary,
       currentSurfaceSummary: surface,
       recentObservations: []
     };
   }
 
-  private appendMessage(role: string, content: string): void {
+  private appendMessage(role: string, content: string): string {
     const next = this.messages.slice();
+    const messageId: string = Date.now().toString() + '-' + next.length.toString();
     next.push({
-      id: Date.now().toString() + '-' + next.length.toString(),
+      id: messageId,
       role: role,
       content: content
     });
     this.messages = next;
+    return messageId;
   }
 
   private showMemoryResultToast(message: string): void {
@@ -5216,7 +5217,7 @@ struct Index {
     this.bimRememberError = '';
     const turnGeneration: number = this.beginRuntimeTurn('multi_agent');
     this.inputPlaceholder = DEFAULT_INPUT_PLACEHOLDER;
-    this.appendMessage('user', visibleText);
+    const currentUserMessageId: string = this.appendMessage('user', visibleText);
     aiLogInfo('[AIPhone][A2uiHomeSubmitPrompt] chars=' + request.prompt.length.toString() +
       ' model=' + this.selectedModel +
       ' baseUrl=' + this.baseUrl);
@@ -5233,9 +5234,10 @@ struct Index {
         foodPartialThrottleMs: normalizeFoodPartialThrottleMs(this.foodPartialThrottleMs)
       });
       this.markChecking('正在生成 A2UI...');
+      const input: UserInputPayload = await this.multiAgentInput(request.prompt, currentUserMessageId);
       const outcome: MultiAgentTurnOutcome = await this.canaryRuntime().submit(
         request.prompt,
-        this.multiAgentInput(request.prompt),
+        input,
         turnGeneration
       );
       if (!runtimeCallbackIsCurrent(
@@ -5275,6 +5277,7 @@ struct Index {
         error: ''
       }));
       this.appendMessage('assistant', readyMessage);
+      void this.sessionContextCompactor.compactAfterTurn(this.messages);
     } catch (error) {
       if (this.runtimeGeneration !== turnGeneration) {
         return;
@@ -5292,6 +5295,7 @@ struct Index {
         error: message
       }));
       this.appendMessage('assistant', visibleError);
+      void this.sessionContextCompactor.compactAfterTurn(this.messages);
     } finally {
       if (this.runtimeGeneration === turnGeneration) {
         this.isAwaitingFirstSurface = false;
