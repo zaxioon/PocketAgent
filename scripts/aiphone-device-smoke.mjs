@@ -708,7 +708,7 @@ const queryArgs = argv.filter((arg) => arg !== '--clean-data' &&
 const selectedDefaultCases = runMemoryForgetSelection ? [memoryForgetSelectionCase] :
   (runComposioCases ? composioCases :
   (runFullRegression ? fullRegressionCases :
-    (runCoreRegression ? defaultCases :
+    (runCoreRegression ? coreRegressionCases :
       (runGoogleApps ? defaultCases.concat(googleAppCases) :
         (runDynamicCases ? defaultCases.concat(dynamicCases) : defaultCases)))));
 const useDefaultCases = queryArgs.length === 0;
@@ -2263,7 +2263,8 @@ function leaderMemoryRecallEvidence(text) {
   const count = /^\d+$/.test(fields.count || '') ? Number.parseInt(fields.count, 10) : -1;
   const durationMs = /^\d+$/.test(fields.durationMs || '') ? Number.parseInt(fields.durationMs, 10) : -1;
   const status = fields.status || '';
-  const validCount = status === 'hit' ? count > 0 : status === 'miss' ? count === 0 : false;
+  const validCount = status === 'hit' || status === 'success' ? count > 0 :
+    (status === 'miss' || status === 'empty' ? count === 0 : false);
   return {
     observed: line.length > 0,
     ok: line.length > 0 && validCount && durationMs >= 0,

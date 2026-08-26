@@ -137,6 +137,7 @@ import travelCalendarActionTest from './TravelCalendarAction.test';
 import conversationMemoryCoreTest from './ConversationMemoryCore.test';
 import phoneLocalMemoryProviderTest from './PhoneLocalMemoryProvider.test';
 import phoneLocalMemoryRuntimeTest from './PhoneLocalMemoryRuntime.test';
+import phoneLocalMemoryBlobFallbackTest from './PhoneLocalMemoryBlobFallback.test';
 import bertWordPieceTokenizerTest from './BertWordPieceTokenizer.test';
 import bgeMindSporeEmbeddingPortTest from './BgeMindSporeEmbeddingPort.test';
 
@@ -280,6 +281,7 @@ export default function testsuite() {
   conversationMemoryCoreTest();
   phoneLocalMemoryProviderTest();
   phoneLocalMemoryRuntimeTest();
+  phoneLocalMemoryBlobFallbackTest();
   bertWordPieceTokenizerTest();
   bgeMindSporeEmbeddingPortTest();
 }

@@ -509,14 +509,14 @@ export default function phoneLocalMemoryProviderTest() {
       expect(store.searchCalls[0].sceneIds.length).assertEqual(0);
     });
 
-    it('caps database-side vector search to one hundred results', 0, async () => {
+    it('caps provider search to the public recall maximum of twenty results', 0, async () => {
       const store = new FakeMemoryStore();
       const memory = provider(store, new FakeEmbeddingPort());
       await memory.search({
         ownerId: 'owner-1', text: '无糖咖啡', sceneIds: [], topK: 1000
       });
       expect(store.searchCalls.length).assertEqual(1);
-      expect(store.searchCalls[0].topK).assertEqual(100);
+      expect(store.searchCalls[0].topK).assertEqual(20);
     });
 
     it('updates one record and forgets it by exact memory id', 0, async () => {

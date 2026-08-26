@@ -14,6 +14,7 @@ import {
   MemoryRememberRequest,
   MemoryUpdateRequest,
   MemoryWriteResult,
+  MEMORY_RECALL_MAX_TOP_K,
   normalizeMemoryFact,
   normalizedMemoryFactHash,
   validateMemoryDraftBatch
@@ -236,7 +237,7 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
         ownerId,
         text,
         sceneIds: query.sceneIds.slice(),
-        topK: Math.min(100, Math.max(1, Math.floor(query.topK)))
+        topK: Math.min(MEMORY_RECALL_MAX_TOP_K, Math.max(1, Math.floor(query.topK)))
       };
       if (query.minScore !== undefined) normalizedQuery.minScore = query.minScore;
       return await this.store.search({

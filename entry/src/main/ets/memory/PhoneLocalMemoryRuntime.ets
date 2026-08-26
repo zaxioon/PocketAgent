@@ -19,6 +19,12 @@ import { BertWordPieceTokenizer } from './BertWordPieceTokenizer';
 import { BgeMindSporeEmbeddingPort } from './BgeMindSporeEmbeddingPort';
 import { PhoneLocalMemoryProvider } from './PhoneLocalMemoryProvider';
 import { ArkDataPhoneLocalMemoryStore, PhoneLocalMemoryStore } from './PhoneLocalMemoryStore';
+import { ArkDataPhoneLocalMemoryBlobStore } from './PhoneLocalMemoryBlobFallbackPort';
+import {
+  ArkDataPhoneLocalMemoryBackendRegistry,
+  PhoneLocalMemoryBackendId,
+  PhoneLocalMemoryBackendRegistryPort
+} from './PhoneLocalMemoryBackendRegistry';
 
 export const PHONE_LOCAL_MEMORY_OWNER_ID: string = 'local-user-v1';
 export const PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID: string = 'global';
@@ -49,11 +55,21 @@ export interface PhoneLocalMemoryRuntimeLogger {
 }
 
 export interface PhoneLocalMemoryRuntimeOptions {
+  /** Explicit single-store injection retained for unit tests and embedders. It bypasses backend selection. */
   storeFactory?: () => PhoneLocalMemoryStore;
+  vectorStoreFactory?: () => PhoneLocalMemoryStore;
+  blobStoreFactory?: () => PhoneLocalMemoryStore;
+  backendRegistryFactory?: () => PhoneLocalMemoryBackendRegistryPort;
   embedderFactory?: () => Promise<EmbeddingPort>;
   idFactory?: () => string;
   recallTimeoutMs?: number;
   logger?: PhoneLocalMemoryRuntimeLogger;
+}
+
+interface SelectedMemoryStore {
+  store: PhoneLocalMemoryStore;
+  backendId: PhoneLocalMemoryBackendId;
+  seedAllowed: boolean;
 }
 
 export interface PhoneLocalMemoryRuntimePort {
@@ -221,13 +237,8 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   }
 
   private async createProvider(): Promise<PhoneLocalMemoryProvider> {
-    let store: PhoneLocalMemoryStore;
-    if (this.options.storeFactory !== undefined) store = this.options.storeFactory();
-    else {
-      if (this.context === null) throw new Error('Phone-local memory requires an application context.');
-      store = new ArkDataPhoneLocalMemoryStore(this.context);
-    }
-    await store.initialize();
+    const selected = await this.selectStore();
+    const store = selected.store;
     const embedder = this.options.embedderFactory !== undefined ?
       await this.options.embedderFactory() : await this.createDefaultEmbedder();
     // The runtime wrapper fixes every new write to global. Keep the provider compatible with
@@ -235,8 +246,101 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     const provider = new PhoneLocalMemoryProvider(store, embedder, {
       idFactory: this.options.idFactory
     });
-    await this.ensureV1Seeds(store, provider);
+    if (selected.seedAllowed) await this.ensureV1Seeds(store, provider);
+    else this.logger.warn('memory_seed_skipped_backend_changed', 'seed',
+      'Memory backend changed and data migration is not implemented; seed restoration was skipped.');
     return provider;
+  }
+
+  private async selectStore(): Promise<SelectedMemoryStore> {
+    if (this.options.storeFactory !== undefined) {
+      const store = this.options.storeFactory();
+      await store.initialize();
+      return { store, backendId: 'vector', seedAllowed: true };
+    }
+    const registry = this.createBackendRegistry();
+    let previousBackend: PhoneLocalMemoryBackendId | null = null;
+    let seedBlocked = false;
+    let registryReadable = true;
+    try {
+      previousBackend = await registry.getSelectedBackend();
+      seedBlocked = await registry.isSeedBlocked();
+    } catch (error) {
+      registryReadable = false;
+      this.log('memory_backend_marker_read_failed', 'initialize', error);
+    }
+
+    let selectedStore: PhoneLocalMemoryStore;
+    let selectedBackend: PhoneLocalMemoryBackendId;
+    if (previousBackend === 'blob') {
+      selectedStore = this.createBlobStore();
+      await selectedStore.initialize();
+      selectedBackend = 'blob';
+    } else {
+      try {
+        selectedStore = this.createVectorStore();
+        await selectedStore.initialize();
+        await this.probeVectorStore(selectedStore);
+        selectedBackend = 'vector';
+      } catch (error) {
+        this.log('memory_vector_backend_unavailable', 'initialize', error);
+        selectedStore = this.createBlobStore();
+        await selectedStore.initialize();
+        selectedBackend = 'blob';
+      }
+    }
+
+    // A missing registry marker is the first selection. This intentionally does not guess whether
+    // the install predates the registry; an older vector-only install cannot be distinguished from
+    // a fresh install on a non-vector device without a separate migration signal.
+    const backendChanged = previousBackend !== null && previousBackend !== selectedBackend;
+    let markerWritten = false;
+    try {
+      if (backendChanged) await registry.setSeedBlocked();
+      await registry.setSelectedBackend(selectedBackend);
+      markerWritten = true;
+    } catch (error) {
+      this.log('memory_backend_marker_write_failed', 'initialize', error);
+    }
+    if (backendChanged) {
+      this.logger.warn('memory_backend_changed_data_not_migrated', 'initialize',
+        'Memory backend changed and existing data was not migrated.');
+    }
+    return {
+      store: selectedStore,
+      backendId: selectedBackend,
+      seedAllowed: registryReadable && markerWritten && !seedBlocked && !backendChanged
+    };
+  }
+
+  private createVectorStore(): PhoneLocalMemoryStore {
+    if (this.options.vectorStoreFactory !== undefined) return this.options.vectorStoreFactory();
+    if (this.context === null) throw new Error('Phone-local memory vector store requires an application context.');
+    return new ArkDataPhoneLocalMemoryStore(this.context);
+  }
+
+  private createBlobStore(): PhoneLocalMemoryStore {
+    if (this.options.blobStoreFactory !== undefined) return this.options.blobStoreFactory();
+    if (this.context === null) throw new Error('Phone-local memory BLOB store requires an application context.');
+    return new ArkDataPhoneLocalMemoryBlobStore(this.context);
+  }
+
+  private createBackendRegistry(): PhoneLocalMemoryBackendRegistryPort {
+    if (this.options.backendRegistryFactory !== undefined) return this.options.backendRegistryFactory();
+    if (this.context === null) throw new Error('Phone-local memory backend registry requires an application context.');
+    return new ArkDataPhoneLocalMemoryBackendRegistry(this.context);
+  }
+
+  private async probeVectorStore(store: PhoneLocalMemoryStore): Promise<void> {
+    const probe: number[] = new Array<number>(512).fill(0);
+    probe[0] = 1;
+    await store.search({
+      ownerId: '__phone_memory_vector_probe__',
+      sceneIds: [],
+      embeddingProfileId: '__phone_memory_vector_probe__',
+      queryEmbedding: probe,
+      topK: 1
+    });
   }
 
   private async search(query: string, topK: number): Promise<MemoryHit[]> {
