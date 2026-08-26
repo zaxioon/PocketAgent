@@ -112,6 +112,7 @@ export interface HtmlHomePersonaMemory {
 
 export interface WaterfallHomePayload {
   surfaceId: string;
+  mode?: 'search' | 'interest';
   query: string;
   currentId: string;
   aggregateHtml: string;
