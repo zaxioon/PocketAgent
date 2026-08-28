@@ -54,6 +54,10 @@ import {
   PhoneLocalMemoryRuntimePort,
   PhoneLocalRecalledMemory
 } from '../main/ets/memory/PhoneLocalMemoryRuntime';
+import {
+  PhoneLocalMemoryProjectionFact,
+  PhoneLocalMemoryProjectionStats
+} from '../main/ets/memory/PhoneLocalMemoryStore';
 import { PhoneLocalMemoryAvailabilityPort } from '../main/ets/memory/PhoneLocalMemoryAvailability';
 import {
   MultiAgentCanaryActionContext,
@@ -722,6 +726,14 @@ class RecordingPhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
       };
     }
     return { inputIndex: 0, status: 'success' };
+  }
+
+  async getProjectionStats(_basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats> {
+    return { changedCount: 0, oldestPendingUpdatedAt: null };
+  }
+
+  async listProjectionFacts(): Promise<PhoneLocalMemoryProjectionFact[]> {
+    return [];
   }
 }
 

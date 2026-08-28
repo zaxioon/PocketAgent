@@ -54,6 +54,7 @@ import {
   WaterfallInterestRecallRequest,
   WaterfallInterestRecallBatch,
   WaterfallLoadRequest,
+  WaterfallPreferenceSnapshot,
   WaterfallPreferenceWeight,
   WaterfallQueryExpansionRequest,
   WaterfallRankedCandidate,
@@ -267,7 +268,10 @@ import {
 import { ConfigPage } from './components/ConfigPage';
 import { PublicPersonaPage } from './components/PublicPersonaPage';
 import { PublicPersonaClient } from '../../publicpersona/PublicPersonaClient';
-import { PhoneLocalMemoryRuntime } from '../../memory/PhoneLocalMemoryRuntime';
+import {
+  PhoneLocalMemoryMutationEvent,
+  PhoneLocalMemoryRuntime
+} from '../../memory/PhoneLocalMemoryRuntime';
 import {
   PhoneLocalMemoryAvailabilityPort,
   phoneLocalMemoryAvailabilityForContext
@@ -326,6 +330,19 @@ import {
   WaterfallPreferencesStore,
   WATERFALL_PREFERENCES_STORE_NAME
 } from './waterfall/WaterfallPreferencesStore';
+import {
+  DiscoveryMemoryPreferenceProjection,
+  discoveryMemoryProjectionSnapshot,
+  emptyDiscoveryMemoryPreferenceProjection
+} from './waterfall/DiscoveryMemoryProjection';
+import {
+  DiscoveryMemoryProjectionCoordinator,
+  DiscoveryMemoryProjectionCoordinatorOptions
+} from './waterfall/DiscoveryMemoryProjectionCoordinator';
+import {
+  DISCOVERY_MEMORY_PROJECTION_STORE_NAME,
+  DiscoveryMemoryProjectionStore
+} from './waterfall/DiscoveryMemoryProjectionStore';
 import {
   buildCtripFlightSearchUrl,
   buildCtripFlightSelectionContext,
@@ -1211,6 +1228,10 @@ struct Index {
   private interestSourceRequestSeq: Map<string, number> = new Map<string, number>();
   private waterfallConversationState: WaterfallConversationState = { history: [], rules: [], summary: '' };
   private waterfallPreferencesStoreInstance: WaterfallPreferencesStore | null = null;
+  private discoveryMemoryProjectionStoreInstance: DiscoveryMemoryProjectionStore | null = null;
+  private discoveryMemoryProjectionCoordinatorInstance: DiscoveryMemoryProjectionCoordinator | null = null;
+  private discoveryMemoryProjection: DiscoveryMemoryPreferenceProjection =
+    emptyDiscoveryMemoryPreferenceProjection();
   private waterfallPreferenceProfile: WaterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
   private waterfallCardRecords: WaterfallCardRecord[] = [];
   private waterfallReactionProjection: WaterfallReactionProjection = {
@@ -2452,6 +2473,7 @@ struct Index {
   }
 
   private ensureInterestWaterfall(startRecall: boolean = true): void {
+    this.requestDiscoveryMemoryProjectionRefresh();
     if (this.interestWaterfallFeedState === null) {
       this.interestWaterfallGeneration += 1;
       this.interestRecallRound = 0;
@@ -4152,16 +4174,32 @@ struct Index {
     return this.waterfallPreferencesStoreInstance;
   }
 
-  private currentWaterfallPreferenceProfile(includeConversation: boolean = true): WaterfallPreferenceProfile {
+  private discoveryMemoryProjectionStore(): DiscoveryMemoryProjectionStore {
+    if (this.discoveryMemoryProjectionStoreInstance === null) {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      const native = preferences.getPreferencesSync(context, { name: DISCOVERY_MEMORY_PROJECTION_STORE_NAME });
+      this.discoveryMemoryProjectionStoreInstance = new DiscoveryMemoryProjectionStore(native);
+    }
+    return this.discoveryMemoryProjectionStoreInstance;
+  }
+
+  private currentWaterfallPreferenceProfile(
+    includeConversation: boolean = true,
+    includeDiscoveryMemory: boolean = includeConversation
+  ): WaterfallPreferenceProfile {
+    const memory: WaterfallPreferenceSnapshot = includeDiscoveryMemory ? discoveryMemoryProjectionSnapshot(
+      this.discoveryMemoryProjection,
+      Date.now()
+    ) : { topicWeights: [], sourceWeights: [], formatWeights: [], explicitRules: [] };
     return {
       version: 2,
       sourceRegistryVersion: this.waterfallPreferenceProfile.sourceRegistryVersion,
       topicWeights: this.waterfallPreferenceProfile.topicWeights.concat(
-        this.waterfallReactionProjection.topicWeights),
+        this.waterfallReactionProjection.topicWeights).concat(memory.topicWeights),
       sourceWeights: this.waterfallPreferenceProfile.sourceWeights.concat(
-        this.waterfallReactionProjection.sourceWeights),
+        this.waterfallReactionProjection.sourceWeights).concat(memory.sourceWeights),
       formatWeights: this.waterfallPreferenceProfile.formatWeights.concat(
-        this.waterfallReactionProjection.formatWeights),
+        this.waterfallReactionProjection.formatWeights).concat(memory.formatWeights),
       explicitRules: this.waterfallPreferenceProfile.explicitRules.concat(
         includeConversation ? this.waterfallConversationState.rules : []),
       recentEvidence: this.waterfallPreferenceProfile.recentEvidence.slice(),
@@ -4184,9 +4222,65 @@ struct Index {
       this.waterfallCardRecords = [];
       this.waterfallReactionProjection = { topicWeights: [], sourceWeights: [], formatWeights: [] };
     }
+    try {
+      this.discoveryMemoryProjection = this.discoveryMemoryProjectionStore().load();
+    } catch (_error) {
+      this.discoveryMemoryProjection = emptyDiscoveryMemoryPreferenceProjection();
+    }
     configureWaterfallEnabledSourcesForRuntime(
       this.waterfallPreferenceProfile.discoveryEnabledSources as AggregateSearchSource[]);
     configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile(false));
+  }
+
+  private discoveryMemoryProjectionCoordinator(): DiscoveryMemoryProjectionCoordinator {
+    if (this.discoveryMemoryProjectionCoordinatorInstance === null) {
+      const options: DiscoveryMemoryProjectionCoordinatorOptions = {
+        source: this.localMemoryRuntime(),
+        store: this.discoveryMemoryProjectionStore(),
+        modelProvider: (): LocalModel => this.canaryModel(),
+        onProjection: (projection: DiscoveryMemoryPreferenceProjection): void => {
+          this.applyDiscoveryMemoryProjection(projection);
+        },
+        logger: (message: string): void => aiLogError(message)
+      };
+      this.discoveryMemoryProjectionCoordinatorInstance = new DiscoveryMemoryProjectionCoordinator(options);
+    }
+    return this.discoveryMemoryProjectionCoordinatorInstance;
+  }
+
+  private applyDiscoveryMemoryProjection(projection: DiscoveryMemoryPreferenceProjection): void {
+    this.discoveryMemoryProjection = projection;
+    aiLogInfo('[AIPhone][DiscoveryMemoryProjection] status=applied signals=' + projection.signals.length.toString() +
+      ' watermark=' + projection.basedOnMemoryMutationAt.toString() +
+      ' interestActive=' + (this.interestWaterfallFeedState === null ? 'false' : 'true'));
+    if (this.interestWaterfallFeedState !== null) {
+      this.applyInterestWaterfallUpdate(applyWaterfallProfile(
+        this.interestWaterfallFeedState,
+        this.currentWaterfallPreferenceProfile(),
+        Date.now()
+      ));
+    }
+  }
+
+  private requestDiscoveryMemoryProjectionRefresh(): void {
+    try {
+      if (!this.localMemoryAvailability().isAvailable()) return;
+      this.discoveryMemoryProjectionCoordinator().requestRefresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${error}`;
+      aiLogError('[AIPhone][DiscoveryMemoryProjection] code=schedule_unavailable detail=' +
+        message.substring(0, 240));
+    }
+  }
+
+  private onPhoneLocalMemoryMutation(event: PhoneLocalMemoryMutationEvent): void {
+    try {
+      this.discoveryMemoryProjectionCoordinator().notify(event);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${error}`;
+      aiLogError('[AIPhone][DiscoveryMemoryProjection] code=mutation_schedule_failed operation=' +
+        event.operation + ' detail=' + message.substring(0, 200));
+    }
   }
 
   private refreshBimRecords(): void {
@@ -4553,7 +4647,12 @@ struct Index {
   private localMemoryRuntime(): PhoneLocalMemoryRuntime {
     if (this.phoneLocalMemoryRuntime === null) {
       const context = this.getUIContext().getHostContext() as common.Context;
-      this.phoneLocalMemoryRuntime = new PhoneLocalMemoryRuntime(context);
+      this.phoneLocalMemoryRuntime = new PhoneLocalMemoryRuntime(context, {
+        onMutationCommitted: (event: PhoneLocalMemoryMutationEvent): Promise<void> => {
+          this.onPhoneLocalMemoryMutation(event);
+          return Promise.resolve();
+        }
+      });
     }
     return this.phoneLocalMemoryRuntime;
   }

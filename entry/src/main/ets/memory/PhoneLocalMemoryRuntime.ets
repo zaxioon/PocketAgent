@@ -18,7 +18,12 @@ import {
 import { BertWordPieceTokenizer } from './BertWordPieceTokenizer';
 import { BgeMindSporeEmbeddingPort } from './BgeMindSporeEmbeddingPort';
 import { PhoneLocalMemoryProvider } from './PhoneLocalMemoryProvider';
-import { ArkDataPhoneLocalMemoryStore, PhoneLocalMemoryStore } from './PhoneLocalMemoryStore';
+import {
+  ArkDataPhoneLocalMemoryStore,
+  PhoneLocalMemoryProjectionFact,
+  PhoneLocalMemoryProjectionStats,
+  PhoneLocalMemoryStore
+} from './PhoneLocalMemoryStore';
 import { ArkDataPhoneLocalMemoryBlobStore } from './PhoneLocalMemoryBlobFallbackPort';
 import {
   ArkDataPhoneLocalMemoryBackendRegistry,
@@ -53,6 +58,14 @@ export interface PhoneLocalMemoryRuntimeLogger {
   warn(code: string, operation: string, errorMessage: string): void;
 }
 
+export type PhoneLocalMemoryMutationOperation = 'remember' | 'update' | 'forget';
+
+export interface PhoneLocalMemoryMutationEvent {
+  operation: PhoneLocalMemoryMutationOperation;
+  committedAt: number;
+  memoryIds: string[];
+}
+
 export interface PhoneLocalMemoryRuntimeOptions {
   /** Explicit single-store injection retained for unit tests and embedders. It bypasses backend selection. */
   storeFactory?: () => PhoneLocalMemoryStore;
@@ -63,13 +76,20 @@ export interface PhoneLocalMemoryRuntimeOptions {
   idFactory?: () => string;
   recallTimeoutMs?: number;
   logger?: PhoneLocalMemoryRuntimeLogger;
+  /** Runs off the mutation return path. Observer failures never change the memory tool result. */
+  onMutationCommitted?: (event: PhoneLocalMemoryMutationEvent) => Promise<void>;
 }
 
 interface SelectedMemoryStore {
   store: PhoneLocalMemoryStore;
 }
 
-export interface PhoneLocalMemoryRuntimePort {
+export interface PhoneLocalMemoryProjectionSourcePort {
+  getProjectionStats(basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats>;
+  listProjectionFacts(): Promise<PhoneLocalMemoryProjectionFact[]>;
+}
+
+export interface PhoneLocalMemoryRuntimePort extends PhoneLocalMemoryProjectionSourcePort {
   recall(text: string, topK?: number): Promise<PhoneLocalRecalledMemory[]>;
   remember(facts: string[], sourceTurnId: string, personaTag: string,
     guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
@@ -123,6 +143,7 @@ function boundedFact(fact: string, remaining: number): string {
 export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   private context: common.Context | null;
   private options: PhoneLocalMemoryRuntimeOptions;
+  private storePromise: Promise<PhoneLocalMemoryStore> | null = null;
   private providerPromise: Promise<PhoneLocalMemoryProvider> | null = null;
   private logger: PhoneLocalMemoryRuntimeLogger;
 
@@ -171,7 +192,17 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
           sourceTurnId
         });
       }
-      return await provider.remember({ ownerId: PHONE_LOCAL_MEMORY_OWNER_ID, records }, guard);
+      const result = await provider.remember({ ownerId: PHONE_LOCAL_MEMORY_OWNER_ID, records }, guard);
+      const memoryIds: string[] = [];
+      let committedAt: number = 0;
+      for (let index = 0; index < result.records.length; index += 1) {
+        const record = result.records[index].record;
+        if (result.records[index].status !== 'success' || record === undefined) continue;
+        memoryIds.push(record.memoryId);
+        committedAt = Math.max(committedAt, record.updatedAt);
+      }
+      if (memoryIds.length > 0) this.notifyMutation({ operation: 'remember', committedAt, memoryIds });
+      return result;
     } catch (error) {
       this.log('memory_runtime_unavailable', 'remember', error);
       return unavailableBatch(facts.length, runtimeMemoryError(
@@ -184,7 +215,7 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     personaTag: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
     try {
       const provider = await this.provider();
-      return await provider.update({
+      const result = await provider.update({
         ownerId: PHONE_LOCAL_MEMORY_OWNER_ID,
         memoryId,
         fact,
@@ -192,6 +223,14 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
         authority: 'leader',
         sourceTurnId
       }, guard);
+      if (result.status === 'success' && result.record !== undefined) {
+        this.notifyMutation({
+          operation: 'update',
+          committedAt: result.record.updatedAt,
+          memoryIds: [result.record.memoryId]
+        });
+      }
+      return result;
     } catch (error) {
       this.log('memory_runtime_unavailable', 'update', error);
       return unavailableWrite(runtimeMemoryError(
@@ -203,7 +242,15 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   async forget(memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
     try {
       const provider = await this.provider();
-      return await provider.forget(PHONE_LOCAL_MEMORY_OWNER_ID, memoryId, guard);
+      const result = await provider.forget(PHONE_LOCAL_MEMORY_OWNER_ID, memoryId, guard);
+      if (result.status === 'success' && result.record !== undefined) {
+        this.notifyMutation({
+          operation: 'forget',
+          committedAt: Date.now(),
+          memoryIds: [result.record.memoryId]
+        });
+      }
+      return result;
     } catch (error) {
       this.log('memory_runtime_unavailable', 'forget', error);
       return unavailableWrite(runtimeMemoryError(
@@ -212,14 +259,37 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     }
   }
 
+  async getProjectionStats(basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats> {
+    return await (await this.memoryStore()).getProjectionStats(
+      PHONE_LOCAL_MEMORY_OWNER_ID,
+      PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+      basedOnMemoryMutationAt
+    );
+  }
+
+  async listProjectionFacts(): Promise<PhoneLocalMemoryProjectionFact[]> {
+    return await (await this.memoryStore()).listProjectionFacts(
+      PHONE_LOCAL_MEMORY_OWNER_ID,
+      PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID
+    );
+  }
+
   private provider(): Promise<PhoneLocalMemoryProvider> {
     if (this.providerPromise === null) this.providerPromise = this.createProvider();
     return this.providerPromise;
   }
 
+  private memoryStore(): Promise<PhoneLocalMemoryStore> {
+    if (this.storePromise === null) {
+      this.storePromise = this.selectStore().then((selected: SelectedMemoryStore): PhoneLocalMemoryStore => {
+        return selected.store;
+      });
+    }
+    return this.storePromise;
+  }
+
   private async createProvider(): Promise<PhoneLocalMemoryProvider> {
-    const selected = await this.selectStore();
-    const store = selected.store;
+    const store = await this.memoryStore();
     const embedder = this.options.embedderFactory !== undefined ?
       await this.options.embedderFactory() : await this.createDefaultEmbedder();
     // The runtime wrapper fixes every new write to global. Keep the provider compatible with
@@ -227,6 +297,13 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     return new PhoneLocalMemoryProvider(store, embedder, {
       idFactory: this.options.idFactory
     });
+  }
+
+  private notifyMutation(event: PhoneLocalMemoryMutationEvent): void {
+    const observer = this.options.onMutationCommitted;
+    if (observer === undefined) return;
+    Promise.resolve<void>(undefined).then((): Promise<void> => observer(event)).then((): void => {},
+      (error: Object): void => this.log('memory_mutation_observer_failed', event.operation, error));
   }
 
   private async selectStore(): Promise<SelectedMemoryStore> {

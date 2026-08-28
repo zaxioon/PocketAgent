@@ -21,6 +21,8 @@ import {
   PHONE_LOCAL_MEMORY_UPDATE_SQL,
   PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL,
   phoneLocalMemoryCandidateLimit,
+  PhoneLocalMemoryProjectionFact,
+  PhoneLocalMemoryProjectionStats,
   PhoneLocalMemorySearchRequest,
   PhoneLocalMemoryStore
 } from '../main/ets/memory/PhoneLocalMemoryStore';
@@ -170,6 +172,36 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
       if (record.ownerId !== ownerId) continue;
       if (sceneIds.length > 0 && sceneIds.indexOf(record.sceneId) < 0) continue;
       output.push(copyRecord(record));
+    }
+    return output;
+  }
+
+  async getProjectionStats(ownerId: string, sceneId: string,
+    basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats> {
+    const facts = await this.listProjectionFacts(ownerId, sceneId);
+    let changedCount: number = 0;
+    let oldestPendingUpdatedAt: number | null = null;
+    for (let index = 0; index < facts.length; index += 1) {
+      if (facts[index].updatedAt <= basedOnMemoryMutationAt) continue;
+      changedCount += 1;
+      oldestPendingUpdatedAt = oldestPendingUpdatedAt === null ? facts[index].updatedAt :
+        Math.min(oldestPendingUpdatedAt, facts[index].updatedAt);
+    }
+    return { changedCount, oldestPendingUpdatedAt };
+  }
+
+  async listProjectionFacts(ownerId: string, sceneId: string): Promise<PhoneLocalMemoryProjectionFact[]> {
+    const output: PhoneLocalMemoryProjectionFact[] = [];
+    for (let index = 0; index < this.records.length; index += 1) {
+      const record = this.records[index];
+      if (record.ownerId !== ownerId || record.sceneId !== sceneId) continue;
+      output.push({
+        memoryId: record.memoryId,
+        fact: record.fact,
+        personaTag: record.personaTag,
+        authority: record.authority,
+        updatedAt: record.updatedAt
+      });
     }
     return output;
   }

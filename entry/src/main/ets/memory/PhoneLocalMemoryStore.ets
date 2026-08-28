@@ -80,6 +80,14 @@ export const PHONE_LOCAL_MEMORY_UPDATE_SQL: string =
 export const PHONE_LOCAL_MEMORY_DELETE_SQL: string =
   'DELETE FROM conversation_memory WHERE owner_id = ? AND memory_id = ?';
 
+export const PHONE_LOCAL_MEMORY_PROJECTION_STATS_SQL: string =
+  'SELECT COUNT(*) AS changed_count, MIN(updated_at) AS oldest_pending_updated_at ' +
+  "FROM conversation_memory WHERE owner_id = ? AND scene_id = ? AND authority = 'leader' AND updated_at > ?";
+
+export const PHONE_LOCAL_MEMORY_PROJECTION_FACTS_SQL: string =
+  'SELECT memory_id, fact, persona_tag, authority, updated_at FROM conversation_memory ' +
+  "WHERE owner_id = ? AND scene_id = ? AND authority = 'leader' ORDER BY updated_at ASC, memory_id ASC";
+
 const PHONE_LOCAL_MEMORY_INSERT_HISTORY_SQL: string =
   'INSERT INTO conversation_memory_history (' +
     'history_id, memory_id, owner_id, scene_id, operation, fact, created_at' +
@@ -96,12 +104,28 @@ export interface PhoneLocalMemorySearchRequest {
   minScore?: number;
 }
 
+export interface PhoneLocalMemoryProjectionStats {
+  changedCount: number;
+  oldestPendingUpdatedAt: number | null;
+}
+
+export interface PhoneLocalMemoryProjectionFact {
+  memoryId: string;
+  fact: string;
+  personaTag: string;
+  authority: MemoryAuthority;
+  updatedAt: number;
+}
+
 export interface PhoneLocalMemoryStore {
   initialize(): Promise<void>;
   findByFact(ownerId: string, embeddingProfileId: string, factHash: string,
     normalizedFact: string): Promise<MemoryRecord | null>;
   get(ownerId: string, memoryId: string): Promise<MemoryRecord | null>;
   list(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]>;
+  getProjectionStats(ownerId: string, sceneId: string,
+    basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats>;
+  listProjectionFacts(ownerId: string, sceneId: string): Promise<PhoneLocalMemoryProjectionFact[]>;
   search(request: PhoneLocalMemorySearchRequest): Promise<MemoryHit[]>;
   insert(record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void>;
   replace(ownerId: string, record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void>;
@@ -230,6 +254,25 @@ function recordsFromResult(result: relationalStore.ResultSet): MemoryRecord[] {
     if (!result.goToFirstRow()) return output;
     do {
       output.push(recordFromResult(result));
+    } while (result.goToNextRow());
+    return output;
+  } finally {
+    result.close();
+  }
+}
+
+function projectionFactsFromResult(result: relationalStore.ResultSet): PhoneLocalMemoryProjectionFact[] {
+  const output: PhoneLocalMemoryProjectionFact[] = [];
+  try {
+    if (!result.goToFirstRow()) return output;
+    do {
+      output.push({
+        memoryId: result.getString(result.getColumnIndex('memory_id')),
+        fact: result.getString(result.getColumnIndex('fact')),
+        personaTag: result.getString(result.getColumnIndex('persona_tag')),
+        authority: memoryAuthorityFromValue(result.getString(result.getColumnIndex('authority'))),
+        updatedAt: result.getLong(result.getColumnIndex('updated_at'))
+      });
     } while (result.goToNextRow());
     return output;
   } finally {
@@ -375,6 +418,29 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
     const sql = 'SELECT * FROM conversation_memory WHERE owner_id = ? AND scene_id IN (' +
       placeholders(sceneIds.length) + ') ORDER BY updated_at DESC';
     return recordsFromResult(await store.querySql(sql, args));
+  }
+
+  async getProjectionStats(ownerId: string, sceneId: string,
+    basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats> {
+    const result = await (await this.readyStore()).querySql(PHONE_LOCAL_MEMORY_PROJECTION_STATS_SQL,
+      [ownerId, sceneId, basedOnMemoryMutationAt]);
+    try {
+      if (!result.goToFirstRow()) return { changedCount: 0, oldestPendingUpdatedAt: null };
+      const changedCount = result.getLong(result.getColumnIndex('changed_count'));
+      return {
+        changedCount,
+        oldestPendingUpdatedAt: changedCount > 0 ?
+          result.getLong(result.getColumnIndex('oldest_pending_updated_at')) : null
+      };
+    } finally {
+      result.close();
+    }
+  }
+
+  async listProjectionFacts(ownerId: string, sceneId: string): Promise<PhoneLocalMemoryProjectionFact[]> {
+    return projectionFactsFromResult(await (await this.readyStore()).querySql(
+      PHONE_LOCAL_MEMORY_PROJECTION_FACTS_SQL, [ownerId, sceneId]
+    ));
   }
 
   async search(request: PhoneLocalMemorySearchRequest): Promise<MemoryHit[]> {
