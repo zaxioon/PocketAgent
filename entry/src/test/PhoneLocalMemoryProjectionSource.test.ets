@@ -246,5 +246,79 @@ export default function phoneLocalMemoryProjectionSourceTest() {
       expect(events[0].memoryIds[0]).assertEqual('memory-event');
       expect(events[0].committedAt > 0).assertTrue();
     });
+
+    it('publishes one update event for all successful records in a partial batch', 0, async () => {
+      const store = new ProjectionMemoryStore();
+      store.records.push(projectionRecord(
+        'memory-update-a', PHONE_LOCAL_MEMORY_OWNER_ID, PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+        '用户喝咖啡时不加糖。', 100
+      ));
+      store.records.push(projectionRecord(
+        'memory-update-b', PHONE_LOCAL_MEMORY_OWNER_ID, PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+        '用户通勤时偏好公交。', 200
+      ));
+      const events: PhoneLocalMemoryMutationEvent[] = [];
+      const runtime = new PhoneLocalMemoryRuntime(null, {
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new ProjectionEmbeddingPort(),
+        onMutationCommitted: async (event: PhoneLocalMemoryMutationEvent): Promise<void> => {
+          events.push(event);
+        }
+      });
+
+      const updated = await runtime.update([{
+        memoryId: 'memory-update-a', fact: '用户喝咖啡时选择半糖。'
+      }, {
+        memoryId: 'missing-memory', fact: '这条不存在的记忆不会被更新。'
+      }, {
+        memoryId: 'memory-update-b', fact: '用户通勤时偏好地铁。'
+      }], 'turn-update-batch', 'travel_companion');
+      await Promise.resolve<void>(undefined);
+      const updatedA = await store.get(PHONE_LOCAL_MEMORY_OWNER_ID, 'memory-update-a');
+      const updatedB = await store.get(PHONE_LOCAL_MEMORY_OWNER_ID, 'memory-update-b');
+      const maximumUpdatedAt: number = Math.max(updatedA?.updatedAt ?? 0, updatedB?.updatedAt ?? 0);
+
+      expect(updated.status).assertEqual('success');
+      expect(updated.succeededCount).assertEqual(2);
+      expect(updated.failedCount).assertEqual(1);
+      expect(events.length).assertEqual(1);
+      expect(events[0].operation).assertEqual('update');
+      expect(events[0].memoryIds.join(','))
+        .assertEqual('memory-update-a,memory-update-b');
+      expect(events[0].committedAt).assertEqual(maximumUpdatedAt);
+    });
+
+    it('publishes one forget event for all successful records in a partial batch', 0, async () => {
+      const store = new ProjectionMemoryStore();
+      store.records.push(projectionRecord(
+        'memory-forget-a', PHONE_LOCAL_MEMORY_OWNER_ID, PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+        '用户喜欢人工智能。', 100
+      ));
+      store.records.push(projectionRecord(
+        'memory-forget-b', PHONE_LOCAL_MEMORY_OWNER_ID, PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+        '用户喜欢开源硬件。', 200
+      ));
+      const events: PhoneLocalMemoryMutationEvent[] = [];
+      const runtime = new PhoneLocalMemoryRuntime(null, {
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new ProjectionEmbeddingPort(),
+        onMutationCommitted: async (event: PhoneLocalMemoryMutationEvent): Promise<void> => {
+          events.push(event);
+        }
+      });
+
+      const forgotten = await runtime.forget([
+        'memory-forget-a', 'missing-memory', 'memory-forget-b'
+      ]);
+      await Promise.resolve<void>(undefined);
+
+      expect(forgotten.status).assertEqual('success');
+      expect(forgotten.succeededCount).assertEqual(2);
+      expect(forgotten.failedCount).assertEqual(1);
+      expect(events.length).assertEqual(1);
+      expect(events[0].operation).assertEqual('forget');
+      expect(events[0].memoryIds.join(',')).assertEqual('memory-forget-a,memory-forget-b');
+      expect(events[0].committedAt > 0).assertTrue();
+    });
   });
 }

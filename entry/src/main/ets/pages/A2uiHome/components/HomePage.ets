@@ -44,6 +44,10 @@ import {
 } from '../style/A2uiHomeMotion';
 import { formatBimCount } from './BimHomePage';
 import { WelcomeCardDeck } from './WelcomeCardDeck';
+import {
+  MemoryForgetOverlay,
+  MemoryForgetOverlayCandidateView
+} from './MemoryForgetOverlay';
 
 const A2UI_HISTORY_EMPTY_HEIGHT: number = 108;
 const A2UI_HISTORY_ROW_HEIGHT: number = 76;
@@ -254,6 +258,10 @@ export struct HomePage {
   @Prop deepSearchSettingsJson: string = '';
   @Prop deepSearchContextJson: string = '';
   @Prop locationServiceNotice: string = '';
+  @Prop showMemoryForgetOverlay: boolean = false;
+  @Prop memoryForgetCandidates: MemoryForgetOverlayCandidateView[] = [];
+  @Prop memoryForgetSelectedKeys: string[] = [];
+  @Prop memoryForgetWorking: boolean = false;
   @State sendSpinnerRotation: number = 0;
   @State voicePulseTick: number = 0;
   @State waterfallFullscreen: boolean = false;
@@ -286,6 +294,9 @@ export struct HomePage {
     (_submission: TrainPresalePanelSubmission): void => {};
   onCloseTrainPresale: () => void = () => {};
   onCancelTrainPresaleTask: () => void = () => {};
+  onToggleMemoryForgetCandidate: (candidateKey: string) => void = (_candidateKey: string): void => {};
+  onCancelMemoryForget: () => void = (): void => {};
+  onConfirmMemoryForget: () => void = (): void => {};
   onOpenBim: () => void = () => {};
   onRememberBim: () => void = () => {};
   onReturnDailyBrief: () => void = () => {};
@@ -985,6 +996,16 @@ export struct HomePage {
         bottom: this.waterfallFullscreen ? 0 : this.composerBottomPadding()
       })
       .backgroundColor('#00000000')
+
+      MemoryForgetOverlay({
+        visible: this.showMemoryForgetOverlay,
+        candidates: this.memoryForgetCandidates,
+        selectedKeys: this.memoryForgetSelectedKeys,
+        isWorking: this.memoryForgetWorking,
+        onToggle: this.onToggleMemoryForgetCandidate,
+        onCancel: this.onCancelMemoryForget,
+        onConfirm: this.onConfirmMemoryForget
+      })
 
     }
     .width('100%')

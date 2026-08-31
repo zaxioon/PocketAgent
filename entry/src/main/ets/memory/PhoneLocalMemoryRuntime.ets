@@ -93,9 +93,14 @@ export interface PhoneLocalMemoryRuntimePort extends PhoneLocalMemoryProjectionS
   recall(text: string, topK?: number): Promise<PhoneLocalRecalledMemory[]>;
   remember(facts: string[], sourceTurnId: string, personaTag: string,
     guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
-  update(memoryId: string, fact: string, sourceTurnId: string,
-    personaTag: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult>;
-  forget(memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult>;
+  update(updates: PhoneLocalMemoryUpdate[], sourceTurnId: string,
+    personaTag: string, guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
+  forget(memoryIds: string[], guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
+}
+
+export interface PhoneLocalMemoryUpdate {
+  memoryId: string;
+  fact: string;
 }
 
 class HilogPhoneLocalMemoryRuntimeLogger implements PhoneLocalMemoryRuntimeLogger {
@@ -211,49 +216,147 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     }
   }
 
-  async update(memoryId: string, fact: string, sourceTurnId: string,
-    personaTag: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
+  async update(updates: PhoneLocalMemoryUpdate[], sourceTurnId: string,
+    personaTag: string, guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    const invalidError: MemoryError = runtimeMemoryError(
+      'memory_update_invalid', 'Long-term memory update requires one to five unique record IDs.', false
+    );
+    if (updates.length < 1 || updates.length > 5) {
+      const records: MemoryWriteResult[] = [];
+      for (let index = 0; index < updates.length; index++) {
+        records.push(unavailableWrite(invalidError, index));
+      }
+      return {
+        status: 'error', records, succeededCount: 0, failedCount: updates.length,
+        warnings: [], error: invalidError
+      };
+    }
+    const requestedIds: Set<string> = new Set<string>();
+    for (let index = 0; index < updates.length; index++) {
+      const memoryId: string = updates[index].memoryId.trim();
+      if (memoryId.length === 0 || requestedIds.has(memoryId)) {
+        return unavailableBatch(updates.length, invalidError);
+      }
+      requestedIds.add(memoryId);
+    }
     try {
       const provider = await this.provider();
-      const result = await provider.update({
-        ownerId: PHONE_LOCAL_MEMORY_OWNER_ID,
-        memoryId,
-        fact,
-        personaTag: personaTag.length > 0 ? personaTag : PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
-        authority: 'leader',
-        sourceTurnId
-      }, guard);
-      if (result.status === 'success' && result.record !== undefined) {
-        this.notifyMutation({
-          operation: 'update',
-          committedAt: result.record.updatedAt,
-          memoryIds: [result.record.memoryId]
-        });
+      const records: MemoryWriteResult[] = [];
+      const memoryIds: string[] = [];
+      let committedAt: number = 0;
+      let firstError: MemoryError | undefined;
+      for (let index = 0; index < updates.length; index += 1) {
+        let result: MemoryWriteResult;
+        try {
+          result = await provider.update({
+            ownerId: PHONE_LOCAL_MEMORY_OWNER_ID,
+            memoryId: updates[index].memoryId,
+            fact: updates[index].fact,
+            personaTag: personaTag.length > 0 ? personaTag : PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+            authority: 'leader',
+            sourceTurnId
+          }, guard);
+        } catch (error) {
+          this.log('memory_runtime_update_failed', 'update', error);
+          result = unavailableWrite(runtimeMemoryError(
+            'memory_runtime_update_failed', 'Long-term memory record could not be updated.', true
+          ), index);
+        }
+        result.inputIndex = index;
+        records.push(result);
+        if (result.status === 'success' && result.record !== undefined) {
+          memoryIds.push(result.record.memoryId);
+          committedAt = Math.max(committedAt, result.record.updatedAt);
+        } else if (firstError === undefined && result.error !== undefined) {
+          firstError = result.error;
+        }
       }
-      return result;
+      const succeededCount: number = memoryIds.length;
+      const failedCount: number = updates.length - succeededCount;
+      if (succeededCount > 0) {
+        this.notifyMutation({ operation: 'update', committedAt, memoryIds });
+      }
+      const batch: MemoryBatchResult = {
+        status: succeededCount > 0 ? 'success' : 'error',
+        records,
+        succeededCount,
+        failedCount,
+        warnings: failedCount > 0 && succeededCount > 0 ? ['Some long-term memories could not be updated.'] : []
+      };
+      if (succeededCount === 0) {
+        batch.error = firstError ?? runtimeMemoryError(
+          'memory_update_failed', 'Long-term memory could not be updated.', true
+        );
+      }
+      return batch;
     } catch (error) {
       this.log('memory_runtime_unavailable', 'update', error);
-      return unavailableWrite(runtimeMemoryError(
+      return unavailableBatch(updates.length, runtimeMemoryError(
         'memory_runtime_unavailable', 'Long-term memory is unavailable on this device.', true
       ));
     }
   }
 
-  async forget(memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryWriteResult> {
+  async forget(memoryIds: string[], guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    const invalidError: MemoryError = runtimeMemoryError(
+      'memory_forget_invalid', 'Long-term memory deletion requires one to five unique record IDs.', false
+    );
+    if (memoryIds.length < 1 || memoryIds.length > 5) {
+      return unavailableBatch(memoryIds.length, invalidError);
+    }
+    const requestedIds: Set<string> = new Set<string>();
+    for (let index = 0; index < memoryIds.length; index++) {
+      const memoryId: string = memoryIds[index].trim();
+      if (memoryId.length === 0 || requestedIds.has(memoryId)) {
+        return unavailableBatch(memoryIds.length, invalidError);
+      }
+      requestedIds.add(memoryId);
+    }
     try {
       const provider = await this.provider();
-      const result = await provider.forget(PHONE_LOCAL_MEMORY_OWNER_ID, memoryId, guard);
-      if (result.status === 'success' && result.record !== undefined) {
-        this.notifyMutation({
-          operation: 'forget',
-          committedAt: Date.now(),
-          memoryIds: [result.record.memoryId]
-        });
+      const records: MemoryWriteResult[] = [];
+      const forgottenIds: string[] = [];
+      let firstError: MemoryError | undefined;
+      for (let index = 0; index < memoryIds.length; index++) {
+        let result: MemoryWriteResult;
+        try {
+          result = await provider.forget(PHONE_LOCAL_MEMORY_OWNER_ID, memoryIds[index], guard);
+        } catch (error) {
+          this.log('memory_runtime_forget_failed', 'forget', error);
+          result = unavailableWrite(runtimeMemoryError(
+            'memory_runtime_forget_failed', 'Long-term memory record could not be deleted.', true
+          ), index);
+        }
+        result.inputIndex = index;
+        records.push(result);
+        if (result.status === 'success' && result.record !== undefined) {
+          forgottenIds.push(result.record.memoryId);
+        } else if (firstError === undefined && result.error !== undefined) {
+          firstError = result.error;
+        }
       }
-      return result;
+      const succeededCount: number = forgottenIds.length;
+      const failedCount: number = memoryIds.length - succeededCount;
+      if (succeededCount > 0) {
+        this.notifyMutation({ operation: 'forget', committedAt: Date.now(), memoryIds: forgottenIds });
+      }
+      const batch: MemoryBatchResult = {
+        status: succeededCount > 0 ? 'success' : 'error',
+        records,
+        succeededCount,
+        failedCount,
+        warnings: failedCount > 0 && succeededCount > 0 ?
+          ['Some long-term memories could not be deleted.'] : []
+      };
+      if (succeededCount === 0) {
+        batch.error = firstError ?? runtimeMemoryError(
+          'memory_forget_failed', 'Long-term memory could not be deleted.', true
+        );
+      }
+      return batch;
     } catch (error) {
       this.log('memory_runtime_unavailable', 'forget', error);
-      return unavailableWrite(runtimeMemoryError(
+      return unavailableBatch(memoryIds.length, runtimeMemoryError(
         'memory_runtime_unavailable', 'Long-term memory is unavailable on this device.', true
       ));
     }

@@ -4,6 +4,7 @@ import {
   ActionExecutionResult,
   CurrentSurfaceSummary,
   DataResult,
+  LeaderMemoryToolResult,
   LlmProvider,
   LocalModel,
   LocalModelSettings,
@@ -297,10 +298,18 @@ import {
   MailDetailInPlaceEvent,
   MailDetailWriteLease,
   MemoryCandidateManagerActionResult,
+  MemoryForgetOverlayGateState,
+  MemoryForgetOverlayRequest,
+  memoryForgetOverlayBlocked as shouldBlockMemoryForgetOverlay,
   MultiAgentCanaryOptions,
   MultiAgentCanaryRuntime
 } from './agent/MultiAgentCanaryRuntime';
 import {
+  MEMORY_FORGET_OVERLAY_SELECTION_LIMIT,
+  MemoryForgetOverlayCandidateView
+} from './components/MemoryForgetOverlay';
+import {
+  MemoryCandidatesForgetActionArgs,
   MEMORY_CANDIDATES_FORGET_ACTION_ID
 } from '../../model/MemoryCandidateSelectionSurface';
 import {
@@ -1176,6 +1185,11 @@ struct Index {
   @State foodLocationName: string = '坂田';
   @State foodLocationAddress: string = '深圳市龙岗区坂田街道';
   @State locationServiceNotice: string = '';
+  @State showMemoryForgetOverlay: boolean = false;
+  @State memoryForgetCandidates: MemoryForgetOverlayCandidateView[] = [];
+  @State memoryForgetSelectedKeys: string[] = [];
+  @State memoryForgetWorking: boolean = false;
+  private pendingMemoryForgetOverlay: MemoryForgetOverlayRequest | null = null;
   private foodLocationOwnerSurfaceId: string = '';
   @State foodStoreMapOpen: boolean = false;
   @State foodStoreMapSnapshotJson: string = '';
@@ -4574,8 +4588,17 @@ struct Index {
         const accepted = this.applyRuntimeSurface(surface, 'multi_agent', generation);
         if (accepted) {
           this.isAwaitingFirstSurface = false;
+          this.presentPendingMemoryForgetOverlay();
         }
         return accepted;
+      },
+      onMemorySideEffectResult: (result: LeaderMemoryToolResult): void => {
+        if (result.status === 'success') return;
+        this.showMemoryResultToast(result.message);
+        aiLogInfo('[AIPhone][MemorySideEffect] status=' + result.status);
+      },
+      onMemoryForgetOverlay: (request: MemoryForgetOverlayRequest | null): void => {
+        this.acceptMemoryForgetOverlay(request);
       },
       onMailDetail: async (
         result: MailDetailInPlaceEvent,
@@ -5864,6 +5887,7 @@ struct Index {
 
   private finishForegroundTurn(): void {
     this.isBusy = false;
+    this.presentPendingMemoryForgetOverlay();
     const transition = transitionDailyBriefCatchUp(
       this.dailyBriefCatchUpPending, 'idle', false, this.isBusy
     );
@@ -5991,6 +6015,7 @@ struct Index {
     this.deepSearchQuery = '';
     this.deepSearchSettingsJson = '';
     this.deepSearchContextJson = '';
+    this.presentPendingMemoryForgetOverlay();
   }
 
   private completeDeepSearch(answer: string): void {
@@ -8401,8 +8426,90 @@ struct Index {
       }));
       if (completed) this.appendMessage('assistant', result.message);
     } finally {
+      this.memoryForgetWorking = false;
       this.isBusy = false;
+      this.presentPendingMemoryForgetOverlay();
     }
+  }
+
+  private memoryForgetOverlayBlocked(): boolean {
+    const state: MemoryForgetOverlayGateState = {
+      busy: this.isBusy,
+      checkout: this.showCheckoutWeb,
+      train: this.showTrainPresalePanel,
+      deepSearch: this.showDeepSearch,
+      map: this.foodStoreMapOpen,
+      confirming: this.memoryForgetWorking
+    };
+    return shouldBlockMemoryForgetOverlay(state);
+  }
+
+  private acceptMemoryForgetOverlay(request: MemoryForgetOverlayRequest | null): void {
+    if (request === null) {
+      this.pendingMemoryForgetOverlay = null;
+      this.showMemoryForgetOverlay = false;
+      this.memoryForgetCandidates = [];
+      this.memoryForgetSelectedKeys = [];
+      this.memoryForgetWorking = false;
+      return;
+    }
+    this.pendingMemoryForgetOverlay = request;
+    this.memoryForgetSelectedKeys = [];
+    this.presentPendingMemoryForgetOverlay();
+  }
+
+  private presentPendingMemoryForgetOverlay(): void {
+    const pending = this.pendingMemoryForgetOverlay;
+    if (pending === null || this.memoryForgetOverlayBlocked()) return;
+    this.memoryForgetCandidates = pending.candidates.map(
+      (candidate): MemoryForgetOverlayCandidateView => ({
+        candidateKey: candidate.candidateKey,
+        fact: candidate.fact,
+        personaTag: candidate.personaTag
+      })
+    );
+    this.showMemoryForgetOverlay = true;
+  }
+
+  private toggleMemoryForgetCandidate(candidateKey: string): void {
+    if (this.memoryForgetWorking) return;
+    const index = this.memoryForgetSelectedKeys.indexOf(candidateKey);
+    if (index < 0 && this.memoryForgetSelectedKeys.length >= MEMORY_FORGET_OVERLAY_SELECTION_LIMIT) {
+      this.showMemoryCandidateActionToast('一次最多选择 5 条长期记忆。');
+      return;
+    }
+    this.memoryForgetSelectedKeys = index >= 0 ?
+      this.memoryForgetSelectedKeys.filter((key: string): boolean => key !== candidateKey) :
+      this.memoryForgetSelectedKeys.concat([candidateKey]);
+  }
+
+  private cancelMemoryForgetOverlay(): void {
+    const pending = this.pendingMemoryForgetOverlay;
+    const runtime = this.multiAgentRuntime;
+    if (pending !== null && runtime !== null) {
+      runtime.cancelMemoryForgetSelection(pending.selectionId, pending.revision);
+    }
+    this.acceptMemoryForgetOverlay(null);
+  }
+
+  private confirmMemoryForgetOverlay(): void {
+    const pending = this.pendingMemoryForgetOverlay;
+    if (pending === null || this.memoryForgetSelectedKeys.length === 0 || this.memoryForgetWorking) return;
+    this.memoryForgetWorking = true;
+    const args: MemoryCandidatesForgetActionArgs = {
+      selectionId: pending.selectionId,
+      revision: pending.revision,
+      candidateKeys: this.memoryForgetSelectedKeys.slice()
+    };
+    const action: A2uiAction = {
+      id: MEMORY_CANDIDATES_FORGET_ACTION_ID,
+      label: '确认删除长期记忆',
+      prompt: '删除选中的长期记忆',
+      variant: 'danger',
+      kind: 'client',
+      args
+    };
+    void this.handleMemoryCandidateClientAction(action);
   }
 
   private async handleClientAction(action: A2uiAction): Promise<void> {
@@ -10724,6 +10831,10 @@ struct Index {
         deepSearchSettingsJson: this.deepSearchSettingsJson,
         deepSearchContextJson: this.deepSearchContextJson,
         locationServiceNotice: this.locationServiceNotice,
+        showMemoryForgetOverlay: this.showMemoryForgetOverlay,
+        memoryForgetCandidates: this.memoryForgetCandidates,
+        memoryForgetSelectedKeys: this.memoryForgetSelectedKeys,
+        memoryForgetWorking: this.memoryForgetWorking,
         trainPresaleTrip: this.trainPresaleTrip,
         trainPresaleTask: this.trainPresaleTask,
         trainPresaleTaskState: this.trainPresaleTaskState,
@@ -10753,6 +10864,7 @@ struct Index {
         },
         onCloseFoodStoreMap: () => {
           this.foodStoreMapOpen = false;
+          this.presentPendingMemoryForgetOverlay();
         },
         onFoodStoreMapLocationConfirm: (longitude: number, latitude: number,
           name: string, address: string): void => {
@@ -10825,6 +10937,7 @@ struct Index {
           if (closedFlightBooking) {
             this.getUIContext().getPromptAction().showToast({ message: '请核对携程订单后确认是否完成预订。' });
           }
+          this.presentPendingMemoryForgetOverlay();
         },
         onCheckoutWebReturn: (url: string) => {
           this.handlePaymentCheckoutReturn(url);
@@ -10835,6 +10948,7 @@ struct Index {
         onCloseTrainPresale: () => {
           if (!this.trainPresaleWorking) {
             this.showTrainPresalePanel = false;
+            this.presentPendingMemoryForgetOverlay();
           }
         },
         onDeepSearchComplete: (answer: string): void => {
@@ -10842,6 +10956,15 @@ struct Index {
         },
         onCancelTrainPresaleTask: () => {
           void this.cancelTrainPresaleTask();
+        },
+        onToggleMemoryForgetCandidate: (candidateKey: string): void => {
+          this.toggleMemoryForgetCandidate(candidateKey);
+        },
+        onCancelMemoryForget: (): void => {
+          this.cancelMemoryForgetOverlay();
+        },
+        onConfirmMemoryForget: (): void => {
+          this.confirmMemoryForgetOverlay();
         },
         onAction: (action: A2uiAction) => {
           this.sendAction(action);

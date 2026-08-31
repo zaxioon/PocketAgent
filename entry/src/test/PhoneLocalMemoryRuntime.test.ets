@@ -538,9 +538,10 @@ export default function phoneLocalMemoryRuntimeTest() {
         ['这条取消后的事实不能落库。'], 'turn-runtime-guard-2', 'work_companion', canceledGuard
       );
       const updated = await runtime.update(
-        memoryId, '用户偏好详细说明。', 'turn-runtime-guard-3', 'work_companion', canceledGuard
+        [{ memoryId, fact: '用户偏好详细说明。' }],
+        'turn-runtime-guard-3', 'work_companion', canceledGuard
       );
-      const forgotten = await runtime.forget(memoryId, canceledGuard);
+      const forgotten = await runtime.forget([memoryId], canceledGuard);
 
       expect(remembered.error?.code ?? '').assertEqual('memory_operation_canceled');
       expect(updated.error?.code ?? '').assertEqual('memory_operation_canceled');
