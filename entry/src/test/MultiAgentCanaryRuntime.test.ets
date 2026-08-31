@@ -79,6 +79,12 @@ import {
 import {
   MultiAgentSettledOutcome
 } from '../main/ets/pages/A2uiHome/agent/MultiAgentRuntimeTypes';
+import {
+  MEMORY_FORGET_OVERLAY_BASE_BOTTOM_PADDING,
+  MEMORY_FORGET_OVERLAY_SCROLL_MAX_HEIGHT,
+  memoryForgetOverlayBottomPadding,
+  memoryForgetOverlayPersonaName
+} from '../main/ets/pages/A2uiHome/components/MemoryForgetOverlay';
 import { createHtmlHomeDocument } from '../main/ets/pages/A2uiHome/html/HtmlHomeSnapshot';
 import { HtmlHomeAction, HtmlHomeDocument } from '../main/ets/pages/A2uiHome/html/HtmlHomeTypes';
 import {
@@ -1825,6 +1831,22 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(memoryForgetOverlayBlocked(idle)).assertFalse();
       expect(memoryForgetOverlayBlocked(confirming)).assertTrue();
       expect(memoryForgetOverlayBlocked(busy)).assertTrue();
+      expect(memoryForgetOverlayBottomPadding(24))
+        .assertEqual(MEMORY_FORGET_OVERLAY_BASE_BOTTOM_PADDING + 24);
+      expect(memoryForgetOverlayBottomPadding(-10))
+        .assertEqual(MEMORY_FORGET_OVERLAY_BASE_BOTTOM_PADDING);
+      expect(MEMORY_FORGET_OVERLAY_SCROLL_MAX_HEIGHT > 0).assertTrue();
+    });
+    it('maps memory persona tags to user-facing Chinese names without exposing unknown IDs', 0, () => {
+      expect(memoryForgetOverlayPersonaName('default_companion')).assertEqual('默认分身');
+      expect(memoryForgetOverlayPersonaName('food_companion')).assertEqual('饮食搭子');
+      expect(memoryForgetOverlayPersonaName('travel_companion')).assertEqual('旅行搭子');
+      expect(memoryForgetOverlayPersonaName('work_companion')).assertEqual('工作分身');
+      expect(memoryForgetOverlayPersonaName('entertainment_companion')).assertEqual('娱乐搭子');
+      expect(memoryForgetOverlayPersonaName('game_companion')).assertEqual('游戏搭子');
+      expect(memoryForgetOverlayPersonaName('shopping_companion')).assertEqual('购物搭子');
+      expect(memoryForgetOverlayPersonaName('future_internal_persona')).assertEqual('其他分身');
+      expect(memoryForgetOverlayPersonaName('')).assertEqual('');
     });
     it('keeps UI Lab catalog bindings without widening the default parser profile', 0, async () => {
       const jsonl = '{"version":"v0.9.1","createSurface":{"surfaceId":"profile-bindings",' +
@@ -3588,6 +3610,7 @@ export default function multiAgentCanaryRuntimeTest() {
     it('executes one exact phone-local remember mutation', 0, async () => {
       const bus = new TrackingBus();
       const memory = new RecordingPhoneLocalMemoryRuntime();
+      const sideEffects: LeaderMemoryToolResult[] = [];
       const options = canaryOptions(
         new QueueModel([MEMORY_DECISION]),
         new CanaryHotelExecutor(),
@@ -3597,6 +3620,9 @@ export default function multiAgentCanaryRuntimeTest() {
         bus
       );
       options.memoryRuntime = memory;
+      options.onMemorySideEffectResult = (result: LeaderMemoryToolResult): void => {
+        sideEffects.push(result);
+      };
       const runtime = new MultiAgentCanaryRuntime(options);
 
       const outcome = await runtime.submit('我只喝瑞幸咖啡', {
@@ -3607,6 +3633,8 @@ export default function multiAgentCanaryRuntimeTest() {
 
       expect(outcome.status).assertEqual('success');
       expect(memory.rememberCalls.length).assertEqual(1);
+      expect(sideEffects.length).assertEqual(1);
+      expect(sideEffects[0].status).assertEqual('success');
       expect(memory.rememberCalls[0].personaTag).assertEqual('food_companion');
       expect(memory.rememberCalls[0].facts.join('|')).assertEqual('用户喝咖啡时只选择瑞幸。');
       expect(outcome.message).assertEqual('好的，我会按你的要求处理长期记忆。');
@@ -3743,6 +3771,7 @@ export default function multiAgentCanaryRuntimeTest() {
       async () => {
       const surfaces: A2uiSurfaceState[] = [];
       let overlay: MemoryForgetOverlayRequest | null = null;
+      const sideEffects: LeaderMemoryToolResult[] = [];
       let hostGeneration: number = 7;
       const memory = new RecordingPhoneLocalMemoryRuntime([{
         memoryId: 'memory-coffee-1',
@@ -3763,6 +3792,9 @@ export default function multiAgentCanaryRuntimeTest() {
       options.currentHostGeneration = (): number => hostGeneration;
       options.onMemoryForgetOverlay = (request: MemoryForgetOverlayRequest | null): void => {
         overlay = request;
+      };
+      options.onMemorySideEffectResult = (result: LeaderMemoryToolResult): void => {
+        sideEffects.push(result);
       };
       const runtime = new MultiAgentCanaryRuntime(options);
 
@@ -3830,6 +3862,7 @@ export default function multiAgentCanaryRuntimeTest() {
       expect(memory.forgetCalls.join(',')).assertEqual('memory-coffee-1,memory-coffee-2');
       expect(memory.forgetBatches.length).assertEqual(1);
       expect(memory.forgetBatches[0].join(',')).assertEqual('memory-coffee-1,memory-coffee-2');
+      expect(sideEffects.length).assertEqual(0);
       expect(overlay === null).assertTrue();
       expect(surfaces.length).assertEqual(0);
       runtime.dispose();

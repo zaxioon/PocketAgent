@@ -5,6 +5,26 @@ export interface MemoryForgetOverlayCandidateView {
 }
 
 export const MEMORY_FORGET_OVERLAY_SELECTION_LIMIT: number = 5;
+export const MEMORY_FORGET_OVERLAY_SCROLL_MAX_HEIGHT: number = 380;
+export const MEMORY_FORGET_OVERLAY_BASE_BOTTOM_PADDING: number = 28;
+
+export function memoryForgetOverlayBottomPadding(bottomInsetVp: number): number {
+  const safeInset: number = Number.isFinite(bottomInsetVp) ? Math.max(0, bottomInsetVp) : 0;
+  return MEMORY_FORGET_OVERLAY_BASE_BOTTOM_PADDING + safeInset;
+}
+
+export function memoryForgetOverlayPersonaName(personaTag: string): string {
+  const key: string = personaTag.trim();
+  if (key.length === 0) return '';
+  if (key === 'default_companion') return '默认分身';
+  if (key === 'food_companion') return '饮食搭子';
+  if (key === 'travel_companion') return '旅行搭子';
+  if (key === 'work_companion') return '工作分身';
+  if (key === 'entertainment_companion') return '娱乐搭子';
+  if (key === 'game_companion') return '游戏搭子';
+  if (key === 'shopping_companion') return '购物搭子';
+  return '其他分身';
+}
 
 @Component
 export struct MemoryForgetOverlay {
@@ -12,6 +32,7 @@ export struct MemoryForgetOverlay {
   @Prop candidates: MemoryForgetOverlayCandidateView[] = [];
   @Prop selectedKeys: string[] = [];
   @Prop isWorking: boolean = false;
+  @Prop bottomInsetVp: number = 0;
   onToggle: (candidateKey: string) => void = (_candidateKey: string): void => {};
   onCancel: () => void = (): void => {};
   onConfirm: () => void = (): void => {};
@@ -63,10 +84,12 @@ export struct MemoryForgetOverlay {
                       .fontSize(15)
                       .fontColor('#332821')
                       .maxLines(3)
-                    if (candidate.personaTag.length > 0) {
-                      Text(candidate.personaTag)
+                    if (memoryForgetOverlayPersonaName(candidate.personaTag).length > 0) {
+                      Text(memoryForgetOverlayPersonaName(candidate.personaTag))
+                        .width('100%')
                         .fontSize(11)
                         .fontColor('#8B7A70')
+                        .textAlign(TextAlign.Start)
                         .margin({ top: 3 })
                     }
                   }
@@ -88,7 +111,7 @@ export struct MemoryForgetOverlay {
             .width('100%')
           }
           .width('100%')
-          .constraintSize({ maxHeight: 380 })
+          .constraintSize({ maxHeight: MEMORY_FORGET_OVERLAY_SCROLL_MAX_HEIGHT })
 
           Row({ space: 10 }) {
             Button('取消')
@@ -108,7 +131,12 @@ export struct MemoryForgetOverlay {
           .margin({ top: 16 })
         }
         .width('100%')
-        .padding({ left: 20, right: 20, top: 20, bottom: 28 })
+        .padding({
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: memoryForgetOverlayBottomPadding(this.bottomInsetVp)
+        })
         .backgroundColor('#FFF8F3')
         .borderRadius({ topLeft: 24, topRight: 24 })
       }

@@ -1468,7 +1468,7 @@ class PhoneLocalLeaderMemoryToolExecutor implements LeaderMemoryToolExecutor,
       const result = await this.executeQueued(queuedRequest, capturedEpoch);
       const observer = this.resultObserver;
       if (observer !== null && this.active && capturedEpoch === this.ownerEpoch &&
-        result.status !== 'success' && queuedRequest.mutation.operation !== 'forget') {
+        queuedRequest.mutation.operation !== 'forget') {
         try {
           observer(result);
         } catch (_error) {

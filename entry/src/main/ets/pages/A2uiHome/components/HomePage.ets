@@ -1002,6 +1002,7 @@ export struct HomePage {
         candidates: this.memoryForgetCandidates,
         selectedKeys: this.memoryForgetSelectedKeys,
         isWorking: this.memoryForgetWorking,
+        bottomInsetVp: this.systemBottomInsetVp,
         onToggle: this.onToggleMemoryForgetCandidate,
         onCancel: this.onCancelMemoryForget,
         onConfirm: this.onConfirmMemoryForget

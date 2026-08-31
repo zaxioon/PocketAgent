@@ -572,6 +572,11 @@ export function htmlHomeHtmlForViewValue(
   return currentHtml();
 }
 
+export function memorySideEffectToastText(message: string): string {
+  const value: string = message.replace(/[\r\n\t]+/g, ' ').trim();
+  return value.substring(0, 240);
+}
+
 const AGGREGATE_DOMESTIC_ONLY_KEY: string = 'only_domestic_sources';
 const AGGREGATE_MULTILINGUAL_KEY: string = 'include_multilingual_results';
 const ANYTHING_DEMO_ROUTE_URL: string = 'pages/A2uiHome/AnythingDemo';
@@ -4593,7 +4598,6 @@ struct Index {
         return accepted;
       },
       onMemorySideEffectResult: (result: LeaderMemoryToolResult): void => {
-        if (result.status === 'success') return;
         this.showMemoryResultToast(result.message);
         aiLogInfo('[AIPhone][MemorySideEffect] status=' + result.status);
       },
@@ -5598,11 +5602,10 @@ struct Index {
   }
 
   private showMemoryResultToast(message: string): void {
-    if (!/^已记住\s*\d+\s*条|^已更新长期记忆|^已忘记这条长期记忆/.test(message)) {
-      return;
-    }
+    const toastMessage: string = memorySideEffectToastText(message);
+    if (toastMessage.length === 0) return;
     this.getUIContext().getPromptAction().showToast({
-      message,
+      message: toastMessage,
       duration: 2500,
       alignment: Alignment.Top
     });
@@ -6229,7 +6232,6 @@ struct Index {
       }
       const readyMessage: string = result.message.length > 0 ?
         result.message : this.currentSurface.title;
-      this.showMemoryResultToast(readyMessage);
       this.appendMessage('assistant', readyMessage);
       const hasCurrentTurnSurface = this.currentSurface.runtimeOwner === 'multi_agent' &&
         this.currentSurface.runtimeGeneration === turnGeneration;
