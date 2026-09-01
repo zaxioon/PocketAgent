@@ -168,6 +168,22 @@ class ProjectionMemoryStore implements PhoneLocalMemoryStore {
     return records;
   }
 
+  async replaceByPersonaTag(ownerId: string, sceneId: string, personaTag: string,
+    replacements: MemoryRecord[], _guard?: MemoryCommitGuard): Promise<MemoryRecord[]> {
+    const removed: MemoryRecord[] = [];
+    const retained: MemoryRecord[] = [];
+    for (let index = 0; index < this.records.length; index += 1) {
+      const record = this.records[index];
+      if (record.ownerId === ownerId && record.sceneId === sceneId && record.personaTag === personaTag) {
+        removed.push(record);
+      } else {
+        retained.push(record);
+      }
+    }
+    this.records = retained.concat(replacements);
+    return removed;
+  }
+
   async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
     let claimed: number = 0;
     for (let index = 0; index < this.records.length; index += 1) {
@@ -344,6 +360,50 @@ export default function phoneLocalMemoryProjectionSourceTest() {
       expect(events[0].operation).assertEqual('forget');
       expect(events[0].memoryIds.join(',')).assertEqual('memory-forget-a,memory-forget-b');
       expect(events[0].committedAt > 0).assertTrue();
+    });
+
+    it('publishes one projection event for each whole public persona replace or delete', 0, async () => {
+      const store = new ProjectionMemoryStore();
+      const events: PhoneLocalMemoryMutationEvent[] = [];
+      let nextId: number = 0;
+      const runtime = new PhoneLocalMemoryRuntime(null, {
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new ProjectionEmbeddingPort(),
+        idFactory: (): string => 'persona-memory-' + (++nextId).toString(),
+        onMutationCommitted: async (event: PhoneLocalMemoryMutationEvent): Promise<void> => {
+          events.push(event);
+        }
+      });
+
+      const initialFacts: string[] = [];
+      for (let index = 0; index < 7; index += 1) {
+        initialFacts.push('用户公开资料中的高置信度事实 ' + index.toString() + '。');
+      }
+      const initial = await runtime.replacePublicPersonaFacts(
+        initialFacts, 'persona-import-1'
+      );
+      await Promise.resolve<void>(undefined);
+      const replaced = await runtime.replacePublicPersonaFacts(
+        ['用户公开资料显示喜欢开源硬件。'], 'persona-import-2'
+      );
+      await Promise.resolve<void>(undefined);
+      const deleted = await runtime.deletePublicPersonaFacts();
+      await Promise.resolve<void>(undefined);
+
+      expect(initial.status).assertEqual('success');
+      expect(initial.succeededCount).assertEqual(7);
+      expect(replaced.status).assertEqual('success');
+      expect(replaced.succeededCount).assertEqual(1);
+      expect(deleted.status).assertEqual('success');
+      expect(deleted.succeededCount).assertEqual(1);
+      expect(events.length).assertEqual(3);
+      expect(events[0].operation).assertEqual('remember');
+      expect(events[0].memoryIds.length).assertEqual(7);
+      expect(events[1].operation).assertEqual('forget');
+      expect(events[1].memoryIds.length).assertEqual(8);
+      expect(events[2].operation).assertEqual('forget');
+      expect(events[2].memoryIds.length).assertEqual(1);
+      expect(store.records.length).assertEqual(0);
     });
   });
 }

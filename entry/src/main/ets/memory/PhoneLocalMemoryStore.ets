@@ -80,6 +80,17 @@ export const PHONE_LOCAL_MEMORY_UPDATE_SQL: string =
 export const PHONE_LOCAL_MEMORY_DELETE_SQL: string =
   'DELETE FROM conversation_memory WHERE owner_id = ? AND memory_id = ?';
 
+export const PHONE_LOCAL_MEMORY_PERSONA_TAG_RECORDS_SQL: string =
+  'SELECT * FROM conversation_memory WHERE owner_id = ? AND scene_id = ? AND persona_tag = ? ' +
+  'ORDER BY updated_at DESC, memory_id ASC';
+
+export const PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_HISTORY_SQL: string =
+  'DELETE FROM conversation_memory_history WHERE owner_id = ? AND memory_id IN (' +
+    'SELECT memory_id FROM conversation_memory WHERE owner_id = ? AND scene_id = ? AND persona_tag = ?)';
+
+export const PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_SQL: string =
+  'DELETE FROM conversation_memory WHERE owner_id = ? AND scene_id = ? AND persona_tag = ?';
+
 export const PHONE_LOCAL_MEMORY_CLAIM_OWNER_SQL: string =
   'UPDATE conversation_memory SET owner_id = ? WHERE owner_id = ?';
 
@@ -137,6 +148,9 @@ export interface PhoneLocalMemoryStore {
   replace(ownerId: string, record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void>;
   remove(ownerId: string, memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryRecord | null>;
   removeAll(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]>;
+  /** Atomically removes one exact persona tag scope and inserts its prepared replacement records. */
+  replaceByPersonaTag(ownerId: string, sceneId: string, personaTag: string,
+    replacements: MemoryRecord[], guard?: MemoryCommitGuard): Promise<MemoryRecord[]>;
   /** Atomically moves all records and audit history from one owner scope to another. */
   claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number>;
   getMetadata(key: string): Promise<string | null>;
@@ -556,6 +570,40 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
       await this.remove(ownerId, existing[index].memoryId);
     }
     return existing;
+  }
+
+  async replaceByPersonaTag(ownerId: string, sceneId: string, personaTag: string,
+    replacements: MemoryRecord[], guard?: MemoryCommitGuard): Promise<MemoryRecord[]> {
+    for (let index = 0; index < replacements.length; index += 1) {
+      const record = replacements[index];
+      if (record.ownerId !== ownerId || record.sceneId !== sceneId || record.personaTag !== personaTag) {
+        throw new Error('Memory replacement record does not match persona tag scope.');
+      }
+    }
+    const store = await this.readyStore();
+    await this.writeMutex.acquire();
+    try {
+      const existing = recordsFromResult(await store.querySql(PHONE_LOCAL_MEMORY_PERSONA_TAG_RECORDS_SQL,
+        [ownerId, sceneId, personaTag]));
+      requireActiveCommit(guard);
+      const txId = await store.beginTrans();
+      try {
+        await store.execute(PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_HISTORY_SQL, txId,
+          [ownerId, ownerId, sceneId, personaTag]);
+        await store.execute(PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_SQL, txId, [ownerId, sceneId, personaTag]);
+        for (let index = 0; index < replacements.length; index += 1) {
+          await store.execute(PHONE_LOCAL_MEMORY_INSERT_SQL, txId, recordValues(replacements[index]));
+          await this.insertHistory(store, txId, replacements[index], 'add');
+        }
+        await store.commit(txId);
+        return existing;
+      } catch (error) {
+        await store.rollback(txId);
+        throw error instanceof Error ? error : new Error('Local memory persona tag replacement failed.');
+      }
+    } finally {
+      this.writeMutex.release();
+    }
   }
 
   async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {

@@ -9,12 +9,15 @@ import {
 import {
   buildPhoneLocalMemorySearchSql,
   PHONE_LOCAL_MEMORY_DELETE_SQL,
+  PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_HISTORY_SQL,
+  PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_SQL,
   PHONE_LOCAL_MEMORY_HISTORY_SCHEMA_SQL,
   PHONE_LOCAL_MEMORY_DELETE_HISTORY_SQL,
   PHONE_LOCAL_MEMORY_MAX_CANDIDATE_LIMIT,
   PHONE_LOCAL_MEMORY_MIN_CANDIDATE_LIMIT,
   PHONE_LOCAL_MEMORY_INSERT_SQL,
   PHONE_LOCAL_MEMORY_OPERATION_CANCELED,
+  PHONE_LOCAL_MEMORY_PERSONA_TAG_RECORDS_SQL,
   PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL,
   PHONE_LOCAL_MEMORY_METADATA_SCHEMA_SQL,
   PHONE_LOCAL_MEMORY_SCHEMA_SQL,
@@ -279,6 +282,36 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
     return existing;
   }
 
+  async replaceByPersonaTag(ownerId: string, sceneId: string, personaTag: string,
+    replacements: MemoryRecord[], guard?: MemoryCommitGuard): Promise<MemoryRecord[]> {
+    requireFakeCommit(guard);
+    for (let index = 0; index < replacements.length; index += 1) {
+      if (replacements[index].fact === this.failFact) throw new Error('injected atomic replacement failure');
+    }
+    const removed: MemoryRecord[] = [];
+    const retained: MemoryRecord[] = [];
+    for (let index = 0; index < this.records.length; index += 1) {
+      const record = this.records[index];
+      if (record.ownerId === ownerId && record.sceneId === sceneId && record.personaTag === personaTag) {
+        removed.push(copyRecord(record));
+      } else {
+        retained.push(copyRecord(record));
+      }
+    }
+    for (let index = 0; index < replacements.length; index += 1) {
+      for (let retainedIndex = 0; retainedIndex < retained.length; retainedIndex += 1) {
+        if (retained[retainedIndex].ownerId === replacements[index].ownerId &&
+          retained[retainedIndex].embeddingProfileId === replacements[index].embeddingProfileId &&
+          retained[retainedIndex].factHash === replacements[index].factHash &&
+          retained[retainedIndex].normalizedFact === replacements[index].normalizedFact) {
+          throw new Error('injected unique constraint');
+        }
+      }
+    }
+    this.records = retained.concat(replacements.map((record: MemoryRecord): MemoryRecord => copyRecord(record)));
+    return removed;
+  }
+
   async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
     let claimed: number = 0;
     for (let index = 0; index < this.records.length; index += 1) {
@@ -344,6 +377,11 @@ export default function phoneLocalMemoryProviderTest() {
       );
       expect(PHONE_LOCAL_MEMORY_DEDUPE_INDEX_SQL.indexOf('scene_id')).assertEqual(-1);
       expect(PHONE_LOCAL_MEMORY_DELETE_HISTORY_SQL).assertContain('owner_id = ? AND memory_id = ?');
+      expect(PHONE_LOCAL_MEMORY_PERSONA_TAG_RECORDS_SQL)
+        .assertContain('owner_id = ? AND scene_id = ? AND persona_tag = ?');
+      expect(PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_HISTORY_SQL).assertContain('memory_id IN (SELECT memory_id');
+      expect(PHONE_LOCAL_MEMORY_DELETE_PERSONA_TAG_SQL)
+        .assertContain('owner_id = ? AND scene_id = ? AND persona_tag = ?');
       expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('USING GSDISKANN(embedding COSINE)');
       expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('queue_size=20');
       expect(PHONE_LOCAL_MEMORY_VECTOR_INDEX_SQL).assertContain('out_degree=60');
@@ -403,6 +441,88 @@ export default function phoneLocalMemoryProviderTest() {
       expect(store.records.length).assertEqual(1);
       expect(embedder.calls.length).assertEqual(1);
       expect(second.records[0].record?.memoryId).assertEqual(first.records[0].record?.memoryId);
+    });
+
+    it('replaces only the exact owner scene and persona tag after preparing every new record', 0, async () => {
+      const store = new FakeMemoryStore();
+      const embedder = new FakeEmbeddingPort();
+      const memory = provider(store, embedder);
+      await memory.remember({ ownerId: 'owner-1', records: [{
+        fact: '旧公开画像偏好咖啡', sceneId: 'global', personaTag: 'public_persona', sourceTurnId: 'seed-1'
+      }, {
+        fact: '聊天确认偏好高铁', sceneId: 'global', personaTag: 'default_companion', sourceTurnId: 'seed-1'
+      }] });
+      await memory.remember({ ownerId: 'owner-2', records: [{
+        fact: '其他账号公开画像偏好旅行', sceneId: 'global', personaTag: 'public_persona', sourceTurnId: 'seed-2'
+      }] });
+
+      const replaced = await memory.replacePersonaTag({
+        ownerId: 'owner-1', sceneId: 'global', personaTag: 'public_persona', records: [{
+          fact: '新公开画像偏好博物馆', sceneId: 'global', personaTag: 'public_persona',
+          sourceTurnId: 'persona-import-1', authority: 'leader'
+        }, {
+          fact: '新公开画像偏好开源硬件', sceneId: 'global', personaTag: 'public_persona',
+          sourceTurnId: 'persona-import-1', authority: 'leader'
+        }]
+      });
+
+      expect(replaced.status).assertEqual('success');
+      expect(replaced.removedRecords.length).assertEqual(1);
+      expect(replaced.removedRecords[0].fact).assertEqual('旧公开画像偏好咖啡');
+      expect(replaced.insertedRecords.length).assertEqual(2);
+      expect(store.records.length).assertEqual(4);
+      expect(store.records.filter((record: MemoryRecord): boolean =>
+        record.ownerId === 'owner-1' && record.personaTag === 'default_companion').length).assertEqual(1);
+      expect(store.records.filter((record: MemoryRecord): boolean =>
+        record.ownerId === 'owner-2' && record.personaTag === 'public_persona').length).assertEqual(1);
+      expect(replaced.insertedRecords[0].embedding.length).assertEqual(512);
+      expect(replaced.insertedRecords[0].sceneId).assertEqual('global');
+      expect(replaced.insertedRecords[0].personaTag).assertEqual('public_persona');
+    });
+
+    it('keeps old persona tag records when the atomic replacement commit fails', 0, async () => {
+      const store = new FakeMemoryStore();
+      const memory = provider(store, new FakeEmbeddingPort());
+      await memory.remember({ ownerId: 'owner-1', records: [{
+        fact: '旧公开画像事实', sceneId: 'global', personaTag: 'public_persona', sourceTurnId: 'seed'
+      }] });
+      store.failFact = '新公开画像写入失败';
+
+      const replaced = await memory.replacePersonaTag({
+        ownerId: 'owner-1', sceneId: 'global', personaTag: 'public_persona', records: [{
+          fact: '新公开画像写入失败', sceneId: 'global', personaTag: 'public_persona',
+          sourceTurnId: 'persona-import-failed'
+        }]
+      });
+
+      expect(replaced.status).assertEqual('error');
+      expect(replaced.insertedRecords.length).assertEqual(0);
+      expect(replaced.removedRecords.length).assertEqual(0);
+      expect(store.records.length).assertEqual(1);
+      expect(store.records[0].fact).assertEqual('旧公开画像事实');
+    });
+
+    it('deletes one persona tag atomically without embedding new facts', 0, async () => {
+      const store = new FakeMemoryStore();
+      const embedder = new FakeEmbeddingPort();
+      const memory = provider(store, embedder);
+      await memory.remember({ ownerId: 'owner-1', records: [{
+        fact: '待删除公开画像事实', sceneId: 'global', personaTag: 'public_persona', sourceTurnId: 'seed'
+      }, {
+        fact: '保留聊天事实', sceneId: 'global', personaTag: 'default_companion', sourceTurnId: 'seed'
+      }] });
+      const callsBeforeDelete = embedder.calls.length;
+
+      const deleted = await memory.replacePersonaTag({
+        ownerId: 'owner-1', sceneId: 'global', personaTag: 'public_persona', records: []
+      });
+
+      expect(deleted.status).assertEqual('success');
+      expect(deleted.removedRecords.length).assertEqual(1);
+      expect(deleted.insertedRecords.length).assertEqual(0);
+      expect(embedder.calls.length).assertEqual(callsBeforeDelete);
+      expect(store.records.length).assertEqual(1);
+      expect(store.records[0].personaTag).assertEqual('default_companion');
     });
 
     it('keeps valid records when another record fails structural validation', 0, async () => {

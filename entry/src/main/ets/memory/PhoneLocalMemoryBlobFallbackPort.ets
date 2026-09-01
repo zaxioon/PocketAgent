@@ -63,6 +63,18 @@ export const PHONE_LOCAL_MEMORY_BLOB_CLAIM_OWNER_SQL: string =
 export const PHONE_LOCAL_MEMORY_BLOB_CLAIM_HISTORY_OWNER_SQL: string =
   'UPDATE conversation_memory_blob_history SET owner_id = ? WHERE owner_id = ?';
 
+export const PHONE_LOCAL_MEMORY_BLOB_PERSONA_TAG_RECORDS_SQL: string =
+  'SELECT * FROM conversation_memory_blob WHERE owner_id = ? AND scene_id = ? AND persona_tag = ? ' +
+  'ORDER BY updated_at DESC, memory_id ASC';
+
+export const PHONE_LOCAL_MEMORY_BLOB_DELETE_PERSONA_TAG_HISTORY_SQL: string =
+  'DELETE FROM conversation_memory_blob_history WHERE owner_id = ? AND memory_id IN (' +
+    'SELECT memory_id FROM conversation_memory_blob ' +
+    'WHERE owner_id = ? AND scene_id = ? AND persona_tag = ?)';
+
+export const PHONE_LOCAL_MEMORY_BLOB_DELETE_PERSONA_TAG_SQL: string =
+  'DELETE FROM conversation_memory_blob WHERE owner_id = ? AND scene_id = ? AND persona_tag = ?';
+
 const BLOB_INSERT_SQL: string =
   'INSERT INTO conversation_memory_blob (' +
     'memory_id, owner_id, scene_id, persona_tag, authority, fact, normalized_fact, fact_hash, embedding, ' +
@@ -531,6 +543,42 @@ export class ArkDataPhoneLocalMemoryBlobStore implements PhoneLocalMemoryBlobFal
       await this.remove(ownerId, existing[index].memoryId);
     }
     return existing;
+  }
+
+  async replaceByPersonaTag(ownerId: string, sceneId: string, personaTag: string,
+    replacements: MemoryRecord[], guard?: MemoryCommitGuard): Promise<MemoryRecord[]> {
+    for (let index = 0; index < replacements.length; index += 1) {
+      const record = replacements[index];
+      if (record.ownerId !== ownerId || record.sceneId !== sceneId || record.personaTag !== personaTag) {
+        throw new Error('Memory replacement record does not match persona tag scope.');
+      }
+    }
+    const store = await this.readyStore();
+    await this.writeMutex.acquire();
+    try {
+      const existing = recordsFromResult(await store.querySql(PHONE_LOCAL_MEMORY_BLOB_PERSONA_TAG_RECORDS_SQL,
+        [ownerId, sceneId, personaTag]));
+      requireActiveCommit(guard);
+      const statements: PhoneLocalMemoryBlobStatement[] = [{
+        sql: PHONE_LOCAL_MEMORY_BLOB_DELETE_PERSONA_TAG_HISTORY_SQL,
+        args: [ownerId, ownerId, sceneId, personaTag]
+      }, {
+        sql: PHONE_LOCAL_MEMORY_BLOB_DELETE_PERSONA_TAG_SQL,
+        args: [ownerId, sceneId, personaTag]
+      }];
+      for (let index = 0; index < replacements.length; index += 1) {
+        statements.push({ sql: BLOB_INSERT_SQL, args: insertValues(replacements[index]) });
+        statements.push(historyStatement(replacements[index], 'add'));
+      }
+      try {
+        await executePhoneLocalMemoryBlobTransaction(new ArkDataBlobTransactionAdapter(store), statements);
+        return existing;
+      } catch (error) {
+        throw error instanceof Error ? error : new Error('BLOB memory persona tag replacement failed.');
+      }
+    } finally {
+      this.writeMutex.release();
+    }
   }
 
   async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {

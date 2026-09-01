@@ -8,6 +8,7 @@ import {
   LlmProvider,
   LocalModel,
   LocalModelSettings,
+  MemoryCommitGuard,
   OpenAiA2uiModel,
   OpenAiCompatibleModel,
   PaymentAccount,
@@ -302,7 +303,13 @@ import {
   PublicPersonaProgress,
   PublicPersonaSearchMode,
   PublicPersonaSnapshot,
+  isPublicPersonaImported,
+  markPublicPersonaImported,
   parsePublicPersonaMarkdown,
+  publicPersonaImportFacts,
+  publicPersonaMemoryFactsAreCurrent,
+  publicPersonaSnapshotAfterMarkdownEdit,
+  publicPersonaSnapshotWithMemoryFacts,
   replacePublicPersonaMbti,
   sanitizePublicPersonaSnapshot
 } from '../../publicpersona/PublicPersonaModel';
@@ -1105,6 +1112,18 @@ function waterfallSourcesForContext(enabledSources: string[], availableSources: 
     availableSources.indexOf(source as AggregateSearchSource) >= 0);
 }
 
+class PublicPersonaMemoryCommitGuard implements MemoryCommitGuard {
+  private readonly active: () => boolean;
+
+  constructor(active: () => boolean) {
+    this.active = active;
+  }
+
+  isActive(): boolean {
+    return this.active();
+  }
+}
+
 @Entry
 @Component
 struct Index {
@@ -1205,6 +1224,7 @@ struct Index {
   @State publicPersonaSnapshot: PublicPersonaSnapshot | null = null;
   @State publicPersonaRenderTick: number = 0;
   @State publicPersonaError: string = '';
+  @State publicPersonaImporting: boolean = false;
   private publicPersonaJobId: number = 0;
   private publicPersonaInitialized: boolean = false;
   private accountSessionStoreInstance: AccountSessionStore | null = null;
@@ -3440,6 +3460,7 @@ struct Index {
     this.publicPersonaCandidates = [];
     this.publicPersonaProgress = null;
     this.publicPersonaError = '';
+    this.publicPersonaImporting = false;
     this.dailyBriefSnapshot = null;
     this.bimRecords = [];
     this.foodSavedAddresses = [];
@@ -3713,6 +3734,91 @@ struct Index {
     void this.runPublicPersonaDiscovery(jobId, username, mode);
   }
 
+  private publicPersonaMemoryGuard(jobId: number, ownerGeneration: number): MemoryCommitGuard {
+    return new PublicPersonaMemoryCommitGuard((): boolean => jobId === this.publicPersonaJobId &&
+        ownerGeneration === this.accountOwnerGeneration &&
+        this.accountSessionStatus === AccountSessionStatus.AUTHENTICATED);
+  }
+
+  private async importPublicPersonaMemory(): Promise<boolean> {
+    if (this.publicPersonaImporting || this.publicPersonaSnapshot === null) return false;
+    if (isPublicPersonaImported(this.publicPersonaSnapshot)) return true;
+    let snapshot = this.publicPersonaSnapshot;
+    const store = this.publicPersonaStore();
+    if (store === null) {
+      this.publicPersonaError = '画像导入状态暂时无法保存。';
+      return false;
+    }
+    const jobId = ++this.publicPersonaJobId;
+    const ownerGeneration = this.accountOwnerGeneration;
+    this.publicPersonaImporting = true;
+    this.publicPersonaError = '';
+    try {
+      if (!this.localMemoryAvailability().isAvailable()) {
+        throw new Error('长期记忆当前不可用，画像未导入。');
+      }
+      const importedAt = new Date().toISOString();
+      if (!publicPersonaMemoryFactsAreCurrent(snapshot)) {
+        const rebuiltFacts = await this.publicPersonaClient.rebuildMemoryFacts(
+          snapshot,
+          this.getSettings(),
+          importedAt
+        );
+        if (jobId !== this.publicPersonaJobId || ownerGeneration !== this.accountOwnerGeneration) return false;
+        const rebuiltSnapshot = sanitizePublicPersonaSnapshot(
+          publicPersonaSnapshotWithMemoryFacts(snapshot, rebuiltFacts) as Object
+        );
+        if (rebuiltSnapshot === null || !store.save(rebuiltSnapshot)) {
+          throw new Error('画像记忆候选保存失败，请重试。');
+        }
+        snapshot = rebuiltSnapshot;
+        this.updatePublicPersonaSnapshot(rebuiltSnapshot);
+      }
+      const projectedFacts = publicPersonaImportFacts(snapshot, importedAt);
+      const facts: string[] = [];
+      for (let index = 0; index < projectedFacts.length; index += 1) {
+        facts.push(projectedFacts[index].fact);
+      }
+      const guard = this.publicPersonaMemoryGuard(jobId, ownerGeneration);
+      const result = facts.length > 0 ? await this.localMemoryRuntime().replacePublicPersonaFacts(
+        facts,
+        'public-persona-' + Date.now().toString(),
+        guard
+      ) : await this.localMemoryRuntime().deletePublicPersonaFacts(guard);
+      if (result.status !== 'success') {
+        throw new Error(result.error?.message ?? '画像记忆同步失败，请重试。');
+      }
+      if (jobId !== this.publicPersonaJobId || ownerGeneration !== this.accountOwnerGeneration) return false;
+      const imported = sanitizePublicPersonaSnapshot(markPublicPersonaImported(snapshot) as Object);
+      if (imported === null || !store.save(imported)) {
+        this.publicPersonaError = '长期记忆已更新，但导入状态保存失败，请重试。';
+        return false;
+      }
+      this.updatePublicPersonaSnapshot(imported);
+      return true;
+    } catch (error) {
+      if (jobId === this.publicPersonaJobId && ownerGeneration === this.accountOwnerGeneration) {
+        this.publicPersonaError = error instanceof Error ? error.message : '画像导入长期记忆失败。';
+      }
+      return false;
+    } finally {
+      if (jobId === this.publicPersonaJobId && ownerGeneration === this.accountOwnerGeneration) {
+        this.publicPersonaImporting = false;
+      }
+    }
+  }
+
+  private restorePublicPersonaSnapshot(
+    store: PublicPersonaStore,
+    previous: PublicPersonaSnapshot | null
+  ): void {
+    if (previous === null) {
+      store.deleteSnapshot();
+    } else {
+      store.save(previous);
+    }
+  }
+
   private async runPublicPersonaBuild(
     jobId: number,
     selected: PublicPersonaCandidate[],
@@ -3729,9 +3835,10 @@ struct Index {
         return;
       }
       const store = this.publicPersonaStore();
-      if (store === null || !store.save(snapshot)) {
+      if (store === null) {
         throw new Error('画像保存失败');
       }
+      if (!store.save(snapshot)) throw new Error('画像保存失败');
       this.updatePublicPersonaSnapshot(snapshot);
       this.publicPersonaProgress = null;
       this.publicPersonaPhase = 'complete';
@@ -3784,14 +3891,7 @@ struct Index {
       this.publicPersonaError = 'Markdown 缺少姓名、摘要或画像固定章节，未保存。';
       return false;
     }
-    const updated: PublicPersonaSnapshot = {
-      schemaVersion: 1,
-      personaMarkdown: markdown,
-      primaryAvatarUrl: this.publicPersonaSnapshot.primaryAvatarUrl,
-      sources: this.publicPersonaSnapshot.sources,
-      generatedAt: this.publicPersonaSnapshot.generatedAt,
-      mbtiHidden: this.publicPersonaSnapshot.mbtiHidden
-    };
+    const updated = publicPersonaSnapshotAfterMarkdownEdit(this.publicPersonaSnapshot, markdown);
     const safe = sanitizePublicPersonaSnapshot(updated as Object);
     if (safe === null) {
       this.publicPersonaError = 'Markdown 缺少画像固定章节，未保存。';
@@ -3821,11 +3921,18 @@ struct Index {
         primaryAvatarUrl: snapshot.primaryAvatarUrl,
         sources: snapshot.sources,
         generatedAt: snapshot.generatedAt,
-        mbtiHidden: false
+        mbtiHidden: false,
+        memoryFacts: snapshot.memoryFacts?.slice() ?? [],
+        memoryFactsMarkdownFingerprint: snapshot.memoryFactsMarkdownFingerprint,
+        importedMarkdownFingerprint: snapshot.importedMarkdownFingerprint
       };
-      const safe = sanitizePublicPersonaSnapshot(updated as Object);
+      let safe = sanitizePublicPersonaSnapshot(updated as Object);
       if (safe === null) {
         throw new Error('重新推测结果未通过本地校验');
+      }
+      if (isPublicPersonaImported(snapshot)) {
+        safe = sanitizePublicPersonaSnapshot(markPublicPersonaImported(safe) as Object);
+        if (safe === null) throw new Error('重新推测后的导入状态未通过本地校验');
       }
       const store = this.publicPersonaStore();
       if (store === null || !store.save(safe)) {
@@ -3859,7 +3966,10 @@ struct Index {
       primaryAvatarUrl: this.publicPersonaSnapshot.primaryAvatarUrl,
       sources: this.publicPersonaSnapshot.sources,
       generatedAt: this.publicPersonaSnapshot.generatedAt,
-      mbtiHidden: hidden
+      mbtiHidden: hidden,
+      memoryFacts: this.publicPersonaSnapshot.memoryFacts?.slice() ?? [],
+      memoryFactsMarkdownFingerprint: this.publicPersonaSnapshot.memoryFactsMarkdownFingerprint,
+      importedMarkdownFingerprint: this.publicPersonaSnapshot.importedMarkdownFingerprint
     };
     const safe = sanitizePublicPersonaSnapshot(updated as Object);
     if (safe === null) {
@@ -3877,13 +3987,39 @@ struct Index {
     return true;
   }
 
-  private deletePublicPersona(): boolean {
+  private async deletePublicPersona(): Promise<boolean> {
     this.publicPersonaJobId++;
+    const jobId = this.publicPersonaJobId;
+    const ownerGeneration = this.accountOwnerGeneration;
     const store = this.publicPersonaStore();
-    if (store === null || !store.deleteSnapshot()) {
+    if (store === null) {
       this.publicPersonaError = '画像删除失败，请重试。';
       return false;
     }
+    const previousSnapshot = store.load();
+    if (!store.deleteSnapshot()) {
+      this.publicPersonaError = '画像删除失败，请重试。';
+      return false;
+    }
+    this.publicPersonaImporting = false;
+    try {
+      if (!this.localMemoryAvailability().isAvailable()) {
+        throw new Error('长期记忆当前不可用，画像未删除。');
+      }
+      const result = await this.localMemoryRuntime().deletePublicPersonaFacts(
+        this.publicPersonaMemoryGuard(jobId, ownerGeneration)
+      );
+      if (result.status !== 'success') {
+        throw new Error(result.error?.message ?? '画像记忆删除失败，请重试。');
+      }
+    } catch (error) {
+      if (jobId === this.publicPersonaJobId && ownerGeneration === this.accountOwnerGeneration) {
+        this.restorePublicPersonaSnapshot(store, previousSnapshot);
+        this.publicPersonaError = error instanceof Error ? error.message : '画像删除失败，请重试。';
+      }
+      return false;
+    }
+    if (jobId !== this.publicPersonaJobId || ownerGeneration !== this.accountOwnerGeneration) return true;
     this.updatePublicPersonaSnapshot(null);
     this.publicPersonaCandidates = [];
     this.publicPersonaProgress = null;
@@ -11302,6 +11438,8 @@ struct Index {
       progress: this.publicPersonaProgress,
       snapshot: this.publicPersonaSnapshot,
       errorMessage: this.publicPersonaError,
+      imported: this.publicPersonaSnapshot !== null && isPublicPersonaImported(this.publicPersonaSnapshot),
+      importing: this.publicPersonaImporting,
       defaultDisplayName: this.accountDisplayName,
       onBack: (): void => {
         this.closePublicPersona();
@@ -11330,7 +11468,10 @@ struct Index {
       onSetMbtiHidden: (hidden: boolean): void => {
         this.setPublicPersonaMbtiHidden(hidden);
       },
-      onDelete: (): boolean => {
+      onImport: (): Promise<boolean> => {
+        return this.importPublicPersonaMemory();
+      },
+      onDelete: (): Promise<boolean> => {
         return this.deletePublicPersona();
       }
     })

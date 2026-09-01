@@ -197,6 +197,24 @@ class RuntimeMemoryStore implements PhoneLocalMemoryStore {
     return existing;
   }
 
+  async replaceByPersonaTag(ownerId: string, sceneId: string, personaTag: string,
+    replacements: MemoryRecord[], guard?: MemoryCommitGuard): Promise<MemoryRecord[]> {
+    requireRuntimeCommit(guard);
+    const removed: MemoryRecord[] = [];
+    const retained: MemoryRecord[] = [];
+    for (let index = 0; index < this.records.length; index += 1) {
+      const record = this.records[index];
+      if (record.ownerId === ownerId && record.sceneId === sceneId && record.personaTag === personaTag) {
+        removed.push(copyRuntimeRecord(record));
+      } else {
+        retained.push(copyRuntimeRecord(record));
+      }
+    }
+    this.records = retained.concat(replacements.map((record: MemoryRecord): MemoryRecord =>
+      copyRuntimeRecord(record)));
+    return removed;
+  }
+
   async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
     let claimed: number = 0;
     for (let index = 0; index < this.records.length; index += 1) {

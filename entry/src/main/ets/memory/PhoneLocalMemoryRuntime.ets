@@ -8,6 +8,7 @@ import {
   MemoryDraft,
   MemoryError,
   MemoryHit,
+  MemoryRecord,
   MemoryWriteResult,
   MEMORY_RECALL_DEFAULT_TOP_K,
   MEMORY_RECALL_FACT_MAX_CHARS,
@@ -17,7 +18,10 @@ import {
 } from '@loop/agent-core';
 import { BertWordPieceTokenizer } from './BertWordPieceTokenizer';
 import { BgeMindSporeEmbeddingPort } from './BgeMindSporeEmbeddingPort';
-import { PhoneLocalMemoryProvider } from './PhoneLocalMemoryProvider';
+import {
+  PhoneLocalMemoryPersonaTagReplaceResult,
+  PhoneLocalMemoryProvider
+} from './PhoneLocalMemoryProvider';
 import {
   ArkDataPhoneLocalMemoryStore,
   PhoneLocalMemoryProjectionFact,
@@ -33,6 +37,7 @@ import {
 
 export const PHONE_LOCAL_MEMORY_OWNER_ID: string = 'local-user-v1';
 export const PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID: string = 'global';
+export const PHONE_LOCAL_MEMORY_PUBLIC_PERSONA_TAG: string = 'public_persona';
 export const PHONE_LOCAL_MEMORY_RECALL_TOP_K: number = MEMORY_RECALL_DEFAULT_TOP_K;
 export const PHONE_LOCAL_MEMORY_RECALL_TIMEOUT_MS: number = 2500;
 export const PHONE_LOCAL_MEMORY_RECALL_FACT_LIMIT: number = MEMORY_RECALL_FACT_MAX_CHARS;
@@ -141,6 +146,22 @@ function unavailableBatch(recordCount: number, error: MemoryError): MemoryBatchR
 function boundedFact(fact: string, remaining: number): string {
   const limit = Math.min(PHONE_LOCAL_MEMORY_RECALL_FACT_LIMIT, remaining);
   return fact.substring(0, Math.max(0, limit));
+}
+
+function successfulRecordBatch(records: MemoryRecord[]): MemoryBatchResult {
+  const results: MemoryWriteResult[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    results.push({ inputIndex: index, status: 'success', record: records[index] });
+  }
+  return {
+    status: 'success', records: results, succeededCount: records.length, failedCount: 0, warnings: []
+  };
+}
+
+function tagMutationFailure(recordCount: number, outcome: PhoneLocalMemoryPersonaTagReplaceResult): MemoryBatchResult {
+  return unavailableBatch(recordCount, outcome.error ?? runtimeMemoryError(
+    'memory_persona_tag_replace_failed', 'Long-term persona memory could not be changed.', true
+  ));
 }
 
 /**
@@ -380,6 +401,85 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
       this.ownerId,
       PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID
     );
+  }
+
+  async replacePublicPersonaFacts(facts: string[], sourceTurnId: string,
+    guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    if (facts.length < 1) {
+      return unavailableBatch(facts.length, runtimeMemoryError(
+        'memory_request_invalid', 'Public persona memory requires at least one fact.', false
+      ));
+    }
+    try {
+      const records: MemoryDraft[] = [];
+      for (let index = 0; index < facts.length; index += 1) {
+        records.push({
+          fact: facts[index],
+          sceneId: PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+          personaTag: PHONE_LOCAL_MEMORY_PUBLIC_PERSONA_TAG,
+          authority: 'leader',
+          sourceTurnId
+        });
+      }
+      const outcome = await (await this.provider()).replacePersonaTag({
+        ownerId: this.ownerId,
+        sceneId: PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+        personaTag: PHONE_LOCAL_MEMORY_PUBLIC_PERSONA_TAG,
+        records
+      }, guard);
+      if (outcome.status !== 'success') return tagMutationFailure(facts.length, outcome);
+      const result = successfulRecordBatch(outcome.insertedRecords);
+      if (outcome.removedRecords.length > 0) {
+        const affectedIds: string[] = [];
+        for (let index = 0; index < outcome.removedRecords.length; index += 1) {
+          affectedIds.push(outcome.removedRecords[index].memoryId);
+        }
+        for (let index = 0; index < outcome.insertedRecords.length; index += 1) {
+          affectedIds.push(outcome.insertedRecords[index].memoryId);
+        }
+        this.notifyMutation({ operation: 'forget', committedAt: Date.now(), memoryIds: affectedIds });
+      } else if (outcome.insertedRecords.length > 0) {
+        let committedAt: number = 0;
+        const insertedIds: string[] = [];
+        for (let index = 0; index < outcome.insertedRecords.length; index += 1) {
+          insertedIds.push(outcome.insertedRecords[index].memoryId);
+          committedAt = Math.max(committedAt, outcome.insertedRecords[index].updatedAt);
+        }
+        this.notifyMutation({ operation: 'remember', committedAt, memoryIds: insertedIds });
+      }
+      return result;
+    } catch (error) {
+      this.log('memory_runtime_unavailable', 'replacePublicPersonaFacts', error);
+      return unavailableBatch(facts.length, runtimeMemoryError(
+        'memory_runtime_unavailable', 'Long-term memory is unavailable on this device.', true
+      ));
+    }
+  }
+
+  async deletePublicPersonaFacts(guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    try {
+      const outcome = await (await this.provider()).replacePersonaTag({
+        ownerId: this.ownerId,
+        sceneId: PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+        personaTag: PHONE_LOCAL_MEMORY_PUBLIC_PERSONA_TAG,
+        records: []
+      }, guard);
+      if (outcome.status !== 'success') return tagMutationFailure(1, outcome);
+      const result = successfulRecordBatch(outcome.removedRecords);
+      if (outcome.removedRecords.length > 0) {
+        const removedIds: string[] = [];
+        for (let index = 0; index < outcome.removedRecords.length; index += 1) {
+          removedIds.push(outcome.removedRecords[index].memoryId);
+        }
+        this.notifyMutation({ operation: 'forget', committedAt: Date.now(), memoryIds: removedIds });
+      }
+      return result;
+    } catch (error) {
+      this.log('memory_runtime_unavailable', 'deletePublicPersonaFacts', error);
+      return unavailableBatch(1, runtimeMemoryError(
+        'memory_runtime_unavailable', 'Long-term memory is unavailable on this device.', true
+      ));
+    }
   }
 
   /**

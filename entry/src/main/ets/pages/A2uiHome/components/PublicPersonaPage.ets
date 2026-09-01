@@ -46,6 +46,21 @@ export function publicPersonaMarkdownSurfaceKind(editing: boolean): PublicPerson
   return editing ? 'editable_area' : 'readonly_text';
 }
 
+export interface PublicPersonaImportButtonViewState {
+  label: string;
+  enabled: boolean;
+}
+
+export function publicPersonaImportButtonViewState(
+  imported: boolean,
+  importing: boolean,
+  editing: boolean
+): PublicPersonaImportButtonViewState {
+  if (imported) return { label: '已导入长期记忆', enabled: false };
+  if (importing) return { label: '导入中', enabled: false };
+  return { label: '将画像导入长期记忆', enabled: !editing };
+}
+
 @Component
 export struct PublicPersonaPage {
   @StorageProp('a2uiSystemTopInsetVp') systemTopInsetVp: number = 24;
@@ -54,6 +69,8 @@ export struct PublicPersonaPage {
   @Prop progress: PublicPersonaProgress | null = null;
   @Prop snapshot: PublicPersonaSnapshot | null = null;
   @Prop errorMessage: string = '';
+  @Prop imported: boolean = false;
+  @Prop importing: boolean = false;
   @Prop @Watch('onDefaultDisplayNameChanged') defaultDisplayName: string = '';
   @State username: string = '';
   @State usernameTouched: boolean = false;
@@ -66,6 +83,8 @@ export struct PublicPersonaPage {
   @State draftMarkdown: string = '';
   @State mbtiMenuOpen: boolean = false;
   @State deleteConfirm: boolean = false;
+  @State deleteWorking: boolean = false;
+  @State importRequested: boolean = false;
   @State confirmedDisplayName: string = '';
   @State displayNameTouched: boolean = false;
 
@@ -79,7 +98,8 @@ export struct PublicPersonaPage {
   onSaveMarkdown: (markdown: string) => boolean = (_markdown: string): boolean => false;
   onReinferMbti: () => void = () => {};
   onSetMbtiHidden: (hidden: boolean) => void = (_hidden: boolean): void => {};
-  onDelete: () => boolean = (): boolean => false;
+  onImport: () => Promise<boolean> = (): Promise<boolean> => Promise.resolve(false);
+  onDelete: () => Promise<boolean> = (): Promise<boolean> => Promise.resolve(false);
 
   aboutToAppear(): void {
     this.username = publicPersonaDraftAfterDefaultChange(
@@ -973,6 +993,28 @@ export struct PublicPersonaPage {
           .borderRadius(10)
           .margin({ top: 10 })
       }
+      Button(publicPersonaImportButtonViewState(
+        this.imported, this.importing || this.importRequested, this.editingMarkdown).label)
+        .width('100%')
+        .height(42)
+        .fontSize(13)
+        .fontColor(this.imported ? COLOR_ACCENT : Color.White)
+        .backgroundColor(this.imported ? COLOR_ACCENT_SOFT : COLOR_ACCENT)
+        .borderRadius(10)
+        .margin({ top: 10 })
+        .enabled(publicPersonaImportButtonViewState(
+          this.imported, this.importing || this.importRequested, this.editingMarkdown).enabled)
+        .onClick(() => {
+          const state = publicPersonaImportButtonViewState(
+            this.imported, this.importing || this.importRequested, this.editingMarkdown);
+          if (!state.enabled) return;
+          this.importRequested = true;
+          this.onImport().then((): void => {
+            this.importRequested = false;
+          }, (): void => {
+            this.importRequested = false;
+          });
+        })
       if (this.errorMessage.length > 0) {
         Text(this.errorMessage)
           .fontSize(12)
@@ -1051,17 +1093,23 @@ export struct PublicPersonaPage {
               .onClick(() => {
                 this.deleteConfirm = false;
               })
-            Button('确认删除')
+            Button(this.deleteWorking ? '删除中' : '确认删除')
               .height(34)
               .fontSize(12)
               .fontColor(COLOR_ERROR)
               .backgroundColor(COLOR_ERROR_SOFT)
               .borderRadius(8)
               .margin({ left: 8 })
+              .enabled(!this.deleteWorking)
               .onClick(() => {
-                if (this.onDelete()) {
-                  this.deleteConfirm = false;
-                }
+                if (this.deleteWorking) return;
+                this.deleteWorking = true;
+                this.onDelete().then((deleted: boolean): void => {
+                  if (deleted) this.deleteConfirm = false;
+                  this.deleteWorking = false;
+                }, (): void => {
+                  this.deleteWorking = false;
+                });
               })
           }
           .margin({ top: 8 })
