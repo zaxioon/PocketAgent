@@ -273,12 +273,20 @@ import {
   installGlobalAccountSessionStore
 } from '../../account/AccountSessionStore';
 import { AccountSessionSnapshot, AccountSessionStatus } from '../../account/AccountModels';
+import {
+  AccountProfileSnapshot,
+  AccountProfileStore,
+  effectiveAccountDisplayName,
+  emptyAccountProfileSnapshot
+} from '../../account/AccountProfileStore';
 import { accountScopedStoreName } from '../../account/AccountStorageScope';
 import { HuaweiAccountLoginPage } from '../../account/HuaweiAccountLoginPage';
 import { configuredHuaweiAccountClientId } from '../../account/HuaweiAccountService';
 import { DefaultLegacyAccountClaimCoordinator } from '../../account/LegacyAccountMigration';
 import { ConfigPage } from './components/ConfigPage';
+import { LongTermMemoryPlaceholderPage } from './components/LongTermMemoryPlaceholderPage';
 import { PublicPersonaPage } from './components/PublicPersonaPage';
+import { UserManagementPage } from './components/UserManagementPage';
 import { PublicPersonaClient } from '../../publicpersona/PublicPersonaClient';
 import {
   PhoneLocalMemoryMutationEvent,
@@ -1102,6 +1110,12 @@ function waterfallSourcesForContext(enabledSources: string[], availableSources: 
 struct Index {
   @State accountSessionStatus: AccountSessionStatus = AccountSessionStatus.UNINITIALIZED;
   @State accountOwnerId: string = '';
+  @State showUserManagementPage: boolean = false;
+  @State showLongTermMemoryPage: boolean = false;
+  @State showLogoutConfirmation: boolean = false;
+  @State accountDisplayName: string = effectiveAccountDisplayName(emptyAccountProfileSnapshot());
+  @State accountNameSaveMessage: string = '';
+  @State accountNameSaving: boolean = false;
   @State showConfigPage: boolean = false;
   @State showComposioAuthPage: boolean = false;
   @State showAdvancedSettings: boolean = false;
@@ -1194,12 +1208,15 @@ struct Index {
   private publicPersonaJobId: number = 0;
   private publicPersonaInitialized: boolean = false;
   private accountSessionStoreInstance: AccountSessionStore | null = null;
+  private accountProfileStoreInstance: AccountProfileStore | null = null;
+  private accountProfileSnapshot: AccountProfileSnapshot = emptyAccountProfileSnapshot();
   private accountRestorePromise: Promise<boolean> | null = null;
   private accountLifecycleGeneration: number = 0;
   private accountOwnerGeneration: number = 0;
   private accountDataInitializedOwnerId: string = '';
   private navigationCardAccountRefreshGeneration: number = 0;
   private navigationCardAccountRefreshQueue: Promise<void> = Promise.resolve();
+  private publicPersonaReturnToUserManagement: boolean = false;
   private readonly publicPersonaClient: PublicPersonaClient = new PublicPersonaClient();
   @State mailDetailEventJson: string = '';
   @State mailReplyEventJson: string = '';
@@ -3264,6 +3281,78 @@ struct Index {
     return this.accountSessionStoreInstance;
   }
 
+  private accountProfileStore(): AccountProfileStore {
+    if (this.accountProfileStoreInstance === null) {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      this.accountProfileStoreInstance = AccountProfileStore.fromContext(
+        context,
+        this.requireAccountOwnerId()
+      );
+    }
+    return this.accountProfileStoreInstance;
+  }
+
+  private refreshAccountProfile(): void {
+    try {
+      this.accountProfileSnapshot = this.accountProfileStore().load();
+      this.accountDisplayName = effectiveAccountDisplayName(this.accountProfileSnapshot);
+      this.accountNameSaveMessage = '';
+    } catch (_error) {
+      this.accountProfileSnapshot = emptyAccountProfileSnapshot();
+      this.accountDisplayName = effectiveAccountDisplayName(this.accountProfileSnapshot);
+      this.accountNameSaveMessage = '用户名称暂时无法读取。';
+    }
+  }
+
+  private saveAccountDisplayName(name: string): void {
+    const normalized: string = name.trim();
+    if (this.accountNameSaving) return;
+    if (normalized.length > 40) {
+      this.accountNameSaveMessage = '名称最多 40 个字符。';
+      return;
+    }
+    this.accountNameSaving = true;
+    try {
+      this.accountProfileSnapshot = normalized.length === 0 ? this.accountProfileStore().clearCustomName() :
+        this.accountProfileStore().setCustomName(normalized);
+      this.accountDisplayName = effectiveAccountDisplayName(this.accountProfileSnapshot);
+      this.accountNameSaveMessage = normalized.length === 0 ? '已恢复华为账号名称。' : '名称已保存。';
+    } catch (_error) {
+      this.accountNameSaveMessage = '名称保存失败，请重试。';
+    } finally {
+      this.accountNameSaving = false;
+    }
+  }
+
+  private async logoutCurrentAccount(): Promise<void> {
+    if (this.accountNameSaving) return;
+    this.accountNameSaving = true;
+    this.showLogoutConfirmation = false;
+    try {
+      const snapshot = await this.accountSessionStore().clearLocalSession();
+      if (snapshot.status === AccountSessionStatus.ERROR) {
+        this.getUIContext().getPromptAction().showToast({
+          message: snapshot.errorMessage.length > 0 ? snapshot.errorMessage : '退出登录失败。'
+        });
+        return;
+      }
+      this.applyAccountSessionSnapshot(snapshot);
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({
+        message: '退出登录失败。'
+      });
+    } finally {
+      this.accountNameSaving = false;
+    }
+  }
+
+  private openUserManagement(): void {
+    this.refreshAccountProfile();
+    this.showUserManagementPage = true;
+    this.showLongTermMemoryPage = false;
+    this.showLogoutConfirmation = false;
+  }
+
   private requireAccountOwnerId(): string {
     const ownerId: string = this.accountOwnerId.trim();
     if (ownerId.length === 0) {
@@ -3333,10 +3422,24 @@ struct Index {
     this.discoveryMemoryProjectionCoordinatorInstance = null;
     this.foodAddressBookStoreInstance = null;
     this.foodFavoritesStoreInstance = null;
+    this.accountProfileStoreInstance = null;
+    this.accountProfileSnapshot = emptyAccountProfileSnapshot();
+    this.accountDisplayName = effectiveAccountDisplayName(this.accountProfileSnapshot);
+    this.accountNameSaveMessage = '';
+    this.accountNameSaving = false;
+    this.showUserManagementPage = false;
+    this.showLongTermMemoryPage = false;
+    this.showLogoutConfirmation = false;
+    this.publicPersonaJobId++;
+    this.showPublicPersonaPage = false;
+    this.publicPersonaReturnToUserManagement = false;
     this.trainPresaleResumeDrain = null;
     this.publicPersonaInitialized = false;
     this.publicPersonaSnapshot = null;
     this.publicPersonaPhase = 'input';
+    this.publicPersonaCandidates = [];
+    this.publicPersonaProgress = null;
+    this.publicPersonaError = '';
     this.dailyBriefSnapshot = null;
     this.bimRecords = [];
     this.foodSavedAddresses = [];
@@ -3357,6 +3460,7 @@ struct Index {
       return;
     }
     this.loadPersonaOverrides();
+    this.refreshAccountProfile();
     this.loadWaterfallPreferences();
     this.ensureInterestWaterfall();
     this.loadFoodAddressBook();
@@ -3539,10 +3643,19 @@ struct Index {
       (store.onboardingSeen() ? 'input' : 'welcome');
   }
 
-  private openPublicPersona(): void {
+  private openPublicPersona(returnToUserManagement: boolean = false): void {
     aiLogInfo('[AIPhone][PublicPersonaEntry] open=true');
     this.loadPublicPersona();
+    this.publicPersonaReturnToUserManagement = returnToUserManagement;
+    this.showUserManagementPage = false;
     this.showPublicPersonaPage = true;
+  }
+
+  private closePublicPersona(): void {
+    const returnToUserManagement: boolean = this.publicPersonaReturnToUserManagement;
+    this.publicPersonaReturnToUserManagement = false;
+    this.showPublicPersonaPage = false;
+    if (returnToUserManagement) this.showUserManagementPage = true;
   }
 
   private skipPublicPersonaOnboarding(): void {
@@ -3600,14 +3713,18 @@ struct Index {
     void this.runPublicPersonaDiscovery(jobId, username, mode);
   }
 
-  private async runPublicPersonaBuild(jobId: number, selected: PublicPersonaCandidate[]): Promise<void> {
+  private async runPublicPersonaBuild(
+    jobId: number,
+    selected: PublicPersonaCandidate[],
+    confirmedDisplayName: string
+  ): Promise<void> {
     try {
       const snapshot = await this.publicPersonaClient.buildSnapshot(selected, this.getSettings(), (progress: PublicPersonaProgress): void => {
         if (jobId === this.publicPersonaJobId) {
           this.publicPersonaProgress = progress;
           this.publicPersonaPhase = 'reading';
         }
-      });
+      }, confirmedDisplayName);
       if (jobId !== this.publicPersonaJobId) {
         return;
       }
@@ -3627,7 +3744,8 @@ struct Index {
     }
   }
 
-  private confirmPublicPersona(candidateIds: string[]): void {
+  private confirmPublicPersona(candidateIds: string[], confirmedDisplayName: string): void {
+    const normalizedDisplayName: string = confirmedDisplayName.trim();
     const selected = this.publicPersonaCandidates.map((candidate: PublicPersonaCandidate): PublicPersonaCandidate => ({
       id: candidate.id,
       platform: candidate.platform,
@@ -3647,11 +3765,15 @@ struct Index {
       this.publicPersonaError = '至少选择一个已确认账号';
       return;
     }
+    if (normalizedDisplayName.length === 0) {
+      this.publicPersonaError = '请先确认用户姓名';
+      return;
+    }
     this.publicPersonaJobId++;
     this.publicPersonaPhase = 'reading';
     this.publicPersonaProgress = null;
     this.publicPersonaError = '';
-    void this.runPublicPersonaBuild(this.publicPersonaJobId, selected);
+    void this.runPublicPersonaBuild(this.publicPersonaJobId, selected, normalizedDisplayName);
   }
 
   private savePublicPersonaMarkdown(markdown: string): boolean {
@@ -10915,8 +11037,21 @@ struct Index {
       this.showConfigPage = false;
       return true;
     }
+    if (this.showLongTermMemoryPage) {
+      this.showLongTermMemoryPage = false;
+      this.showUserManagementPage = true;
+      return true;
+    }
     if (this.showPublicPersonaPage) {
-      this.showPublicPersonaPage = false;
+      this.closePublicPersona();
+      return true;
+    }
+    if (this.showUserManagementPage) {
+      if (this.showLogoutConfirmation) {
+        this.showLogoutConfirmation = false;
+        return true;
+      }
+      this.showUserManagementPage = false;
       return true;
     }
     if (this.showBimPage) {
@@ -10938,6 +11073,52 @@ struct Index {
       }
     }
     return false;
+  }
+
+  @Builder
+  private UserManagementPageContent() {
+    UserManagementPage({
+      displayName: this.accountDisplayName,
+      saveMessage: this.accountNameSaveMessage,
+      isSavingName: this.accountNameSaving,
+      hasCustomDisplayName: this.accountProfileSnapshot.customName.trim().length > 0,
+      showLogoutConfirm: this.showLogoutConfirmation,
+      onBack: (): void => {
+        this.showUserManagementPage = false;
+      },
+      onSaveDisplayName: (name: string): void => {
+        this.saveAccountDisplayName(name);
+      },
+      onResetDisplayName: (): void => {
+        this.saveAccountDisplayName('');
+      },
+      onOpenSocialPersona: (): void => {
+        this.openPublicPersona(true);
+      },
+      onOpenLongTermMemory: (): void => {
+        this.showUserManagementPage = false;
+        this.showLongTermMemoryPage = true;
+      },
+      onRequestLogoutConfirmation: (): void => {
+        this.showLogoutConfirmation = true;
+      },
+      onCancelLogout: (): void => {
+        this.showLogoutConfirmation = false;
+      },
+      onLogout: (): void => {
+        void this.logoutCurrentAccount();
+      }
+    })
+  }
+
+  @Builder
+  private LongTermMemoryPageContent() {
+    LongTermMemoryPlaceholderPage({
+      onBack: (): void => {
+        this.showLongTermMemoryPage = false;
+        this.showUserManagementPage = true;
+      }
+    })
   }
 
   @Builder
@@ -11121,20 +11302,24 @@ struct Index {
       progress: this.publicPersonaProgress,
       snapshot: this.publicPersonaSnapshot,
       errorMessage: this.publicPersonaError,
+      defaultDisplayName: this.accountDisplayName,
       onBack: (): void => {
-        this.showPublicPersonaPage = false;
+        this.closePublicPersona();
       },
       onChooseSetup: (): void => {
         this.publicPersonaPhase = 'input';
       },
       onSkip: (): void => {
+        const returnToUserManagement: boolean = this.publicPersonaReturnToUserManagement;
         this.skipPublicPersonaOnboarding();
+        this.publicPersonaReturnToUserManagement = false;
+        if (returnToUserManagement) this.showUserManagementPage = true;
       },
       onStartDiscovery: (username: string, mode: PublicPersonaSearchMode): void => {
         this.startPublicPersonaDiscovery(username, mode);
       },
-      onConfirm: (candidateIds: string[]): void => {
-        this.confirmPublicPersona(candidateIds);
+      onConfirm: (candidateIds: string[], confirmedDisplayName: string): void => {
+        this.confirmPublicPersona(candidateIds, confirmedDisplayName);
       },
       onSaveMarkdown: (markdown: string): boolean => {
         return this.savePublicPersonaMarkdown(markdown);
@@ -11176,6 +11361,10 @@ struct Index {
           this.activateAccountOwner(ownerId);
         }
       })
+    } else if (this.showUserManagementPage) {
+      this.UserManagementPageContent();
+    } else if (this.showLongTermMemoryPage) {
+      this.LongTermMemoryPageContent();
     } else if (this.showComposioAuthPage) {
       ComposioAuthPage({
         userShortId: this.composioUserId,
@@ -11262,6 +11451,9 @@ struct Index {
         reduceMotion: this.bimReduceMotion,
         onOpenConfig: () => {
           this.showConfigPage = true;
+        },
+        onOpenUserManagement: () => {
+          this.openUserManagement();
         },
         onOpenPublicPersona: () => {
           this.openPublicPersona();

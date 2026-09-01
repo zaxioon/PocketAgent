@@ -294,6 +294,7 @@ export struct HomePage {
   private previousKeyboardAvoidMode: KeyboardAvoidMode = KeyboardAvoidMode.OFFSET;
   onOpenConfig: () => void = () => {};
   onOpenPublicPersona: () => void = () => {};
+  onOpenUserManagement: () => void = () => {};
   onToggleHistory: () => void = () => {};
   onSendPrompt: () => void = () => {};
   onSendWelcomePrompt: (prompt: string) => void = (_prompt: string): void => {};
@@ -552,6 +553,9 @@ export struct HomePage {
       this.WelcomeToolbarButton($r('app.media.icon_settings'), '设置', () => {
         this.onOpenConfig();
       })
+      this.WelcomeToolbarButton($r('app.media.icon_user'), '用户管理', () => {
+        this.onOpenUserManagement();
+      })
     }
     .width('100%')
     .height(A2UI_WELCOME_TOOLBAR_BUTTON_SIZE)
@@ -800,6 +804,25 @@ export struct HomePage {
               .onClick(() => {
                 this.onOpenConfig();
               })
+              .margin({ left: A2UI_HEADER_BUTTON_GAP })
+
+            A2uiButtonView({
+              icon: $r('app.media.icon_user'),
+              hasIcon: true,
+              shape: 'circle',
+              circleSize: A2UI_HEADER_BUTTON_SIZE,
+              iconSize: A2UI_HEADER_BUTTON_ICON_SIZE,
+              tone: 'secondary',
+              customBackgroundColor: A2UI_HOME_HEADER_BUTTON_BACKGROUND,
+              customBorderColor: A2UI_HOME_HEADER_BUTTON_EDGE,
+              shadowColor: A2UI_HOME_HEADER_BUTTON_SHADOW,
+              shadowRadius: 8,
+              shadowOffsetY: 3
+            })
+              .onClick(() => {
+                this.onOpenUserManagement();
+              })
+              .accessibilityText('用户管理')
               .margin({ left: A2UI_HEADER_BUTTON_GAP })
           }
           .width('100%')

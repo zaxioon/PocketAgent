@@ -55,6 +55,10 @@ import {
   requestPublicPersonaProfile
 } from '../main/ets/publicpersona/PublicPersonaProbeClient';
 import { DirectModelCallResult } from '../main/ets/model/LocalModelClient';
+import {
+  publicPersonaDraftAfterDefaultChange,
+  publicPersonaMarkdownSurfaceKind
+} from '../main/ets/pages/A2uiHome/components/PublicPersonaPage';
 
 class MemoryPreferences {
   private values: Map<string, preferences.ValueType> = new Map();
@@ -245,6 +249,18 @@ interface EvidenceFixture {
 
 export default function publicPersonaTest() {
   describe('publicPersonaModel', () => {
+    it('prefills untouched drafts without overwriting user input on later account-name updates', 0, () => {
+      expect(publicPersonaDraftAfterDefaultChange('', false, '  小罗  ')).assertEqual('小罗');
+      expect(publicPersonaDraftAfterDefaultChange('用户手动输入', true, '新账号名'))
+        .assertEqual('用户手动输入');
+      expect(publicPersonaDraftAfterDefaultChange('', true, '新账号名')).assertEqual('');
+    });
+
+    it('uses a parent-scroll-friendly text surface until persona markdown enters edit mode', 0, () => {
+      expect(publicPersonaMarkdownSurfaceKind(false)).assertEqual('readonly_text');
+      expect(publicPersonaMarkdownSurfaceKind(true)).assertEqual('editable_area');
+    });
+
     it('accepts a username but rejects the old profile URL input contract', 0, () => {
       expect(normalizePublicPersonaUsername('@XiaoLuoLYG')).assertEqual('XiaoLuoLYG');
       expect(normalizePublicPersonaUsername('https://github.com/XiaoLuoLYG')).assertEqual(null);
@@ -1382,15 +1398,18 @@ export default function publicPersonaTest() {
       });
       const candidates = await client.discover('ada', 'exact', (_progress): void => {});
 
-      const snapshot = await client.buildSnapshot(candidates, modelSettings(), (_progress): void => {});
+      const snapshot = await client.buildSnapshot(candidates, modelSettings(), (_progress): void => {}, '用户确认姓名');
 
       expect(toolIds.length).assertEqual(0);
       expect(modelPrompt).assertContain('Native public bio');
+      expect(modelPrompt).assertContain('"confirmedDisplayName":"用户确认姓名"');
       expect(systemPrompt).assertContain('"titleName"');
       expect(systemPrompt).assertContain('"personalityInference"');
       expect(systemPrompt).assertContain('"mbtiConfidence"');
       expect(snapshot.sources.length).assertEqual(1);
       expect(snapshot.sources[0].platform).assertEqual('github');
+      expect((parsePublicPersonaMarkdown(snapshot.personaMarkdown) as PublicPersonaInference).titleName)
+        .assertEqual('用户确认姓名');
     });
 
     it('keeps discovery evidence isolated when searches finish out of order', 0, async () => {
@@ -1420,9 +1439,32 @@ export default function publicPersonaTest() {
         '"https://github.com/ada.png","html_url":"https://github.com/ada","bio":"old bio"}' });
       await oldDiscovery;
 
-      await client.buildSnapshot(candidates, modelSettings(), (_progress): void => {});
+      await client.buildSnapshot(candidates, modelSettings(), (_progress): void => {}, 'Ada');
       expect(modelPrompt).assertContain('new bio');
       expect(modelPrompt.indexOf('old bio')).assertEqual(-1);
+    });
+
+    it('rejects an empty confirmed display name before reading evidence or calling the model', 0, async () => {
+      let toolCalls = 0;
+      let modelCalls = 0;
+      const client = new PublicPersonaClient(async (toolId: string): Promise<DataResult> => {
+        toolCalls++;
+        return dataResult(toolId, new Object(), 'empty');
+      }, async (): Promise<DirectModelCallResult> => {
+        modelCalls++;
+        return modelInferenceResult();
+      });
+      let rejected = false;
+
+      try {
+        await client.buildSnapshot([], modelSettings(), (_progress): void => {}, '   ');
+      } catch (_error) {
+        rejected = true;
+      }
+
+      expect(rejected).assertTrue();
+      expect(toolCalls).assertEqual(0);
+      expect(modelCalls).assertEqual(0);
     });
 
     it('uses one plain Markdown page read only when all native evidence is unusable', 0, async () => {
@@ -1437,7 +1479,7 @@ export default function publicPersonaTest() {
       }, async (): Promise<DirectModelCallResult> => modelInferenceResult(),
       (): string => '2026-08-10T00:00:00.000Z');
 
-      const snapshot = await client.buildSnapshot(selected, modelSettings(), (_progress): void => {});
+      const snapshot = await client.buildSnapshot(selected, modelSettings(), (_progress): void => {}, 'Ada');
 
       expect(calls.length).assertEqual(1);
       expect(calls[0]).assertContain('web.page.read');
@@ -1463,7 +1505,7 @@ export default function publicPersonaTest() {
       let rejected = false;
 
       try {
-        await client.buildSnapshot(selected, modelSettings(), (_progress): void => {});
+        await client.buildSnapshot(selected, modelSettings(), (_progress): void => {}, 'Ada');
       } catch (_error) {
         rejected = true;
       }

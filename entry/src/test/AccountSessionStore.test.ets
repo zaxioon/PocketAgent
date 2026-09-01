@@ -8,26 +8,42 @@ import {
 import { AccountSessionSnapshot, AccountSessionStatus } from '../main/ets/account/AccountModels';
 import {
   HuaweiAccountIdentity,
+  HuaweiAccountProfile,
   HuaweiAccountService,
   HuaweiAuthorizationState,
   huaweiLoginErrorMessage,
-  missingHuaweiClientIdMessage
+  missingHuaweiClientIdMessage,
+  validateHuaweiProfileAuthorizationResponse
 } from '../main/ets/account/HuaweiAccountService';
 import { deriveHuaweiOwnerId } from '../main/ets/account/OwnerId';
 import {
   ActiveAccountOwnerStore,
   isValidAccountOwnerId
 } from '../main/ets/account/ActiveAccountOwnerStore';
+import { AccountProfileSink } from '../main/ets/account/AccountProfileStore';
 
 class FakeHuaweiAccountService implements HuaweiAccountService {
   loginIdentity: HuaweiAccountIdentity = { unionId: 'union-login' };
   authorization: HuaweiAuthorizationState = HuaweiAuthorizationState.AUTHORIZED;
   loginCalls: number = 0;
+  profileCalls: number = 0;
+  profileUnionIds: string[] = [];
   throwOnRestore: string = '';
+  throwOnProfile: boolean = false;
+  profile: HuaweiAccountProfile = { nickName: '华为昵称', avatarUri: 'avatar://huawei' };
 
   async login(_clientId: string): Promise<HuaweiAccountIdentity> {
     this.loginCalls++;
     return this.loginIdentity;
+  }
+
+  async authorizeProfile(expectedUnionId: string): Promise<HuaweiAccountProfile> {
+    this.profileCalls++;
+    this.profileUnionIds.push(expectedUnionId);
+    if (this.throwOnProfile) {
+      throw new Error('profile authorization canceled');
+    }
+    return this.profile;
   }
 
   async getAuthorizationState(_unionId: string): Promise<HuaweiAuthorizationState> {
@@ -35,6 +51,21 @@ class FakeHuaweiAccountService implements HuaweiAccountService {
       throw new Error(this.throwOnRestore);
     }
     return this.authorization;
+  }
+}
+
+class FakeAccountProfileSink implements AccountProfileSink {
+  authorizedOwners: string[] = [];
+  unavailableOwners: string[] = [];
+  profiles: HuaweiAccountProfile[] = [];
+
+  recordAuthorized(ownerId: string, profile: HuaweiAccountProfile): void {
+    this.authorizedOwners.push(ownerId);
+    this.profiles.push(profile);
+  }
+
+  recordUnavailable(ownerId: string): void {
+    this.unavailableOwners.push(ownerId);
   }
 }
 
@@ -156,6 +187,29 @@ export default function accountSessionStoreTest() {
       expect(huaweiLoginErrorMessage(1001502003)).assertContain('Client ID');
     });
 
+    it('validates profile authorization state and matching returned UnionID', 0, () => {
+      const profile = validateHuaweiProfileAuthorizationResponse(
+        'union-current', 'state-1', 'state-1', 'union-current', '  小明 ', ' avatar://one ');
+      expect(profile.nickName).assertEqual('小明');
+      expect(profile.avatarUri).assertEqual('avatar://one');
+      let stateRejected = false;
+      let ownerRejected = false;
+      try {
+        validateHuaweiProfileAuthorizationResponse(
+          'union-current', 'state-1', 'state-other', 'union-current', undefined, undefined);
+      } catch (_error) {
+        stateRejected = true;
+      }
+      try {
+        validateHuaweiProfileAuthorizationResponse(
+          'union-current', 'state-1', 'state-1', 'union-other', undefined, undefined);
+      } catch (_error) {
+        ownerRejected = true;
+      }
+      expect(stateRejected).assertTrue();
+      expect(ownerRejected).assertTrue();
+    });
+
     it('keeps provider errors and raw UnionID out of public session state', 0, async () => {
       const rawUnionId = 'private-union-must-not-leak';
       const credentials = new MemoryCredentialStore();
@@ -185,5 +239,43 @@ export default function accountSessionStoreTest() {
       expect(publicSnapshotText(snapshot).indexOf(rawUnionId)).assertEqual(-1);
       expect(await credentials.get(HUAWEI_UNION_ID_CREDENTIAL_REF)).assertEqual(rawUnionId);
     });
+
+    it('requests profile immediately after login and persists it for the derived owner', 0, async () => {
+      const rawUnionId = 'private-union-profile';
+      const service = new FakeHuaweiAccountService();
+      service.loginIdentity = { unionId: rawUnionId };
+      const sink = new FakeAccountProfileSink();
+      const store = new AccountSessionStore(service, new MemoryCredentialStore(), 'configured-client',
+        undefined, undefined, sink);
+
+      const snapshot = await store.login();
+
+      expect(snapshot.status).assertEqual(AccountSessionStatus.AUTHENTICATED);
+      expect(service.profileCalls).assertEqual(1);
+      expect(service.profileUnionIds[0]).assertEqual(rawUnionId);
+      expect(sink.authorizedOwners[0]).assertEqual(deriveHuaweiOwnerId(rawUnionId));
+      expect(sink.profiles[0].nickName).assertEqual('华为昵称');
+      expect(sink.unavailableOwners.length).assertEqual(0);
+    });
+
+    it('keeps base login authenticated when profile authorization is canceled and does not retry on restore', 0,
+      async () => {
+        const rawUnionId = 'private-union-canceled-profile';
+        const credentials = new MemoryCredentialStore();
+        const service = new FakeHuaweiAccountService();
+        service.loginIdentity = { unionId: rawUnionId };
+        service.throwOnProfile = true;
+        const sink = new FakeAccountProfileSink();
+        const store = new AccountSessionStore(service, credentials, 'configured-client', undefined, undefined, sink);
+
+        const loginSnapshot = await store.login();
+        expect(loginSnapshot.status).assertEqual(AccountSessionStatus.AUTHENTICATED);
+        expect(sink.unavailableOwners[0]).assertEqual(deriveHuaweiOwnerId(rawUnionId));
+        expect(service.profileCalls).assertEqual(1);
+
+        const restoreSnapshot = await store.restore();
+        expect(restoreSnapshot.status).assertEqual(AccountSessionStatus.AUTHENTICATED);
+        expect(service.profileCalls).assertEqual(1);
+      });
   });
 }

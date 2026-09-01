@@ -8,6 +8,7 @@ import localModelClientTest from './LocalModelClient.test';
 import openAiRequestJsonTest from './OpenAiRequestJson.test';
 import toolGatewayClientTest from './ToolGatewayClient.test';
 import a2uiHomeStateTest from './A2uiHomeState.test';
+import userManagementPageTest from './UserManagementPage.test';
 import a2uiRenderDataTest from './A2uiRenderData.test';
 import a2uiHomeToolRequestTest from './A2uiHomeToolRequest.test';
 import a2uiBusinessDataTest from './A2uiBusinessData.test';
@@ -147,6 +148,7 @@ import bertWordPieceTokenizerTest from './BertWordPieceTokenizer.test';
 import bgeMindSporeEmbeddingPortTest from './BgeMindSporeEmbeddingPort.test';
 import accountStorageScopeTest from './AccountStorageScope.test';
 import accountSessionStoreTest from './AccountSessionStore.test';
+import accountProfileStoreTest from './AccountProfileStore.test';
 import legacyAccountMigrationTest from './LegacyAccountMigration.test';
 
 export default function testsuite() {
@@ -299,5 +301,7 @@ export default function testsuite() {
   bgeMindSporeEmbeddingPortTest();
   accountStorageScopeTest();
   accountSessionStoreTest();
+  accountProfileStoreTest();
   legacyAccountMigrationTest();
+  userManagementPageTest();
 }

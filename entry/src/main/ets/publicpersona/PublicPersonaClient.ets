@@ -65,6 +65,7 @@ const PUBLIC_PERSONA_SYSTEM_PROMPT: string = [
   '你正在根据用户主动提供的公开网页资料生成个人画像。',
   '只返回 PublicPersonaInference JSON，不要 Markdown，不要解释。',
   '只允许这些键：{"titleName":"","oneLineSummary":"","identityAndExperience":[],"expertise":[],"interestsAndPreferences":[],"communicationStyle":[],"recentFocus":[],"personalityInference":[],"mbtiType":"INTJ","mbtiConfidence":50}。六个数组键必须存在；MBTI 只能是 16 型之一，置信度为 0 到 100 的数字。',
+  '当输入包含 confirmedDisplayName 时，它是用户亲自确认的姓名；titleName 必须原样复制它，不得根据公开资料推断或改写姓名。',
   '每句话必须能被输入的公开资料支持；缺失信息使用空数组，不要猜测。',
   '每个数组最多 3 项、每项不超过 32 个字；总 JSON 不超过 800 个字，确保能完整返回。',
   'MBTI 只是可撤回的公开资料推断，不是心理测评结论。',
@@ -696,8 +697,14 @@ export class PublicPersonaClient {
   async buildSnapshot(
     selected: PublicPersonaCandidate[],
     settings: LocalModelSettings,
-    onProgress: PublicPersonaProgressListener
+    onProgress: PublicPersonaProgressListener,
+    confirmedDisplayName: string
   ): Promise<PublicPersonaSnapshot> {
+    const confirmedName = confirmedDisplayName.trim();
+    if (confirmedName.length === 0 || confirmedName.length > 64 ||
+      confirmedName.indexOf('\n') >= 0 || confirmedName.indexOf('\r') >= 0) {
+      throw new Error('请确认有效的画像姓名');
+    }
     const chosen = selected.filter((candidate: PublicPersonaCandidate): boolean => candidate.selected);
     const evidence: PublicPersonaAccountEvidence[] = [];
     let foundEvidence = 0;
@@ -753,7 +760,7 @@ export class PublicPersonaClient {
     evidence.sort((left: PublicPersonaAccountEvidence, right: PublicPersonaAccountEvidence): number =>
       chosen.findIndex((candidate: PublicPersonaCandidate): boolean => candidate.profileUrl === left.profileUrl) -
       chosen.findIndex((candidate: PublicPersonaCandidate): boolean => candidate.profileUrl === right.profileUrl));
-    const prompt = JSON.stringify({ accounts: compactEvidence(evidence) });
+    const prompt = JSON.stringify({ confirmedDisplayName: confirmedName, accounts: compactEvidence(evidence) });
     const model = await this.modelCaller(settings, prompt, [], PUBLIC_PERSONA_SYSTEM_PROMPT);
     if (!model.ok) {
       throw new Error(model.error.length > 0 ? model.error : '画像模型调用失败');
@@ -762,12 +769,24 @@ export class PublicPersonaClient {
     if (inference === null) {
       throw new Error('画像模型返回了不可用的 JSON');
     }
+    const confirmedInference: PublicPersonaInference = {
+      titleName: confirmedName,
+      oneLineSummary: inference.oneLineSummary,
+      identityAndExperience: inference.identityAndExperience,
+      expertise: inference.expertise,
+      interestsAndPreferences: inference.interestsAndPreferences,
+      communicationStyle: inference.communicationStyle,
+      recentFocus: inference.recentFocus,
+      personalityInference: inference.personalityInference,
+      mbtiType: inference.mbtiType,
+      mbtiConfidence: inference.mbtiConfidence
+    };
     const sources = evidence.map((account: PublicPersonaAccountEvidence): PublicPersonaSourceRef => accountSource(account));
     const primary = sources.filter((source: PublicPersonaSourceRef): boolean =>
       source.avatarUrl.startsWith('https://'))[0] ?? sources[0];
     const snapshotInput: PublicPersonaSnapshot = {
       schemaVersion: 1,
-      personaMarkdown: renderPublicPersonaMarkdown(inference, sources),
+      personaMarkdown: renderPublicPersonaMarkdown(confirmedInference, sources),
       primaryAvatarUrl: primary.avatarUrl,
       sources: sources,
       generatedAt: this.now(),

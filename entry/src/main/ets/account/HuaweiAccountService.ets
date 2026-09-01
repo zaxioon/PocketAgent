@@ -1,6 +1,7 @@
 import { bundleManager, common } from '@kit.AbilityKit';
 import { authentication } from '@kit.AccountKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import util from '@ohos.util';
 
 const HUAWEI_ID_NOT_LOGGED_IN: number = 1001502001;
 const HUAWEI_APP_NOT_AUTHORIZED: number = 1001502002;
@@ -17,8 +18,14 @@ export interface HuaweiAccountIdentity {
   unionId: string;
 }
 
+export interface HuaweiAccountProfile {
+  nickName: string;
+  avatarUri: string;
+}
+
 export interface HuaweiAccountService {
   login(clientId: string): Promise<HuaweiAccountIdentity>;
+  authorizeProfile(expectedUnionId: string): Promise<HuaweiAccountProfile>;
   getAuthorizationState(unionId: string): Promise<HuaweiAuthorizationState>;
 }
 
@@ -65,6 +72,27 @@ function validIdentity(unionId: string): HuaweiAccountIdentity {
     throw new HuaweiAccountPublicError('华为账号未返回有效用户标识，请稍后重试。');
   }
   return { unionId: unionId };
+}
+
+export function validateHuaweiProfileAuthorizationResponse(
+  expectedUnionId: string,
+  expectedState: string,
+  returnedState: string | undefined,
+  returnedUnionIdValue: string | undefined,
+  nickNameValue: string | undefined,
+  avatarUriValue: string | undefined
+): HuaweiAccountProfile {
+  if (expectedState.length === 0 || returnedState !== expectedState) {
+    throw new HuaweiAccountPublicError('华为账号资料授权校验失败，请稍后重试。');
+  }
+  const returnedUnionId = returnedUnionIdValue === undefined ? '' : returnedUnionIdValue.trim();
+  if (returnedUnionId.length > 0 && returnedUnionId !== expectedUnionId) {
+    throw new HuaweiAccountPublicError('华为账号资料与当前登录账号不匹配。');
+  }
+  return {
+    nickName: nickNameValue === undefined ? '' : nickNameValue.trim(),
+    avatarUri: avatarUriValue === undefined ? '' : avatarUriValue.trim()
+  };
 }
 
 export function huaweiLoginErrorMessage(code: number): string {
@@ -122,6 +150,30 @@ export class AccountKitHuaweiAccountService implements HuaweiAccountService {
         throw new HuaweiAccountPublicError('华为账号未返回登录凭据，请稍后重试。');
       }
       return validIdentity(response.data.unionID);
+    } catch (error) {
+      throw publicLoginError(error);
+    }
+  }
+
+  async authorizeProfile(expectedUnionId: string): Promise<HuaweiAccountProfile> {
+    try {
+      const state = 'appless-profile-' + util.generateRandomUUID(false);
+      const request = this.provider.createAuthorizationWithHuaweiIDRequest();
+      request.scopes = ['profile'];
+      request.forceAuthorization = true;
+      request.state = state;
+      const response = await this.controller.executeRequest(request) as authentication.AuthorizationWithHuaweiIDResponse;
+      if (response.data === undefined) {
+        throw new HuaweiAccountPublicError('华为账号未返回用户资料。');
+      }
+      return validateHuaweiProfileAuthorizationResponse(
+        expectedUnionId,
+        state,
+        response.state,
+        response.data.unionID,
+        response.data.nickName,
+        response.data.avatarUri
+      );
     } catch (error) {
       throw publicLoginError(error);
     }

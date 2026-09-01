@@ -8,6 +8,7 @@ import {
 import {
   AccountKitHuaweiAccountService,
   HuaweiAccountIdentity,
+  HuaweiAccountProfile,
   HuaweiAccountPublicError,
   HuaweiAccountService,
   HuaweiAuthorizationState,
@@ -18,6 +19,10 @@ import {
   ActiveAccountOwnerStore,
   PreferencesActiveAccountOwnerStore
 } from './ActiveAccountOwnerStore';
+import {
+  AccountProfileSink,
+  PreferencesAccountProfileSink
+} from './AccountProfileStore';
 
 export const HUAWEI_UNION_ID_CREDENTIAL_REF: string = 'account:huawei:union-id:v1';
 
@@ -42,6 +47,14 @@ class NoopActiveAccountOwnerStore implements ActiveAccountOwnerStore {
   }
 }
 
+class NoopAccountProfileSink implements AccountProfileSink {
+  recordAuthorized(_ownerId: string, _profile: HuaweiAccountProfile): void {
+  }
+
+  recordUnavailable(_ownerId: string): void {
+  }
+}
+
 function copySnapshot(snapshot: AccountSessionSnapshot): AccountSessionSnapshot {
   return {
     status: snapshot.status,
@@ -56,6 +69,7 @@ export class AccountSessionStore {
   private readonly clientId: string;
   private readonly legacyClaimCoordinator: LegacyAccountClaimCoordinator;
   private readonly activeOwnerStore: ActiveAccountOwnerStore;
+  private readonly accountProfileSink: AccountProfileSink;
   private snapshotValue: AccountSessionSnapshot = emptyAccountSessionSnapshot();
 
   constructor(
@@ -63,7 +77,8 @@ export class AccountSessionStore {
     credentialStore: CredentialStore,
     clientId: string,
     legacyClaimCoordinator?: LegacyAccountClaimCoordinator,
-    activeOwnerStore?: ActiveAccountOwnerStore
+    activeOwnerStore?: ActiveAccountOwnerStore,
+    accountProfileSink?: AccountProfileSink
   ) {
     this.accountService = accountService;
     this.credentialStore = credentialStore;
@@ -71,6 +86,7 @@ export class AccountSessionStore {
     this.legacyClaimCoordinator = legacyClaimCoordinator === undefined ?
       new NoopLegacyAccountClaimCoordinator() : legacyClaimCoordinator;
     this.activeOwnerStore = activeOwnerStore === undefined ? new NoopActiveAccountOwnerStore() : activeOwnerStore;
+    this.accountProfileSink = accountProfileSink === undefined ? new NoopAccountProfileSink() : accountProfileSink;
   }
 
   snapshot(): AccountSessionSnapshot {
@@ -116,6 +132,8 @@ export class AccountSessionStore {
     try {
       const identity = await this.accountService.login(this.clientId);
       await this.credentialStore.put(HUAWEI_UNION_ID_CREDENTIAL_REF, identity.unionId);
+      const ownerId = deriveHuaweiOwnerId(identity.unionId);
+      await this.captureProfileBestEffort(identity, ownerId);
       return await this.activate(identity);
     } catch (error) {
       return this.setSnapshot(AccountSessionStatus.ERROR, '', this.publicErrorMessage(error,
@@ -126,11 +144,14 @@ export class AccountSessionStore {
   async clearLocalSession(): Promise<AccountSessionSnapshot> {
     try {
       await this.credentialStore.remove(HUAWEI_UNION_ID_CREDENTIAL_REF);
-      this.activeOwnerStore.clear();
-      return this.setSnapshot(AccountSessionStatus.SIGNED_OUT, '', '');
     } catch (_error) {
       return this.setSnapshot(AccountSessionStatus.ERROR, '', '本地账号状态清理失败，请稍后重试。');
     }
+    try {
+      this.activeOwnerStore.clear();
+    } catch (_error) {
+    }
+    return this.setSnapshot(AccountSessionStatus.SIGNED_OUT, '', '');
   }
 
   private async activate(identity: HuaweiAccountIdentity): Promise<AccountSessionSnapshot> {
@@ -138,6 +159,18 @@ export class AccountSessionStore {
     await this.legacyClaimCoordinator.claimLegacyDataForFirstAccountIfNeeded(ownerId);
     this.activeOwnerStore.write(ownerId);
     return this.setSnapshot(AccountSessionStatus.AUTHENTICATED, ownerId, '');
+  }
+
+  private async captureProfileBestEffort(identity: HuaweiAccountIdentity, ownerId: string): Promise<void> {
+    try {
+      const profile = await this.accountService.authorizeProfile(identity.unionId);
+      this.accountProfileSink.recordAuthorized(ownerId, profile);
+    } catch (_error) {
+      try {
+        this.accountProfileSink.recordUnavailable(ownerId);
+      } catch (_storeError) {
+      }
+    }
   }
 
   private publicErrorMessage(
@@ -168,7 +201,8 @@ export function createDefaultAccountSessionStore(
     new AssetCredentialStore(),
     clientId,
     legacyClaimCoordinator,
-    new PreferencesActiveAccountOwnerStore(context)
+    new PreferencesActiveAccountOwnerStore(context),
+    new PreferencesAccountProfileSink(context)
   );
 }
 
