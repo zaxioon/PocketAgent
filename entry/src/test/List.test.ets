@@ -145,6 +145,9 @@ import phoneLocalMemoryBlobFallbackTest from './PhoneLocalMemoryBlobFallback.tes
 import phoneLocalMemoryAvailabilityTest from './PhoneLocalMemoryAvailability.test';
 import bertWordPieceTokenizerTest from './BertWordPieceTokenizer.test';
 import bgeMindSporeEmbeddingPortTest from './BgeMindSporeEmbeddingPort.test';
+import accountStorageScopeTest from './AccountStorageScope.test';
+import accountSessionStoreTest from './AccountSessionStore.test';
+import legacyAccountMigrationTest from './LegacyAccountMigration.test';
 
 export default function testsuite() {
   movieDemoContractTest();
@@ -294,4 +297,7 @@ export default function testsuite() {
   phoneLocalMemoryAvailabilityTest();
   bertWordPieceTokenizerTest();
   bgeMindSporeEmbeddingPortTest();
+  accountStorageScopeTest();
+  accountSessionStoreTest();
+  legacyAccountMigrationTest();
 }

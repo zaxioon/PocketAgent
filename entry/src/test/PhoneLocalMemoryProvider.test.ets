@@ -279,6 +279,16 @@ class FakeMemoryStore implements PhoneLocalMemoryStore {
     return existing;
   }
 
+  async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
+    let claimed: number = 0;
+    for (let index = 0; index < this.records.length; index += 1) {
+      if (this.records[index].ownerId !== fromOwnerId) continue;
+      this.records[index].ownerId = toOwnerId;
+      claimed += 1;
+    }
+    return claimed;
+  }
+
   async getMetadata(key: string): Promise<string | null> {
     return this.metadata.get(key) ?? null;
   }

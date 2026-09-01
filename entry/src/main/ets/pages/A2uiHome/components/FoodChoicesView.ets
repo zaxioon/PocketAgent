@@ -8,6 +8,7 @@ import { actionsOf, foodOptions, foodVisualSourceTag, uniqueFoodSourceTags, A2ui
 import { aiLogError, aiLogInfo } from '@loop/agent-core';
 import { buildFoodPhoneUri, buildSystemFoodNavigationUri, describeSystemFoodNavigationUri } from '@loop/agent-core';
 import {
+  NAVIGATION_CARD_STORE,
   NavigationCardSnapshot,
   PreferencesNavigationCardSnapshotStore,
   buildNavigationCardBindingData,
@@ -15,6 +16,8 @@ import {
   navigationCardPinActionFromFoodOption,
   navigationCardSnapshotFromFoodOption
 } from '@loop/agent-core';
+import { activeAccountOwnerId } from '../../../account/ActiveAccountOwnerStore';
+import { accountScopedStoreName } from '../../../account/AccountStorageScope';
 import { foodDistanceMeters } from '@loop/agent-core';
 import {
   COLOR_ACCENT,
@@ -519,7 +522,13 @@ export struct FoodChoicesView {
 
   private navigationCardStore(): PreferencesNavigationCardSnapshotStore {
     const context = this.getUIContext().getHostContext() as common.Context;
-    return new PreferencesNavigationCardSnapshotStore(context);
+    const ownerId: string = activeAccountOwnerId(context);
+    if (ownerId.length === 0) {
+      throw new Error('Navigation card storage requires an authenticated account.');
+    }
+    return new PreferencesNavigationCardSnapshotStore(
+      context, accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId)
+    );
   }
 
   private async refreshNavigationCardForms(snapshot: NavigationCardSnapshot): Promise<void> {

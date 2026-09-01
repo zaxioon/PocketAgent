@@ -67,6 +67,8 @@ export interface PhoneLocalMemoryMutationEvent {
 }
 
 export interface PhoneLocalMemoryRuntimeOptions {
+  /** Account owner scope. Omission preserves the pre-account local-user-v1 scope. */
+  ownerId?: string;
   /** Explicit single-store injection retained for unit tests and embedders. It bypasses backend selection. */
   storeFactory?: () => PhoneLocalMemoryStore;
   vectorStoreFactory?: () => PhoneLocalMemoryStore;
@@ -151,10 +153,13 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   private storePromise: Promise<PhoneLocalMemoryStore> | null = null;
   private providerPromise: Promise<PhoneLocalMemoryProvider> | null = null;
   private logger: PhoneLocalMemoryRuntimeLogger;
+  private ownerId: string;
 
   constructor(context: common.Context | null, options: PhoneLocalMemoryRuntimeOptions = {}) {
     this.context = context;
     this.options = options;
+    const ownerId: string = options.ownerId?.trim() ?? '';
+    this.ownerId = ownerId.length > 0 ? ownerId : PHONE_LOCAL_MEMORY_OWNER_ID;
     this.logger = options.logger ?? new HilogPhoneLocalMemoryRuntimeLogger();
   }
 
@@ -197,7 +202,7 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
           sourceTurnId
         });
       }
-      const result = await provider.remember({ ownerId: PHONE_LOCAL_MEMORY_OWNER_ID, records }, guard);
+      const result = await provider.remember({ ownerId: this.ownerId, records }, guard);
       const memoryIds: string[] = [];
       let committedAt: number = 0;
       for (let index = 0; index < result.records.length; index += 1) {
@@ -249,7 +254,7 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
         let result: MemoryWriteResult;
         try {
           result = await provider.update({
-            ownerId: PHONE_LOCAL_MEMORY_OWNER_ID,
+            ownerId: this.ownerId,
             memoryId: updates[index].memoryId,
             fact: updates[index].fact,
             personaTag: personaTag.length > 0 ? personaTag : PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
@@ -320,7 +325,7 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
       for (let index = 0; index < memoryIds.length; index++) {
         let result: MemoryWriteResult;
         try {
-          result = await provider.forget(PHONE_LOCAL_MEMORY_OWNER_ID, memoryIds[index], guard);
+          result = await provider.forget(this.ownerId, memoryIds[index], guard);
         } catch (error) {
           this.log('memory_runtime_forget_failed', 'forget', error);
           result = unavailableWrite(runtimeMemoryError(
@@ -364,7 +369,7 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
 
   async getProjectionStats(basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats> {
     return await (await this.memoryStore()).getProjectionStats(
-      PHONE_LOCAL_MEMORY_OWNER_ID,
+      this.ownerId,
       PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
       basedOnMemoryMutationAt
     );
@@ -372,9 +377,21 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
 
   async listProjectionFacts(): Promise<PhoneLocalMemoryProjectionFact[]> {
     return await (await this.memoryStore()).listProjectionFacts(
-      PHONE_LOCAL_MEMORY_OWNER_ID,
+      this.ownerId,
       PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID
     );
+  }
+
+  /**
+   * First-login migration hook. Both record rows and their history rows move in one store
+   * transaction; repeating the claim returns zero and leaves the account scope unchanged.
+   */
+  async claimLegacyOwner(legacyOwnerId: string = PHONE_LOCAL_MEMORY_OWNER_ID): Promise<number> {
+    return await (await this.memoryStore()).claimOwner(legacyOwnerId, this.ownerId);
+  }
+
+  getOwnerId(): string {
+    return this.ownerId;
   }
 
   private provider(): Promise<PhoneLocalMemoryProvider> {
@@ -492,7 +509,7 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   private async search(query: string, topK: number): Promise<MemoryHit[]> {
     const provider = await this.provider();
     return await provider.search({
-      ownerId: PHONE_LOCAL_MEMORY_OWNER_ID,
+      ownerId: this.ownerId,
       text: query,
       sceneIds: [],
       topK

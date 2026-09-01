@@ -197,6 +197,16 @@ class RuntimeMemoryStore implements PhoneLocalMemoryStore {
     return existing;
   }
 
+  async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
+    let claimed: number = 0;
+    for (let index = 0; index < this.records.length; index += 1) {
+      if (this.records[index].ownerId !== fromOwnerId) continue;
+      this.records[index].ownerId = toOwnerId;
+      claimed += 1;
+    }
+    return claimed;
+  }
+
   async getMetadata(key: string): Promise<string | null> {
     return this.metadata.get(key) ?? null;
   }
@@ -285,6 +295,58 @@ export default function phoneLocalMemoryRuntimeTest() {
       expect(restartedHits.length).assertEqual(0);
       expect(store.records.length).assertEqual(0);
       expect(store.metadata.size).assertEqual(0);
+    });
+
+    it('isolates recall and mutations by the owner supplied at construction', 0, async () => {
+      const store = new RuntimeMemoryStore();
+      const first = new PhoneLocalMemoryRuntime(null, {
+        ownerId: 'owner-a',
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      const second = new PhoneLocalMemoryRuntime(null, {
+        ownerId: 'owner-b',
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      const firstWrite = await first.remember(['甲账号偏好无糖咖啡'], 'turn-owner-a', 'default_companion');
+      const secondWrite = await second.remember(['乙账号偏好博物馆'], 'turn-owner-b', 'default_companion');
+
+      const firstHits = await first.recall('偏好');
+      const secondHits = await second.recall('偏好');
+      expect(firstWrite.status).assertEqual('success');
+      expect(secondWrite.status).assertEqual('success');
+      expect(firstHits.length).assertEqual(1);
+      expect(secondHits.length).assertEqual(1);
+      expect(firstHits[0].fact).assertEqual('甲账号偏好无糖咖啡');
+      expect(secondHits[0].fact).assertEqual('乙账号偏好博物馆');
+      expect(store.records[0].ownerId).assertEqual('owner-a');
+      expect(store.records[1].ownerId).assertEqual('owner-b');
+    });
+
+    it('claims the legacy owner once and keeps repeated claims idempotent', 0, async () => {
+      const store = new RuntimeMemoryStore();
+      const legacy = new PhoneLocalMemoryRuntime(null, {
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      await legacy.remember(['旧安装留下的偏好'], 'turn-legacy', 'default_companion');
+      expect(legacy.getOwnerId()).assertEqual(PHONE_LOCAL_MEMORY_OWNER_ID);
+
+      const account = new PhoneLocalMemoryRuntime(null, {
+        ownerId: 'owner-first-login',
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      expect(await account.claimLegacyOwner()).assertEqual(1);
+      expect(await account.claimLegacyOwner()).assertEqual(0);
+      expect((await legacy.recall('旧安装')).length).assertEqual(0);
+      expect((await account.recall('旧安装'))[0].fact).assertEqual('旧安装留下的偏好');
+      expect(store.records[0].ownerId).assertEqual('owner-first-login');
     });
 
     it('writes leader facts globally and bounds the recalled projection', 0, async () => {

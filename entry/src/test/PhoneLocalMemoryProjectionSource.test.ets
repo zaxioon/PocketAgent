@@ -1,11 +1,15 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { EmbeddingPort, MemoryCommitGuard, MemoryHit, MemoryRecord } from '@loop/agent-core';
 import {
+  PHONE_LOCAL_MEMORY_BLOB_CLAIM_HISTORY_OWNER_SQL,
+  PHONE_LOCAL_MEMORY_BLOB_CLAIM_OWNER_SQL,
   PHONE_LOCAL_MEMORY_BLOB_PROJECTION_FACTS_SQL,
   PHONE_LOCAL_MEMORY_BLOB_PROJECTION_INDEX_SQL,
   PHONE_LOCAL_MEMORY_BLOB_PROJECTION_STATS_SQL
 } from '../main/ets/memory/PhoneLocalMemoryBlobFallbackPort';
 import {
+  PHONE_LOCAL_MEMORY_CLAIM_HISTORY_OWNER_SQL,
+  PHONE_LOCAL_MEMORY_CLAIM_OWNER_SQL,
   PHONE_LOCAL_MEMORY_PROJECTION_FACTS_SQL,
   PHONE_LOCAL_MEMORY_PROJECTION_STATS_SQL,
   PhoneLocalMemoryProjectionFact,
@@ -164,6 +168,16 @@ class ProjectionMemoryStore implements PhoneLocalMemoryStore {
     return records;
   }
 
+  async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
+    let claimed: number = 0;
+    for (let index = 0; index < this.records.length; index += 1) {
+      if (this.records[index].ownerId !== fromOwnerId) continue;
+      this.records[index].ownerId = toOwnerId;
+      claimed += 1;
+    }
+    return claimed;
+  }
+
   async getMetadata(_key: string): Promise<string | null> {
     return null;
   }
@@ -188,6 +202,17 @@ export default function phoneLocalMemoryProjectionSourceTest() {
       expect(PHONE_LOCAL_MEMORY_BLOB_PROJECTION_INDEX_SQL).assertContain(
         'owner_id, scene_id, updated_at'
       );
+    });
+
+    it('claims current records and history rows for both persistence backends', 0, () => {
+      expect(PHONE_LOCAL_MEMORY_CLAIM_OWNER_SQL).assertContain(
+        'UPDATE conversation_memory SET owner_id = ? WHERE owner_id = ?');
+      expect(PHONE_LOCAL_MEMORY_CLAIM_HISTORY_OWNER_SQL).assertContain(
+        'UPDATE conversation_memory_history SET owner_id = ? WHERE owner_id = ?');
+      expect(PHONE_LOCAL_MEMORY_BLOB_CLAIM_OWNER_SQL).assertContain(
+        'UPDATE conversation_memory_blob SET owner_id = ? WHERE owner_id = ?');
+      expect(PHONE_LOCAL_MEMORY_BLOB_CLAIM_HISTORY_OWNER_SQL).assertContain(
+        'UPDATE conversation_memory_blob_history SET owner_id = ? WHERE owner_id = ?');
     });
 
     it('reads only the fixed local owner and global scene without loading the embedder', 0, async () => {

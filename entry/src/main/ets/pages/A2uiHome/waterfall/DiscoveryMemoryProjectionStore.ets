@@ -1,3 +1,4 @@
+import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { aggregateSearchRegistrySourceIds, WaterfallFormat } from '@loop/agent-core';
 import {
@@ -106,6 +107,11 @@ export class DiscoveryMemoryProjectionStore implements DiscoveryMemoryProjection
 
   constructor(store: preferences.Preferences) {
     this.store = store;
+  }
+
+  static fromContext(context: common.Context,
+    storeName: string = DISCOVERY_MEMORY_PROJECTION_STORE_NAME): DiscoveryMemoryProjectionStore {
+    return new DiscoveryMemoryProjectionStore(preferences.getPreferencesSync(context, { name: storeName }));
   }
 
   load(): DiscoveryMemoryPreferenceProjection {

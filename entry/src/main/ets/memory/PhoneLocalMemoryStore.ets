@@ -80,6 +80,12 @@ export const PHONE_LOCAL_MEMORY_UPDATE_SQL: string =
 export const PHONE_LOCAL_MEMORY_DELETE_SQL: string =
   'DELETE FROM conversation_memory WHERE owner_id = ? AND memory_id = ?';
 
+export const PHONE_LOCAL_MEMORY_CLAIM_OWNER_SQL: string =
+  'UPDATE conversation_memory SET owner_id = ? WHERE owner_id = ?';
+
+export const PHONE_LOCAL_MEMORY_CLAIM_HISTORY_OWNER_SQL: string =
+  'UPDATE conversation_memory_history SET owner_id = ? WHERE owner_id = ?';
+
 export const PHONE_LOCAL_MEMORY_PROJECTION_STATS_SQL: string =
   'SELECT COUNT(*) AS changed_count, MIN(updated_at) AS oldest_pending_updated_at ' +
   "FROM conversation_memory WHERE owner_id = ? AND scene_id = ? AND authority = 'leader' AND updated_at > ?";
@@ -131,6 +137,8 @@ export interface PhoneLocalMemoryStore {
   replace(ownerId: string, record: MemoryRecord, guard?: MemoryCommitGuard): Promise<void>;
   remove(ownerId: string, memoryId: string, guard?: MemoryCommitGuard): Promise<MemoryRecord | null>;
   removeAll(ownerId: string, sceneIds: string[]): Promise<MemoryRecord[]>;
+  /** Atomically moves all records and audit history from one owner scope to another. */
+  claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number>;
   getMetadata(key: string): Promise<string | null>;
   setMetadata(key: string, value: string): Promise<void>;
 }
@@ -548,6 +556,37 @@ export class ArkDataPhoneLocalMemoryStore implements PhoneLocalMemoryStore {
       await this.remove(ownerId, existing[index].memoryId);
     }
     return existing;
+  }
+
+  async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
+    const from: string = fromOwnerId.trim();
+    const to: string = toOwnerId.trim();
+    if (from.length === 0 || to.length === 0) throw new Error('Memory owner claim requires two owner IDs.');
+    if (from === to) return 0;
+    const store = await this.readyStore();
+    await this.writeMutex.acquire();
+    try {
+      const countResult = await store.querySql(
+        'SELECT COUNT(*) AS record_count FROM conversation_memory WHERE owner_id = ?', [from]);
+      let claimed: number = 0;
+      try {
+        if (countResult.goToFirstRow()) claimed = countResult.getLong(countResult.getColumnIndex('record_count'));
+      } finally {
+        countResult.close();
+      }
+      const txId = await store.beginTrans();
+      try {
+        await store.execute(PHONE_LOCAL_MEMORY_CLAIM_OWNER_SQL, txId, [to, from]);
+        await store.execute(PHONE_LOCAL_MEMORY_CLAIM_HISTORY_OWNER_SQL, txId, [to, from]);
+        await store.commit(txId);
+        return claimed;
+      } catch (error) {
+        await store.rollback(txId);
+        throw error instanceof Error ? error : new Error('Local memory owner claim failed.');
+      }
+    } finally {
+      this.writeMutex.release();
+    }
   }
 
   async getMetadata(key: string): Promise<string | null> {

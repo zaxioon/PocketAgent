@@ -57,6 +57,12 @@ export const PHONE_LOCAL_MEMORY_BLOB_PROJECTION_FACTS_SQL: string =
   'SELECT memory_id, fact, persona_tag, authority, updated_at FROM conversation_memory_blob ' +
   "WHERE owner_id = ? AND scene_id = ? AND authority = 'leader' ORDER BY updated_at ASC, memory_id ASC";
 
+export const PHONE_LOCAL_MEMORY_BLOB_CLAIM_OWNER_SQL: string =
+  'UPDATE conversation_memory_blob SET owner_id = ? WHERE owner_id = ?';
+
+export const PHONE_LOCAL_MEMORY_BLOB_CLAIM_HISTORY_OWNER_SQL: string =
+  'UPDATE conversation_memory_blob_history SET owner_id = ? WHERE owner_id = ?';
+
 const BLOB_INSERT_SQL: string =
   'INSERT INTO conversation_memory_blob (' +
     'memory_id, owner_id, scene_id, persona_tag, authority, fact, normalized_fact, fact_hash, embedding, ' +
@@ -525,6 +531,37 @@ export class ArkDataPhoneLocalMemoryBlobStore implements PhoneLocalMemoryBlobFal
       await this.remove(ownerId, existing[index].memoryId);
     }
     return existing;
+  }
+
+  async claimOwner(fromOwnerId: string, toOwnerId: string): Promise<number> {
+    const from: string = fromOwnerId.trim();
+    const to: string = toOwnerId.trim();
+    if (from.length === 0 || to.length === 0) throw new Error('Memory owner claim requires two owner IDs.');
+    if (from === to) return 0;
+    const store = await this.readyStore();
+    await this.writeMutex.acquire();
+    try {
+      const countResult = await store.querySql(
+        'SELECT COUNT(*) AS record_count FROM conversation_memory_blob WHERE owner_id = ?', [from]);
+      let claimed: number = 0;
+      try {
+        if (countResult.goToFirstRow()) claimed = countResult.getLong(countResult.getColumnIndex('record_count'));
+      } finally {
+        countResult.close();
+      }
+      try {
+        await executePhoneLocalMemoryBlobTransaction(new ArkDataBlobTransactionAdapter(store), [{
+          sql: PHONE_LOCAL_MEMORY_BLOB_CLAIM_OWNER_SQL, args: [to, from]
+        }, {
+          sql: PHONE_LOCAL_MEMORY_BLOB_CLAIM_HISTORY_OWNER_SQL, args: [to, from]
+        }]);
+        return claimed;
+      } catch (error) {
+        throw error instanceof Error ? error : new Error('BLOB memory owner claim failed.');
+      }
+    } finally {
+      this.writeMutex.release();
+    }
   }
 
   async getMetadata(key: string): Promise<string | null> {

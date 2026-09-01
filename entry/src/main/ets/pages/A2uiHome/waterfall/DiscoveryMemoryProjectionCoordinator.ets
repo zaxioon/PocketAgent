@@ -24,6 +24,7 @@ export interface DiscoveryMemoryProjectionCoordinatorOptions {
   store: DiscoveryMemoryProjectionStorePort;
   modelProvider: () => LocalModel;
   onProjection?: (projection: DiscoveryMemoryPreferenceProjection) => void;
+  isActive?: () => boolean;
   now?: () => number;
   countThreshold?: number;
   waitThresholdMs?: number;
@@ -54,6 +55,7 @@ export class DiscoveryMemoryProjectionCoordinator {
   private readonly store: DiscoveryMemoryProjectionStorePort;
   private readonly modelProvider: () => LocalModel;
   private readonly onProjection: ((projection: DiscoveryMemoryPreferenceProjection) => void) | null;
+  private readonly isActive: () => boolean;
   private readonly now: () => number;
   private readonly countThreshold: number;
   private readonly waitThresholdMs: number;
@@ -69,6 +71,7 @@ export class DiscoveryMemoryProjectionCoordinator {
     this.store = options.store;
     this.modelProvider = options.modelProvider;
     this.onProjection = options.onProjection ?? null;
+    this.isActive = options.isActive ?? (() => true);
     this.now = options.now ?? (() => Date.now());
     this.countThreshold = options.countThreshold ?? DISCOVERY_MEMORY_PROJECTION_COUNT_THRESHOLD;
     this.waitThresholdMs = options.waitThresholdMs ?? DISCOVERY_MEMORY_PROJECTION_WAIT_MS;
@@ -81,6 +84,7 @@ export class DiscoveryMemoryProjectionCoordinator {
   }
 
   notify(event: PhoneLocalMemoryMutationEvent): void {
+    if (!this.active()) return;
     if (event.operation === 'forget') {
       this.pendingForcedMutationAt = Math.max(this.pendingForcedMutationAt, event.committedAt);
       const pruned = discoveryMemoryProjectionWithoutEvidence(this.projection, event.memoryIds);
@@ -91,6 +95,7 @@ export class DiscoveryMemoryProjectionCoordinator {
   }
 
   requestRefresh(): void {
+    if (!this.active()) return;
     this.pendingCheck = true;
     if (this.inFlight || this.scheduled) return;
     this.scheduled = true;
@@ -104,7 +109,7 @@ export class DiscoveryMemoryProjectionCoordinator {
   }
 
   private async runNext(): Promise<void> {
-    if (this.inFlight || !this.pendingCheck) return;
+    if (!this.active() || this.inFlight || !this.pendingCheck) return;
     this.inFlight = true;
     this.pendingCheck = false;
     const forcedMutationAt = this.pendingForcedMutationAt;
@@ -113,6 +118,7 @@ export class DiscoveryMemoryProjectionCoordinator {
     try {
       if (forcedMutationAt <= 0) {
         const stats = await this.source.getProjectionStats(this.projection.basedOnMemoryMutationAt);
+        if (!this.active()) return;
         const pendingStats: DiscoveryMemoryProjectionPendingStats = {
           changedCount: stats.changedCount,
           oldestPendingUpdatedAt: stats.oldestPendingUpdatedAt
@@ -128,6 +134,7 @@ export class DiscoveryMemoryProjectionCoordinator {
         }
       }
       const facts = await this.source.listProjectionFacts();
+      if (!this.active()) return;
       const basedOnMemoryMutationAt = maxIncludedMemoryMutationAt(facts, forcedMutationAt);
       let next: DiscoveryMemoryPreferenceProjection = {
         basedOnMemoryMutationAt,
@@ -139,6 +146,7 @@ export class DiscoveryMemoryProjectionCoordinator {
           new ConversationContext(),
           DISCOVERY_MEMORY_PROJECTION_SYSTEM_PROMPT
         );
+        if (!this.active()) return;
         const parsed = discoveryMemoryPreferenceProjectionFromModelOutput(
           raw,
           facts,
@@ -148,8 +156,10 @@ export class DiscoveryMemoryProjectionCoordinator {
         if (parsed === null) throw new Error('Discovery memory projection model returned invalid JSON.');
         next = parsed;
       }
+      if (!this.active()) return;
       const saved = this.store.save(next);
       if (saved === null) throw new Error('Discovery memory projection did not pass local validation.');
+      if (!this.active()) return;
       this.publish(saved);
       succeeded = true;
     } catch (error) {
@@ -164,12 +174,21 @@ export class DiscoveryMemoryProjectionCoordinator {
   }
 
   private publish(value: DiscoveryMemoryPreferenceProjection): void {
+    if (!this.active()) return;
     this.projection = value;
     if (this.onProjection === null) return;
     try {
       this.onProjection(copyProjection(value));
     } catch (error) {
       this.log('projection_listener_failed', error);
+    }
+  }
+
+  private active(): boolean {
+    try {
+      return this.isActive();
+    } catch (_error) {
+      return false;
     }
   }
 

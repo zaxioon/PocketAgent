@@ -181,6 +181,7 @@ import {
 import {
   NavigationCardSnapshot,
   NavigationCardSnapshotBuildResult,
+  NAVIGATION_CARD_STORE,
   PreferencesNavigationCardSnapshotStore,
   buildNavigationCardBindingData,
   navigationCardSnapshotFromFlightOption,
@@ -223,7 +224,7 @@ import {
   waterfallExplicitPreferencesFromStatement,
   PersonaMemoryUpdateRequest
 } from '../../model/PersonaMemoryUpdate';
-import { PreferencesPersonaPackStore } from '../../model/PersonaPreferencesStore';
+import { PERSONA_STORE_NAME, PreferencesPersonaPackStore } from '../../model/PersonaPreferencesStore';
 import { allPersonaPacks, personaPackForId, resetPersonaPackText, updatePersonaPackText } from '../../model/PersonaStore';
 import { PersonaPack } from '../../model/PersonaTypes';
 import { startVoiceInputSession, VoiceInputResult, VoiceInputSession } from '../../model/VoiceInputBridge';
@@ -266,6 +267,16 @@ import {
   CheckoutWebKind,
   isAllowed12306BookingUrl
 } from './components/CheckoutWebOverlay';
+import {
+  AccountSessionStore,
+  createDefaultAccountSessionStore,
+  installGlobalAccountSessionStore
+} from '../../account/AccountSessionStore';
+import { AccountSessionSnapshot, AccountSessionStatus } from '../../account/AccountModels';
+import { accountScopedStoreName } from '../../account/AccountStorageScope';
+import { HuaweiAccountLoginPage } from '../../account/HuaweiAccountLoginPage';
+import { configuredHuaweiAccountClientId } from '../../account/HuaweiAccountService';
+import { DefaultLegacyAccountClaimCoordinator } from '../../account/LegacyAccountMigration';
 import { ConfigPage } from './components/ConfigPage';
 import { PublicPersonaPage } from './components/PublicPersonaPage';
 import { PublicPersonaClient } from '../../publicpersona/PublicPersonaClient';
@@ -417,8 +428,16 @@ import {
   waterfallSearchQueryFromAction
 } from './html/HtmlAggregateSearchHomeRenderer';
 import { createFirecrawlPendingDocument, isFirecrawlToolId } from './html/HtmlFirecrawlHomeRenderer';
-import { FoodAddressBookStore, FoodSavedAddressViewModel } from './FoodAddressBookStore';
-import { FoodFavoritesStore, FoodFavoriteViewModel } from './FoodFavoritesStore';
+import {
+  FOOD_ADDRESS_BOOK_STORE_NAME,
+  FoodAddressBookStore,
+  FoodSavedAddressViewModel
+} from './FoodAddressBookStore';
+import {
+  FOOD_FAVORITES_STORE_NAME,
+  FoodFavoritesStore,
+  FoodFavoriteViewModel
+} from './FoodFavoritesStore';
 import { buildFoodStoreMapSnapshot } from './FoodStoreMapSnapshot';
 import { isHtmlHomeActionAllowed } from './html/HtmlHomeActionPolicy';
 import {
@@ -513,6 +532,7 @@ import {
   transitionDailyBriefCatchUp
 } from './dailybrief/DailyBriefScheduler';
 import {
+  DAILY_BRIEF_STORE_NAME,
   DailyBriefStore,
   isValidDailyBriefAction
 } from './dailybrief/DailyBriefStore';
@@ -554,7 +574,6 @@ const COMPOSIO_USER_ID_KEY: string = 'composio_user_id';
 const MODEL_PRESET_STORE_NAME: string = 'aiphone_model_preset_store';
 const MODEL_PRESET_KEY: string = 'model_preset';
 const AGGREGATE_SEARCH_POLICY_STORE_NAME: string = 'aiphone_aggregate_search_policy_store';
-
 export function htmlHomeHtmlForViewValue(
   showDeepSearch: boolean,
   currentIntent: string,
@@ -1081,6 +1100,8 @@ function waterfallSourcesForContext(enabledSources: string[], availableSources: 
 @Entry
 @Component
 struct Index {
+  @State accountSessionStatus: AccountSessionStatus = AccountSessionStatus.UNINITIALIZED;
+  @State accountOwnerId: string = '';
   @State showConfigPage: boolean = false;
   @State showComposioAuthPage: boolean = false;
   @State showAdvancedSettings: boolean = false;
@@ -1170,6 +1191,13 @@ struct Index {
   @State publicPersonaError: string = '';
   private publicPersonaJobId: number = 0;
   private publicPersonaInitialized: boolean = false;
+  private accountSessionStoreInstance: AccountSessionStore | null = null;
+  private accountRestorePromise: Promise<boolean> | null = null;
+  private accountLifecycleGeneration: number = 0;
+  private accountOwnerGeneration: number = 0;
+  private accountDataInitializedOwnerId: string = '';
+  private navigationCardAccountRefreshGeneration: number = 0;
+  private navigationCardAccountRefreshQueue: Promise<void> = Promise.resolve();
   private readonly publicPersonaClient: PublicPersonaClient = new PublicPersonaClient();
   @State mailDetailEventJson: string = '';
   @State mailReplyEventJson: string = '';
@@ -3219,26 +3247,193 @@ struct Index {
     this.clearLuckinOptionSwitchQueue();
   }
 
-  aboutToAppear(): void {
-    this.loadModelPreset();
-    this.loadAggregateSearchPolicy();
-    this.loadBimMotionPreference();
-    this.readDebugBuildState();
-    this.configureComposioRuntimeForCurrentUser();
+  private accountSessionStore(): AccountSessionStore {
+    if (this.accountSessionStoreInstance === null) {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      this.accountSessionStoreInstance = createDefaultAccountSessionStore(
+        context,
+        configuredHuaweiAccountClientId(),
+        new DefaultLegacyAccountClaimCoordinator(context)
+      );
+      installGlobalAccountSessionStore(this.accountSessionStoreInstance);
+    }
+    return this.accountSessionStoreInstance;
+  }
+
+  private requireAccountOwnerId(): string {
+    const ownerId: string = this.accountOwnerId.trim();
+    if (ownerId.length === 0) {
+      throw new Error('Account-scoped storage requested without an authenticated account.');
+    }
+    return ownerId;
+  }
+
+  private scopedStoreName(baseName: string): string {
+    return accountScopedStoreName(baseName, this.requireAccountOwnerId());
+  }
+
+  private async applyNavigationCardAccountBinding(ownerId: string, generation: number,
+    reason: string): Promise<void> {
+    const context = this.getUIContext().getHostContext() as common.Context;
+    const store = ownerId.length > 0 ? new PreferencesNavigationCardSnapshotStore(
+      context, accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId)
+    ) : new PreferencesNavigationCardSnapshotStore(context);
+    const snapshot: NavigationCardSnapshot | null = ownerId.length > 0 ? await store.getSnapshot() : null;
+    if (generation !== this.navigationCardAccountRefreshGeneration) {
+      return;
+    }
+    const formIds: string[] = await store.getFormIds();
+    if (generation !== this.navigationCardAccountRefreshGeneration) {
+      return;
+    }
+    const binding = formBindingData.createFormBindingData(buildNavigationCardBindingData(snapshot, Date.now()));
+    for (let index = 0; index < formIds.length; index += 1) {
+      if (generation !== this.navigationCardAccountRefreshGeneration) {
+        return;
+      }
+      const formId: string = formIds[index];
+      try {
+        await formProvider.updateForm(formId, binding);
+        aiLogInfo('[AIPhone][NavigationCardAccountRefresh] reason=' + reason +
+          ' formId=' + formId + ' ok=true');
+      } catch (error) {
+        const businessError = error as BusinessError;
+        aiLogError('[AIPhone][NavigationCardAccountRefresh] reason=' + reason +
+          ' formId=' + formId + ' ok=false code=' +
+          (businessError.code === undefined || businessError.code === null ? 'unknown' : businessError.code.toString()) +
+          ' message=' + businessError.message);
+      }
+    }
+  }
+
+  private refreshNavigationCardForAccount(ownerId: string, reason: string): void {
+    const generation: number = ++this.navigationCardAccountRefreshGeneration;
+    const nextOwnerId: string = ownerId.trim();
+    this.navigationCardAccountRefreshQueue = this.navigationCardAccountRefreshQueue.then((): Promise<void> => {
+      return this.applyNavigationCardAccountBinding(nextOwnerId, generation, reason);
+    }).catch((error: Error): void => {
+      aiLogError('[AIPhone][NavigationCardAccountRefresh] reason=' + reason +
+        ' ok=false message=' + error.message);
+    });
+  }
+
+  private invalidateAccountScopedState(preserveInput: boolean): void {
+    const pendingInput: string = preserveInput ? this.inputText : '';
+    this.accountOwnerGeneration += 1;
+    this.unsubscribeTrainPresaleHandoff();
+    this.disposeHotelRuntime();
+    this.phoneLocalMemoryRuntime = null;
+    this.bimStoreInstance = null;
+    this.waterfallPreferencesStoreInstance = null;
+    this.discoveryMemoryProjectionStoreInstance = null;
+    this.discoveryMemoryProjectionCoordinatorInstance = null;
+    this.foodAddressBookStoreInstance = null;
+    this.foodFavoritesStoreInstance = null;
+    this.trainPresaleResumeDrain = null;
+    this.publicPersonaInitialized = false;
+    this.publicPersonaSnapshot = null;
+    this.publicPersonaPhase = 'input';
+    this.dailyBriefSnapshot = null;
+    this.bimRecords = [];
+    this.foodSavedAddresses = [];
+    this.foodFavorites = [];
+    this.discoveryMemoryProjection = emptyDiscoveryMemoryPreferenceProjection();
+    this.waterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
+    this.waterfallCardRecords = [];
+    this.waterfallReactionProjection = { topicWeights: [], sourceWeights: [], formatWeights: [] };
+    this.accountDataInitializedOwnerId = '';
+    this.resetCurrentSession();
+    if (preserveInput) {
+      this.inputText = pendingInput;
+    }
+  }
+
+  private initializeAccountScopedState(ownerId: string): void {
+    if (this.accountDataInitializedOwnerId === ownerId) {
+      return;
+    }
+    this.loadPersonaOverrides();
     this.loadWaterfallPreferences();
     this.ensureInterestWaterfall();
     this.loadFoodAddressBook();
     this.loadFoodFavorites();
     this.loadPublicPersona();
     this.subscribeTrainPresaleHandoff();
-    this.subscribeWaterfallConversationTypedTest();
     this.requestPendingTrainPresaleResume();
+    this.accountDataInitializedOwnerId = ownerId;
+  }
+
+  private activateAccountOwner(ownerId: string): void {
+    const nextOwner: string = ownerId.trim();
+    if (nextOwner.length === 0) {
+      return;
+    }
+    if (this.accountOwnerId.length > 0 && this.accountOwnerId !== nextOwner) {
+      this.invalidateAccountScopedState(true);
+    }
+    this.accountOwnerId = nextOwner;
+    this.initializeAccountScopedState(nextOwner);
+    this.accountSessionStatus = AccountSessionStatus.AUTHENTICATED;
+    this.refreshNavigationCardForAccount(nextOwner, 'account_activated');
+  }
+
+  private deactivateAccountOwner(status: AccountSessionStatus): void {
+    if (this.accountOwnerId.length > 0 || this.accountDataInitializedOwnerId.length > 0) {
+      this.invalidateAccountScopedState(true);
+    }
+    this.accountOwnerId = '';
+    this.accountSessionStatus = status;
+    this.refreshNavigationCardForAccount('', 'account_deactivated');
+  }
+
+  private applyAccountSessionSnapshot(snapshot: AccountSessionSnapshot): boolean {
+    if (snapshot.status === AccountSessionStatus.AUTHENTICATED && snapshot.ownerId.length > 0) {
+      this.activateAccountOwner(snapshot.ownerId);
+      return true;
+    }
+    this.deactivateAccountOwner(snapshot.status);
+    return false;
+  }
+
+  private restoreAccountSession(): Promise<boolean> {
+    if (this.accountRestorePromise !== null) {
+      return this.accountRestorePromise;
+    }
+    const generation: number = ++this.accountLifecycleGeneration;
+    const run = this.accountSessionStore().restore().then((snapshot: AccountSessionSnapshot): boolean => {
+      if (generation !== this.accountLifecycleGeneration) {
+        return false;
+      }
+      return this.applyAccountSessionSnapshot(snapshot);
+    }).catch((_error: Error): boolean => {
+      if (generation === this.accountLifecycleGeneration) {
+        this.deactivateAccountOwner(AccountSessionStatus.ERROR);
+      }
+      return false;
+    });
+    this.accountRestorePromise = run.then((authenticated: boolean): boolean => {
+      if (generation === this.accountLifecycleGeneration) {
+        this.accountRestorePromise = null;
+      }
+      return authenticated;
+    });
+    return this.accountRestorePromise;
+  }
+
+  aboutToAppear(): void {
+    this.loadModelPreset();
+    this.loadAggregateSearchPolicy();
+    this.loadBimMotionPreference();
+    this.readDebugBuildState();
+    this.configureComposioRuntimeForCurrentUser();
+    this.subscribeWaterfallConversationTypedTest();
+    this.accountSessionStatus = AccountSessionStatus.RESTORING;
+    void this.restoreAccountSession();
   }
 
   onPageShow(): void {
-    this.subscribeTrainPresaleHandoff();
     this.subscribeWaterfallConversationTypedTest();
-    this.requestPendingTrainPresaleResume();
+    void this.restoreAccountSession();
   }
 
   onPageHide(): void {
@@ -3246,6 +3441,8 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    this.accountLifecycleGeneration += 1;
+    this.accountRestorePromise = null;
     this.stopBimMotionPreference();
     this.unsubscribeTrainPresaleHandoff();
     this.unsubscribeWaterfallConversationTypedTest();
@@ -3280,7 +3477,9 @@ struct Index {
 
   private personaPackStore(): PreferencesPersonaPackStore | null {
     const context = this.getUIContext().getHostContext() as common.Context;
-    return context === null ? null : new PreferencesPersonaPackStore(context);
+    return context === null ? null : new PreferencesPersonaPackStore(
+      context, null, this.scopedStoreName(PERSONA_STORE_NAME)
+    );
   }
 
   private refreshPersonaEditor(personaId: string = this.selectedPersonaId): void {
@@ -3292,6 +3491,10 @@ struct Index {
   }
 
   private loadPersonaOverrides(): void {
+    const packs: PersonaPack[] = allPersonaPacks();
+    for (let index = 0; index < packs.length; index += 1) {
+      resetPersonaPackText(packs[index].manifest.id);
+    }
     const store = this.personaPackStore();
     if (store !== null) {
       store.loadSync();
@@ -3305,9 +3508,7 @@ struct Index {
       return null;
     }
     try {
-      return new PublicPersonaStore(preferences.getPreferencesSync(context, {
-        name: PUBLIC_PERSONA_STORE_NAME
-      }));
+      return PublicPersonaStore.fromContext(context, this.scopedStoreName(PUBLIC_PERSONA_STORE_NAME));
     } catch (_error) {
       return null;
     }
@@ -4178,8 +4379,7 @@ struct Index {
   private bimStore(): BimStore {
     if (this.bimStoreInstance === null) {
       const context = this.getUIContext().getHostContext() as common.Context;
-      const native = preferences.getPreferencesSync(context, { name: BIM_STORE_NAME });
-      this.bimStoreInstance = new BimStore(native);
+      this.bimStoreInstance = BimStore.fromContext(context, this.scopedStoreName(BIM_STORE_NAME));
     }
     return this.bimStoreInstance;
   }
@@ -4187,8 +4387,9 @@ struct Index {
   private waterfallPreferencesStore(): WaterfallPreferencesStore {
     if (this.waterfallPreferencesStoreInstance === null) {
       const context = this.getUIContext().getHostContext() as common.Context;
-      const native = preferences.getPreferencesSync(context, { name: WATERFALL_PREFERENCES_STORE_NAME });
-      this.waterfallPreferencesStoreInstance = new WaterfallPreferencesStore(native);
+      this.waterfallPreferencesStoreInstance = WaterfallPreferencesStore.fromContext(
+        context, this.scopedStoreName(WATERFALL_PREFERENCES_STORE_NAME)
+      );
     }
     return this.waterfallPreferencesStoreInstance;
   }
@@ -4196,8 +4397,9 @@ struct Index {
   private discoveryMemoryProjectionStore(): DiscoveryMemoryProjectionStore {
     if (this.discoveryMemoryProjectionStoreInstance === null) {
       const context = this.getUIContext().getHostContext() as common.Context;
-      const native = preferences.getPreferencesSync(context, { name: DISCOVERY_MEMORY_PROJECTION_STORE_NAME });
-      this.discoveryMemoryProjectionStoreInstance = new DiscoveryMemoryProjectionStore(native);
+      this.discoveryMemoryProjectionStoreInstance = DiscoveryMemoryProjectionStore.fromContext(
+        context, this.scopedStoreName(DISCOVERY_MEMORY_PROJECTION_STORE_NAME)
+      );
     }
     return this.discoveryMemoryProjectionStoreInstance;
   }
@@ -4253,10 +4455,14 @@ struct Index {
 
   private discoveryMemoryProjectionCoordinator(): DiscoveryMemoryProjectionCoordinator {
     if (this.discoveryMemoryProjectionCoordinatorInstance === null) {
+      const ownerId: string = this.requireAccountOwnerId();
+      const ownerGeneration: number = this.accountOwnerGeneration;
       const options: DiscoveryMemoryProjectionCoordinatorOptions = {
         source: this.localMemoryRuntime(),
         store: this.discoveryMemoryProjectionStore(),
         modelProvider: (): LocalModel => this.canaryModel(),
+        isActive: (): boolean => this.accountOwnerId === ownerId &&
+          this.accountOwnerGeneration === ownerGeneration,
         onProjection: (projection: DiscoveryMemoryPreferenceProjection): void => {
           this.applyDiscoveryMemoryProjection(projection);
         },
@@ -4675,6 +4881,7 @@ struct Index {
     if (this.phoneLocalMemoryRuntime === null) {
       const context = this.getUIContext().getHostContext() as common.Context;
       this.phoneLocalMemoryRuntime = new PhoneLocalMemoryRuntime(context, {
+        ownerId: this.requireAccountOwnerId(),
         onMutationCommitted: (event: PhoneLocalMemoryMutationEvent): Promise<void> => {
           this.onPhoneLocalMemoryMutation(event);
           return Promise.resolve();
@@ -5630,10 +5837,15 @@ struct Index {
 
   private dailyBriefStore(): DailyBriefStore | null {
     const context = this.getUIContext().getHostContext() as common.Context;
-    return context === null ? null : new DailyBriefStore(context);
+    return context === null ? null : new DailyBriefStore(
+      context, this.scopedStoreName(DAILY_BRIEF_STORE_NAME)
+    );
   }
 
   private async openDailyBrief(regenerate: boolean): Promise<boolean> {
+    if (!await this.restoreAccountSession()) {
+      return false;
+    }
     const store = this.dailyBriefStore();
     const now = new Date();
     const date = dailyBriefDate(now);
@@ -6115,6 +6327,14 @@ struct Index {
   ): Promise<void> {
     const trimmed = prompt.trim();
     if (trimmed.length === 0 || this.isBusy) {
+      return;
+    }
+    // Validate the current device account before consuming input or appending a user message.
+    // A rejected send leaves the draft untouched and the root build switches to the login page.
+    if (!await this.restoreAccountSession()) {
+      return;
+    }
+    if (this.isBusy) {
       return;
     }
     const currentUserMessageId: string = this.appendMessage('user', visibleText);
@@ -7593,7 +7813,7 @@ struct Index {
       return null;
     }
     return preferences.getPreferencesSync(context, {
-      name: TRAIN_PRESALE_TASK_STORE_NAME
+      name: this.scopedStoreName(TRAIN_PRESALE_TASK_STORE_NAME)
     });
   }
 
@@ -8875,7 +9095,9 @@ struct Index {
     }
     try {
       const context = this.getUIContext().getHostContext() as common.Context;
-      this.foodAddressBookStoreInstance = new FoodAddressBookStore(context);
+      this.foodAddressBookStoreInstance = new FoodAddressBookStore(
+        context, this.scopedStoreName(FOOD_ADDRESS_BOOK_STORE_NAME)
+      );
       return this.foodAddressBookStoreInstance;
     } catch (error) {
       aiLogError('[AIPhone][FoodAddressBookStore] phase=open ok=false reason=' +
@@ -8898,7 +9120,9 @@ struct Index {
     }
     try {
       const context = this.getUIContext().getHostContext() as common.Context;
-      this.foodFavoritesStoreInstance = new FoodFavoritesStore(context);
+      this.foodFavoritesStoreInstance = new FoodFavoritesStore(
+        context, this.scopedStoreName(FOOD_FAVORITES_STORE_NAME)
+      );
       return this.foodFavoritesStoreInstance;
     } catch (error) {
       aiLogError('[AIPhone][FoodFavoritesStore] phase=open ok=false reason=' +
@@ -9566,7 +9790,9 @@ struct Index {
 
   private navigationCardStore(): PreferencesNavigationCardSnapshotStore {
     const context = this.getUIContext().getHostContext() as common.Context;
-    return new PreferencesNavigationCardSnapshotStore(context);
+    return new PreferencesNavigationCardSnapshotStore(
+      context, this.scopedStoreName(NAVIGATION_CARD_STORE)
+    );
   }
 
   private async refreshNavigationCardForms(snapshot: NavigationCardSnapshot): Promise<void> {
@@ -10767,7 +10993,31 @@ struct Index {
   }
 
   build() {
-    if (this.showComposioAuthPage) {
+    if (this.accountSessionStatus === AccountSessionStatus.UNINITIALIZED ||
+      this.accountSessionStatus === AccountSessionStatus.RESTORING) {
+      Column({ space: 14 }) {
+        LoadingProgress()
+          .width(36)
+          .height(36)
+          .color('#CF0A2C')
+        Text('正在检查华为账号…')
+          .fontSize(14)
+          .fontColor('#646A73')
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor('#F7F8FA')
+    } else if (this.accountSessionStatus !== AccountSessionStatus.AUTHENTICATED ||
+      this.accountOwnerId.length === 0) {
+      HuaweiAccountLoginPage({
+        accountSessionStore: this.accountSessionStore(),
+        onLoginSuccess: (ownerId: string): void => {
+          this.activateAccountOwner(ownerId);
+        }
+      })
+    } else if (this.showComposioAuthPage) {
       ComposioAuthPage({
         userShortId: this.composioUserId,
         items: this.composioAuthItems,
