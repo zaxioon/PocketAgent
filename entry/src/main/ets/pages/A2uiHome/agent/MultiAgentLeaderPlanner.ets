@@ -51,6 +51,7 @@ import {
   originalQueryFromBimPrompt
 } from '../bim/BimRuntime';
 import { HotelLocalDateProvider, hotelSearchPlanningContract } from './HotelLeaderPlanner';
+import { LeaderAnswerStreamScanner } from './LeaderAnswerStreamScanner';
 
 const DECISION_KEYS: string[] = [
   'dataTasks,personaId,requestedCapabilityIds,roundAction,skillId,uiIntent',
@@ -362,6 +363,12 @@ const MAPS_SELECTION_CONTRACT: string =
   'for the requested place search and never substitute food.search. Use maps.place.details only in a later round ' +
   'with a real placeId returned by maps.place.search. In round 1 requestedCapabilityIds is exactly ' +
   '["maps.place.search"]; do not list maps.place.details until that later round.';
+const FOOD_SEARCH_INTENT_CONTRACT: string =
+  'Food search intent contract: every food.search dataTasks[].input must preserve query and include keyword, place, and locationMode. ' +
+  'For an explicit place such as 苏州餐厅 or 青岛海鲜, set place to the geographic constraint and locationMode=explicit; ' +
+  'for a generic nearby request such as 附近的咖啡, set place to empty and locationMode=device_nearby. ' +
+  'Treat a brand or restaurant name such as 南京大牌档 as keyword, not as place. Do not use a city allowlist; preserve arbitrary explicit places. ' +
+  'A valid user-selected searchArea always has precedence over both place and device location.';
 const C10_C11_SELECTION_CONTRACT: string =
   'C10/C11 selection contract: Explicit X/Twitter public post searches use x.post.search. X or Slack inbox/message ' +
   'requests use social.feed.search. A generic request to 点一杯咖啡 uses food.search. Stable preference text such as ' +
@@ -427,15 +434,23 @@ interface LeaderPromptParts {
   dynamicPrompt: string;
 }
 
+export type LeaderAnswerStreamObserver = (
+  message: AgentMessage,
+  answer: string,
+  round: number
+) => void;
+
 export class MultiAgentLeaderPlanner implements LeaderPlanner {
   private readonly model: LocalModel;
   private readonly currentLocalDate: HotelLocalDateProvider;
   private readonly dataTaskInputNormalizer: LeaderDataTaskInputNormalizer | null;
+  private readonly answerStreamObserver: LeaderAnswerStreamObserver | null;
 
   constructor(
     model: LocalModel,
     currentLocalDate?: HotelLocalDateProvider,
-    dataTaskInputNormalizer?: LeaderDataTaskInputNormalizer
+    dataTaskInputNormalizer?: LeaderDataTaskInputNormalizer,
+    answerStreamObserver?: LeaderAnswerStreamObserver
   ) {
     this.model = model;
     this.currentLocalDate = currentLocalDate === undefined ? (): string => {
@@ -446,6 +461,7 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
     } : currentLocalDate;
     this.dataTaskInputNormalizer = dataTaskInputNormalizer === undefined ?
       null : dataTaskInputNormalizer;
+    this.answerStreamObserver = answerStreamObserver === undefined ? null : answerStreamObserver;
   }
 
   async plan(
@@ -463,10 +479,21 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       this.currentLocalDate() : trustedCurrentLocalDate;
     const promptParts: LeaderPromptParts = this.prompt(message, input, context, round, currentLocalDate);
     const prompt: string = promptParts.dynamicPrompt;
+    let onTextDelta: ((delta: string) => void) | undefined = undefined;
+    if (round === 1 && this.answerStreamObserver !== null) {
+      const scanner = new LeaderAnswerStreamScanner();
+      const observer = this.answerStreamObserver;
+      onTextDelta = (delta: string): void => {
+        if (signal !== undefined && !signal()) return;
+        const answer = scanner.feed(delta);
+        if (answer !== null) observer(message, answer, round);
+      };
+    }
     const output: string = await this.completeBounded(
       prompt,
       input,
-      promptParts.stableSystemPrompt
+      promptParts.stableSystemPrompt,
+      onTextDelta
     );
     let sameRoundProducerTaskToolIds: string[] = [];
     let sameRoundConsumerTaskToolIds: string[] = [];
@@ -1266,7 +1293,8 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
   private completeBounded(
     prompt: string,
     input: InputUserPayload,
-    stableSystemPrompt: string
+    stableSystemPrompt: string,
+    onTextDelta?: (delta: string) => void
   ): Promise<string> {
     if (stableSystemPrompt.length + prompt.length > MAX_LEADER_PROMPT_CHARS) {
       throw new Error('LEADER_PROMPT_LIMIT');
@@ -1277,7 +1305,7 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       messages.pop();
     }
     const conversation = messages.length === 0 ? undefined : ConversationContext.fromMessages(messages);
-    return this.model.complete(prompt, conversation, stableSystemPrompt);
+    return this.model.complete(prompt, conversation, stableSystemPrompt, onTextDelta);
   }
 
   private rejectOverlappingVideoTools(decision: LeaderDecision): void {
@@ -1877,6 +1905,7 @@ export class MultiAgentLeaderPlanner implements LeaderPlanner {
       'When an Action requires a real provider ID, plan the necessary Data-owned read task first and the ' +
         'Action-owned capability in actionIntent. Use only a real observed ID in a later round; never invent one.',
       'Maximum Data tasks in one round: ' + MAX_LEADER_DATA_TASKS_PER_ROUND.toString() + '.',
+      FOOD_SEARCH_INTENT_CONTRACT,
       TRAVEL_SELECTION_CONTRACT,
       VIDEO_SELECTION_CONTRACT,
       this.registeredCapability(context, 'maps.place.search') ? MAPS_SELECTION_CONTRACT : '',
