@@ -59,6 +59,16 @@ export interface PhoneLocalRecalledMemory {
   authority: 'leader' | 'seed';
 }
 
+/** Lightweight read model for overview and correction flows. It intentionally excludes embeddings. */
+export interface PhoneLocalMemorySnapshot {
+  memoryId: string;
+  fact: string;
+  personaTag: string;
+  authority: 'leader' | 'seed';
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface PhoneLocalMemoryRuntimeLogger {
   warn(code: string, operation: string, errorMessage: string): void;
 }
@@ -94,6 +104,11 @@ interface SelectedMemoryStore {
 export interface PhoneLocalMemoryProjectionSourcePort {
   getProjectionStats(basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats>;
   listProjectionFacts(): Promise<PhoneLocalMemoryProjectionFact[]>;
+}
+
+export interface PhoneLocalMemoryOverviewSourcePort {
+  listAllMemorySnapshots(): Promise<PhoneLocalMemorySnapshot[]>;
+  getMemorySnapshot(memoryId: string): Promise<PhoneLocalMemorySnapshot | null>;
 }
 
 export interface PhoneLocalMemoryRuntimePort extends PhoneLocalMemoryProjectionSourcePort {
@@ -168,7 +183,7 @@ function tagMutationFailure(recordCount: number, outcome: PhoneLocalMemoryPerson
  * Application-lifetime composition root for phone-local memory.
  * Recall is fail-open; mutations surface initialization/model/storage failures to the caller.
  */
-export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
+export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort, PhoneLocalMemoryOverviewSourcePort {
   private context: common.Context | null;
   private options: PhoneLocalMemoryRuntimeOptions;
   private storePromise: Promise<PhoneLocalMemoryStore> | null = null;
@@ -403,6 +418,22 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
     );
   }
 
+  async listAllMemorySnapshots(): Promise<PhoneLocalMemorySnapshot[]> {
+    const records = await (await this.memoryStore()).list(this.ownerId, []);
+    const snapshots: PhoneLocalMemorySnapshot[] = [];
+    for (let index = 0; index < records.length; index += 1) {
+      snapshots.push(this.snapshotFromRecord(records[index]));
+    }
+    return snapshots;
+  }
+
+  async getMemorySnapshot(memoryId: string): Promise<PhoneLocalMemorySnapshot | null> {
+    const normalizedMemoryId = memoryId.trim();
+    if (normalizedMemoryId.length === 0) return null;
+    const record = await (await this.memoryStore()).get(this.ownerId, normalizedMemoryId);
+    return record === null ? null : this.snapshotFromRecord(record);
+  }
+
   async replacePublicPersonaFacts(facts: string[], sourceTurnId: string,
     guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
     if (facts.length < 1) {
@@ -497,6 +528,17 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort {
   private provider(): Promise<PhoneLocalMemoryProvider> {
     if (this.providerPromise === null) this.providerPromise = this.createProvider();
     return this.providerPromise;
+  }
+
+  private snapshotFromRecord(record: MemoryRecord): PhoneLocalMemorySnapshot {
+    return {
+      memoryId: record.memoryId,
+      fact: record.fact,
+      personaTag: record.personaTag,
+      authority: record.authority,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    };
   }
 
   private memoryStore(): Promise<PhoneLocalMemoryStore> {

@@ -15,6 +15,9 @@ import { A2UI_MOTION_CURVE } from '../style/A2uiHomeMotion';
 const USER_PAGE_PADDING: number = 16;
 const USER_CARD_RADIUS: number = 18;
 
+export const LONG_TERM_MEMORY_ENTRY_TITLE: string = '长期记忆';
+export const LONG_TERM_MEMORY_ENTRY_SUBTITLE: string = '查看概览并修正 Appless 记住的内容';
+
 export type UserDisplayNameSaveAction = 'disabled' | 'close' | 'save';
 
 export function normalizedUserDisplayName(value: string): string {
@@ -340,6 +343,15 @@ export struct UserManagementPage {
             false,
             () => {
               this.onOpenSocialPersona();
+            }
+          )
+          this.ActionRow(
+            $r('app.media.icon_history'),
+            LONG_TERM_MEMORY_ENTRY_TITLE,
+            LONG_TERM_MEMORY_ENTRY_SUBTITLE,
+            false,
+            () => {
+              this.onOpenLongTermMemory();
             }
           )
           this.ActionRow(

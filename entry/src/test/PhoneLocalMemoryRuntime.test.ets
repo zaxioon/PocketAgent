@@ -277,6 +277,12 @@ class TransientSearchFailureStore extends RuntimeMemoryStore {
   }
 }
 
+class SnapshotReadFailureStore extends RuntimeMemoryStore {
+  async list(_ownerId: string, _sceneIds: string[]): Promise<MemoryRecord[]> {
+    throw new Error('snapshot-read-failed');
+  }
+}
+
 function repeatedRuntimeCharacter(character: string, count: number): string {
   let output = '';
   for (let index = 0; index < count; index += 1) output += character;
@@ -342,6 +348,52 @@ export default function phoneLocalMemoryRuntimeTest() {
       expect(secondHits[0].fact).assertEqual('乙账号偏好博物馆');
       expect(store.records[0].ownerId).assertEqual('owner-a');
       expect(store.records[1].ownerId).assertEqual('owner-b');
+    });
+
+    it('lists lightweight snapshots for every scene in only the current owner scope', 0, async () => {
+      const store = new RuntimeMemoryStore();
+      const first = new PhoneLocalMemoryRuntime(null, {
+        ownerId: 'snapshot-owner-a',
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      const second = new PhoneLocalMemoryRuntime(null, {
+        ownerId: 'snapshot-owner-b',
+        storeFactory: (): PhoneLocalMemoryStore => store,
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      const firstWrite = await first.remember(['账号甲的跨场景记忆'], 'snapshot-turn-a', 'companion-a');
+      await second.remember(['账号乙的记忆'], 'snapshot-turn-b', 'companion-b');
+      if (firstWrite.records[0].record === undefined) throw new Error('Expected snapshot fixture record.');
+      const firstMemoryId = firstWrite.records[0].record.memoryId;
+      store.records[0].sceneId = 'legacy-other-scene';
+
+      const snapshots = await first.listAllMemorySnapshots();
+      expect(snapshots.length).assertEqual(1);
+      expect(snapshots[0].memoryId).assertEqual(firstMemoryId);
+      expect(snapshots[0].fact).assertEqual('账号甲的跨场景记忆');
+      expect(snapshots[0].personaTag).assertEqual('companion-a');
+      expect(JSON.stringify(snapshots[0]).indexOf('embedding')).assertEqual(-1);
+      const exact = await first.getMemorySnapshot(firstMemoryId);
+      expect(exact?.memoryId).assertEqual(firstMemoryId);
+      expect(await second.getMemorySnapshot(firstMemoryId)).assertNull();
+    });
+
+    it('surfaces snapshot storage failures instead of using recall fail-open behavior', 0, async () => {
+      const runtime = new PhoneLocalMemoryRuntime(null, {
+        storeFactory: (): PhoneLocalMemoryStore => new SnapshotReadFailureStore(),
+        embedderFactory: async (): Promise<EmbeddingPort> => new RuntimeEmbeddingPort(),
+        idFactory: nextRuntimeMemoryId
+      });
+      let message = '';
+      try {
+        await runtime.listAllMemorySnapshots();
+      } catch (error) {
+        message = error instanceof Error ? error.message : JSON.stringify(error);
+      }
+      expect(message).assertEqual('snapshot-read-failed');
     });
 
     it('claims the legacy owner once and keeps repeated claims idempotent', 0, async () => {
