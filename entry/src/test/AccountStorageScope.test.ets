@@ -32,12 +32,13 @@ export default function accountStorageScopeTest() {
 
     it('publishes the complete Preferences allowlist for first-account legacy claiming', 0, () => {
       const names = accountScopedPreferenceStoreBaseNames();
-      expect(names.length).assertEqual(10);
+      expect(names.length).assertEqual(11);
       expect(names.indexOf('aiphone_bim_store') >= 0).assertTrue();
       expect(names.indexOf('aiphone_daily_brief_store') >= 0).assertTrue();
       expect(names.indexOf('navigation_card_snapshot_store') >= 0).assertTrue();
+      expect(names.indexOf('loop_conversation') >= 0).assertTrue();
       names.splice(0, names.length);
-      expect(accountScopedPreferenceStoreBaseNames().length).assertEqual(10);
+      expect(accountScopedPreferenceStoreBaseNames().length).assertEqual(11);
     });
   });
 }

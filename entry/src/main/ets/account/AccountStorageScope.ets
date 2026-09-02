@@ -8,7 +8,8 @@ const ACCOUNT_SCOPED_PREFERENCE_BASE_NAMES: string[] = [
   'aiphone_food_address_book',
   'aiphone_food_favorites',
   'aiphone_train_presale_tasks',
-  'navigation_card_snapshot_store'
+  'navigation_card_snapshot_store',
+  'loop_conversation'
 ];
 
 /** Complete Preferences migration allowlist for first-account legacy claiming. */

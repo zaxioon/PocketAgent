@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { A2uiFlightData, A2uiFoodData, A2uiTrainData, A2uiTravelOptionData } from '@loop/agent-core';
 import {
+  NAVIGATION_CARD_FORM_REGISTRY_STORE,
   CARD_SNAPSHOT_KIND_NAVIGATION_DESTINATION,
   NAVIGATION_CARD_PIN_ACTION_ID,
   NAVIGATION_CARD_STORE,
@@ -355,7 +356,8 @@ export default function navigationCardSnapshotTest() {
     it('keeps the form registry device-wide when snapshots use an account store', 0, () => {
       const scoped = navigationCardPersistenceScope('navigation_card_snapshot_store.account_a');
       expect(scoped.snapshotStoreName).assertEqual('navigation_card_snapshot_store.account_a');
-      expect(scoped.formRegistryStoreName).assertEqual(NAVIGATION_CARD_STORE);
+      expect(scoped.formRegistryStoreName).assertEqual(NAVIGATION_CARD_FORM_REGISTRY_STORE);
+      expect(NAVIGATION_CARD_FORM_REGISTRY_STORE).assertEqual(NAVIGATION_CARD_STORE);
 
       const explicit = navigationCardPersistenceScope(
         'navigation_card_snapshot_store.account_b', 'navigation_card_form_registry'

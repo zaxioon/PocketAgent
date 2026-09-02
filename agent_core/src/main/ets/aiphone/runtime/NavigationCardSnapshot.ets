@@ -98,6 +98,8 @@ const NAVIGATION_CARD_SOURCE_TAG_LIMIT: number = 4;
 const NAVIGATION_CARD_MISSING_COORDINATE: string = '缺少真实坐标，不能生成导航卡片';
 const NAVIGATION_CARD_MISSING_TRAVEL_TARGET_COORDINATE: string = '缺少真实出发站或机场坐标，不能生成出行卡片';
 export const NAVIGATION_CARD_STORE: string = 'navigation_card_snapshot_store';
+/** Existing device-wide form registry. Keep the legacy name so installed desktop cards remain discoverable. */
+export const NAVIGATION_CARD_FORM_REGISTRY_STORE: string = NAVIGATION_CARD_STORE;
 const NAVIGATION_CARD_SNAPSHOT_KEY: string = 'current_snapshot';
 const NAVIGATION_CARD_FORM_IDS_KEY: string = 'form_ids';
 const TRAIN_HUB_LOCATIONS: TravelHubLocation[] = [
@@ -124,7 +126,7 @@ export interface NavigationCardPersistenceScope {
 }
 
 export function navigationCardPersistenceScope(snapshotStoreName: string = NAVIGATION_CARD_STORE,
-  formRegistryStoreName: string = NAVIGATION_CARD_STORE): NavigationCardPersistenceScope {
+  formRegistryStoreName: string = NAVIGATION_CARD_FORM_REGISTRY_STORE): NavigationCardPersistenceScope {
   const snapshotName: string = cleanText(snapshotStoreName);
   const registryName: string = cleanText(formRegistryStoreName);
   return {
@@ -760,7 +762,7 @@ export class PreferencesNavigationCardSnapshotStore implements NavigationCardSna
   private formRegistryStoreName: string;
 
   constructor(context: common.Context, snapshotStoreName: string = NAVIGATION_CARD_STORE,
-    formRegistryStoreName: string = NAVIGATION_CARD_STORE) {
+    formRegistryStoreName: string = NAVIGATION_CARD_FORM_REGISTRY_STORE) {
     const scope: NavigationCardPersistenceScope = navigationCardPersistenceScope(
       snapshotStoreName, formRegistryStoreName
     );

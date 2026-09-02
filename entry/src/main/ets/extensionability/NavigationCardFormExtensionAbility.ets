@@ -3,6 +3,7 @@ import { FormExtensionAbility, formBindingData, formInfo, formProvider } from '@
 import { BusinessError } from '@kit.BasicServicesKit';
 import { aiLogError, aiLogInfo } from '@loop/agent-core';
 import {
+  NAVIGATION_CARD_FORM_REGISTRY_STORE,
   NAVIGATION_CARD_STORE,
   PreferencesNavigationCardSnapshotStore,
   buildNavigationCardBindingData,
@@ -36,12 +37,14 @@ export default class NavigationCardFormExtensionAbility extends FormExtensionAbi
   private snapshotStore(): PreferencesNavigationCardSnapshotStore | null {
     const ownerId: string = activeAccountOwnerId(this.context);
     return ownerId.length === 0 ? null : new PreferencesNavigationCardSnapshotStore(
-      this.context, accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId)
+      this.context, accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId), NAVIGATION_CARD_FORM_REGISTRY_STORE
     );
   }
 
   private formRegistryStore(): PreferencesNavigationCardSnapshotStore {
-    return new PreferencesNavigationCardSnapshotStore(this.context);
+    return new PreferencesNavigationCardSnapshotStore(
+      this.context, NAVIGATION_CARD_STORE, NAVIGATION_CARD_FORM_REGISTRY_STORE
+    );
   }
 
   private bindingData(): formBindingData.FormBindingData {

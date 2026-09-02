@@ -8,6 +8,7 @@ import { actionsOf, foodOptions, foodVisualSourceTag, uniqueFoodSourceTags, A2ui
 import { aiLogError, aiLogInfo } from '@loop/agent-core';
 import { buildFoodPhoneUri, buildSystemFoodNavigationUri, describeSystemFoodNavigationUri } from '@loop/agent-core';
 import {
+  NAVIGATION_CARD_FORM_REGISTRY_STORE,
   NAVIGATION_CARD_STORE,
   NavigationCardSnapshot,
   PreferencesNavigationCardSnapshotStore,
@@ -527,7 +528,7 @@ export struct FoodChoicesView {
       throw new Error('Navigation card storage requires an authenticated account.');
     }
     return new PreferencesNavigationCardSnapshotStore(
-      context, accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId)
+      context, accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId), NAVIGATION_CARD_FORM_REGISTRY_STORE
     );
   }
 

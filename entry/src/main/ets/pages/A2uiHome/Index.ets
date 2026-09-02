@@ -198,6 +198,7 @@ import {
 import {
   NavigationCardSnapshot,
   NavigationCardSnapshotBuildResult,
+  NAVIGATION_CARD_FORM_REGISTRY_STORE,
   NAVIGATION_CARD_STORE,
   PreferencesNavigationCardSnapshotStore,
   buildNavigationCardBindingData,
@@ -514,6 +515,7 @@ import {
   DEFAULT_AGGREGATE_SEARCH_POLICY
 } from './state/AggregateSearchPolicy';
 import {
+  A2uiSessionResetCause,
   ConnectionPanelState,
   createTurnConversationSurface,
   createTurnFailureSurface,
@@ -526,6 +528,7 @@ import {
   runtimeCallbackIsCurrent,
   runtimeOwnerAllowsSurfaceAction,
   runtimeSurfaceIdentityMatches,
+  sessionResetDeletesPersistedConversation,
   shouldApplySurfaceUpdate,
   shouldShowDeepSearchPendingSurface,
   shouldShowFirecrawlPendingSurface,
@@ -3709,9 +3712,11 @@ struct Index {
   private async applyNavigationCardAccountBinding(ownerId: string, generation: number,
     reason: string): Promise<void> {
     const context = this.getUIContext().getHostContext() as common.Context;
-    const store = ownerId.length > 0 ? new PreferencesNavigationCardSnapshotStore(
-      context, accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId)
-    ) : new PreferencesNavigationCardSnapshotStore(context);
+    const snapshotStoreName = ownerId.length > 0 ?
+      accountScopedStoreName(NAVIGATION_CARD_STORE, ownerId) : NAVIGATION_CARD_STORE;
+    const store = new PreferencesNavigationCardSnapshotStore(
+      context, snapshotStoreName, NAVIGATION_CARD_FORM_REGISTRY_STORE
+    );
     const snapshot: NavigationCardSnapshot | null = ownerId.length > 0 ? await store.getSnapshot() : null;
     if (generation !== this.navigationCardAccountRefreshGeneration) {
       return;
@@ -3792,7 +3797,7 @@ struct Index {
     this.waterfallCardRecords = [];
     this.waterfallReactionProjection = { topicWeights: [], sourceWeights: [], formatWeights: [] };
     this.accountDataInitializedOwnerId = '';
-    this.resetCurrentSession();
+    this.resetCurrentSession('account_scope_invalidated');
     if (preserveInput) {
       this.inputText = pendingInput;
     }
@@ -6327,7 +6332,13 @@ struct Index {
     return this.isSocialHubActionId(action) && this.isCurrentSocialHubSurface();
   }
 
-  private resetCurrentSession(): void {
+  private resetCurrentSession(cause: A2uiSessionResetCause): void {
+    if (sessionResetDeletesPersistedConversation(cause)) {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      if (context !== null && this.accountOwnerId.trim().length > 0) {
+        clearStoredConversation(context, this.scopedStoreName('loop_conversation'));
+      }
+    }
     this.disposeHotelRuntime();
     this.closeDeepSearch();
     this.showHistory = false;
@@ -6335,10 +6346,6 @@ struct Index {
     this.isBusy = false;
     this.isAwaitingFirstSurface = false;
     this.messages = [];
-    const context = this.getUIContext().getHostContext() as common.Context;
-    if (context !== null && this.accountOwnerId.trim().length > 0) {
-      clearStoredConversation(context, this.scopedStoreName('loop_conversation'));
-    }
     this.clearStreamingAssistantMessage();
     this.sessionContextCompactor.reset();
     this.waterfallSessionTopicWeights = [];
@@ -10571,7 +10578,7 @@ struct Index {
   private navigationCardStore(): PreferencesNavigationCardSnapshotStore {
     const context = this.getUIContext().getHostContext() as common.Context;
     return new PreferencesNavigationCardSnapshotStore(
-      context, this.scopedStoreName(NAVIGATION_CARD_STORE)
+      context, this.scopedStoreName(NAVIGATION_CARD_STORE), NAVIGATION_CARD_FORM_REGISTRY_STORE
     );
   }
 
@@ -11974,7 +11981,7 @@ struct Index {
           this.openBimRoot();
         },
         onResetSession: () => {
-          this.resetCurrentSession();
+          this.resetCurrentSession('user_requested');
         },
         onCloseFoodStoreMap: () => {
           this.foodStoreMapOpen = false;
