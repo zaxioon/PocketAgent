@@ -343,15 +343,6 @@ export struct UserManagementPage {
             }
           )
           this.ActionRow(
-            $r('app.media.icon_history'),
-            '长期记忆',
-            '查看与修正 Appless 记住的内容',
-            false,
-            () => {
-              this.onOpenLongTermMemory();
-            }
-          )
-          this.ActionRow(
             $r('app.media.icon_sign_out'),
             '退出登录',
             '保留此账号的本地数据',
