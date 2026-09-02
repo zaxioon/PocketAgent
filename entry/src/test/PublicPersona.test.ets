@@ -1558,6 +1558,11 @@ export default function publicPersonaTest() {
     it('rejects failed or malformed persona memory rebuild model output', 0, async () => {
       expect(parsePublicPersonaMemoryFacts('{"memoryCandidates":"invalid"}',
         '2026-09-04T08:00:00.000Z')).assertEqual(null);
+      expect(parsePublicPersonaMemoryFacts(
+        '{"memoryCandidates":[{"fact":"不是自包含事实","confidence":0.2,"kind":"preference"}]}',
+        '2026-09-04T08:00:00.000Z')).assertEqual(null);
+      expect(parsePublicPersonaMemoryFacts('{"memoryCandidates":[]}',
+        '2026-09-04T08:00:00.000Z')?.length ?? -1).assertEqual(0);
       const client = new PublicPersonaClient(async (toolId: string): Promise<DataResult> =>
         dataResult(toolId, new Object(), 'empty'), async (): Promise<DirectModelCallResult> => ({
           ok: false, raw: '', error: '模型不可用', requestDebug: '', assistantDebug: ''

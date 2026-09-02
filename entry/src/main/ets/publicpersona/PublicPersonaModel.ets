@@ -1296,7 +1296,9 @@ export function parsePublicPersonaMemoryFacts(
   try {
     const parsed = JSON.parse(inferenceJsonText(raw)) as Record<string, Object | string | number | boolean | Object[]>;
     if (!Array.isArray(parsed['memoryCandidates'])) return null;
-    const candidates = parsePublicPersonaMemoryCandidates(parsed['memoryCandidates']);
+    const rawCandidates = parsed['memoryCandidates'] as Object[];
+    const candidates = parsePublicPersonaMemoryCandidates(rawCandidates);
+    if (rawCandidates.length > 0 && candidates.length === 0) return null;
     return projectPublicPersonaMemoryCandidates(candidates, observedAt);
   } catch (_error) {
     return null;

@@ -502,6 +502,31 @@ export default function phoneLocalMemoryProviderTest() {
       expect(store.records[0].fact).assertEqual('旧公开画像事实');
     });
 
+    it('skips exact persona duplicates within the batch and facts already owned by another tag', 0, async () => {
+      const store = new FakeMemoryStore();
+      const embedder = new FakeEmbeddingPort();
+      const memory = provider(store, embedder);
+      await memory.remember({ ownerId: 'owner-1', records: [{
+        fact: '用户喜欢开源硬件', sceneId: 'global', personaTag: 'default_companion', sourceTurnId: 'seed'
+      }] });
+
+      const replaced = await memory.replacePersonaTag({
+        ownerId: 'owner-1', sceneId: 'global', personaTag: 'public_persona', records: [{
+          fact: '用户喜欢开源硬件', sceneId: 'global', personaTag: 'public_persona', sourceTurnId: 'import'
+        }, {
+          fact: '用户近期关注智能体', sceneId: 'global', personaTag: 'public_persona', sourceTurnId: 'import'
+        }, {
+          fact: '  用户近期关注智能体  ', sceneId: 'global', personaTag: 'public_persona', sourceTurnId: 'import'
+        }]
+      });
+
+      expect(replaced.status).assertEqual('success');
+      expect(replaced.insertedRecords.length).assertEqual(1);
+      expect(replaced.insertedRecords[0].fact).assertEqual('用户近期关注智能体');
+      expect(store.records.length).assertEqual(2);
+      expect(embedder.calls.length).assertEqual(2);
+    });
+
     it('deletes one persona tag atomically without embedding new facts', 0, async () => {
       const store = new FakeMemoryStore();
       const embedder = new FakeEmbeddingPort();

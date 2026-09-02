@@ -1263,6 +1263,7 @@ struct Index {
   @State publicPersonaError: string = '';
   @State publicPersonaImporting: boolean = false;
   private publicPersonaJobId: number = 0;
+  private publicPersonaImportGeneration: number = 0;
   private publicPersonaInitialized: boolean = false;
   private accountSessionStoreInstance: AccountSessionStore | null = null;
   private accountProfileStoreInstance: AccountProfileStore | null = null;
@@ -3588,7 +3589,7 @@ struct Index {
     if (this.messages.length > 0) return;
     const context = this.getUIContext().getHostContext() as common.Context;
     if (context === null) return;
-    const stored = loadConversation(context).toChatMessages();
+    const stored = loadConversation(context, this.scopedStoreName('loop_conversation')).toChatMessages();
     const restored: A2uiMessage[] = [];
     for (let index = 0; index < stored.length; index++) {
       restored.push({
@@ -3604,7 +3605,8 @@ struct Index {
   private persistConversationMessages(): void {
     const context = this.getUIContext().getHostContext() as common.Context;
     if (context === null) return;
-    saveConversation(context, ConversationContext.fromMessages(this.messages));
+    saveConversation(context, ConversationContext.fromMessages(this.messages),
+      this.scopedStoreName('loop_conversation'));
   }
 
   private accountSessionStore(): AccountSessionStore {
@@ -3770,6 +3772,7 @@ struct Index {
     this.showLongTermMemoryPage = false;
     this.showLogoutConfirmation = false;
     this.publicPersonaJobId++;
+    this.publicPersonaImportGeneration++;
     this.showPublicPersonaPage = false;
     this.publicPersonaReturnToUserManagement = false;
     this.trainPresaleResumeDrain = null;
@@ -3801,6 +3804,7 @@ struct Index {
     }
     this.loadPersonaOverrides();
     this.refreshAccountProfile();
+    this.restoreConversationMessages();
     this.loadWaterfallPreferences();
     this.startWaterfallPoolRuntime();
     this.ensureInterestWaterfall(false);
@@ -3870,7 +3874,6 @@ struct Index {
   }
 
   aboutToAppear(): void {
-    this.restoreConversationMessages();
     this.loadModelPreset();
     this.loadAggregateSearchPolicy();
     this.loadBimMotionPreference();
@@ -4076,6 +4079,7 @@ struct Index {
       return false;
     }
     const jobId = ++this.publicPersonaJobId;
+    const importGeneration = ++this.publicPersonaImportGeneration;
     const ownerGeneration = this.accountOwnerGeneration;
     this.publicPersonaImporting = true;
     this.publicPersonaError = '';
@@ -4128,7 +4132,8 @@ struct Index {
       }
       return false;
     } finally {
-      if (jobId === this.publicPersonaJobId && ownerGeneration === this.accountOwnerGeneration) {
+      if (importGeneration === this.publicPersonaImportGeneration &&
+        ownerGeneration === this.accountOwnerGeneration) {
         this.publicPersonaImporting = false;
       }
     }
@@ -6331,7 +6336,9 @@ struct Index {
     this.isAwaitingFirstSurface = false;
     this.messages = [];
     const context = this.getUIContext().getHostContext() as common.Context;
-    if (context !== null) clearStoredConversation(context);
+    if (context !== null && this.accountOwnerId.trim().length > 0) {
+      clearStoredConversation(context, this.scopedStoreName('loop_conversation'));
+    }
     this.clearStreamingAssistantMessage();
     this.sessionContextCompactor.reset();
     this.waterfallSessionTopicWeights = [];

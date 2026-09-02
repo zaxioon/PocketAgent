@@ -197,7 +197,7 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
     if (ownerId.length === 0) {
       return failedPersonaTagReplace(memoryError('memory_request_invalid', 'Memory ownerId must not be empty.'));
     }
-    const drafts: MemoryDraft[] = [];
+    let drafts: MemoryDraft[] = [];
     if (request.records.length === 0) {
       const scopeValidation = validateMemoryDraftBatch([{
         fact: 'Persona tag scope deletion',
@@ -225,6 +225,7 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
       }
     }
     const normalizedFacts: Set<string> = new Set<string>();
+    const uniqueDrafts: MemoryDraft[] = [];
     for (let index = 0; index < drafts.length; index += 1) {
       if (drafts[index].sceneId !== sceneId || drafts[index].personaTag !== personaTag) {
         return failedPersonaTagReplace(memoryError(
@@ -232,14 +233,27 @@ export class PhoneLocalMemoryProvider implements ConversationMemoryPort {
         ));
       }
       const normalizedFact = normalizeMemoryFact(drafts[index].fact);
-      if (normalizedFacts.has(normalizedFact)) {
-        return failedPersonaTagReplace(memoryError(
-          'memory_request_invalid', 'Persona tag replacement contains duplicate facts.'
-        ));
-      }
+      if (normalizedFacts.has(normalizedFact)) continue;
       normalizedFacts.add(normalizedFact);
+      uniqueDrafts.push(drafts[index]);
     }
+    drafts = uniqueDrafts;
     try {
+      if (drafts.length > 0) {
+        const existing = await this.store.list(ownerId, [sceneId]);
+        const factsOwnedByOtherTags: Set<string> = new Set<string>();
+        for (let index = 0; index < existing.length; index += 1) {
+          if (existing[index].personaTag === personaTag) continue;
+          factsOwnedByOtherTags.add(existing[index].normalizedFact);
+        }
+        const nonDuplicateDrafts: MemoryDraft[] = [];
+        for (let index = 0; index < drafts.length; index += 1) {
+          if (!factsOwnedByOtherTags.has(normalizeMemoryFact(drafts[index].fact))) {
+            nonDuplicateDrafts.push(drafts[index]);
+          }
+        }
+        drafts = nonDuplicateDrafts;
+      }
       const embeddings: number[][] = [];
       for (let index = 0; index < drafts.length; index += 1) {
         embeddings.push(normalizedVector(await this.embedder.embed(drafts[index].fact), this.embedder.dimension));
