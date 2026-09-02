@@ -71,6 +71,11 @@ import discoveryMemoryProjectionCoordinatorTest from './DiscoveryMemoryProjectio
 import waterfallConversationTest from './WaterfallConversation.test';
 import waterfallInterestRefillTest from './WaterfallInterestRefill.test';
 import waterfallShareServiceTest from './WaterfallShareService.test';
+import waterfallSourceAdapterTest from './WaterfallSourceAdapter.test';
+import waterfallSourcePoolContainerTest from './WaterfallSourcePoolContainer.test';
+import waterfallPoolTest from './WaterfallPool.test';
+import waterfallPoolQualityPolicyTest from './WaterfallPoolQualityPolicy.test';
+import waterfallColdStartKeywordsTest from './WaterfallColdStartKeywords.test';
 import aggregateSearchPolicyTest from './AggregateSearchPolicy.test';
 import paymentCoreTest from './PaymentCore.test';
 import paymentA2uiTest from './PaymentA2ui.test';
@@ -225,6 +230,11 @@ export default function testsuite() {
   waterfallConversationTest();
   waterfallInterestRefillTest();
   waterfallShareServiceTest();
+  waterfallSourceAdapterTest();
+  waterfallSourcePoolContainerTest();
+  waterfallPoolTest();
+  waterfallPoolQualityPolicyTest();
+  waterfallColdStartKeywordsTest();
   aggregateSearchPolicyTest();
   paymentCoreTest();
   paymentA2uiTest();
