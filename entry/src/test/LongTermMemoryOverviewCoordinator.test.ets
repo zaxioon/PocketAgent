@@ -2,6 +2,7 @@ import { describe, expect, it } from '@ohos/hypium';
 import {
   MemoryBatchResult,
   MemoryCommitGuard,
+  MemoryError,
   MemoryWriteResult
 } from '@loop/agent-core';
 import {
@@ -15,7 +16,9 @@ import {
   MemoryOverviewClaim,
   MemoryOverviewEvidenceIndex,
   MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION,
-  MEMORY_OVERVIEW_PROMPT_VERSION
+  MEMORY_OVERVIEW_PROMPT_VERSION,
+  buildMemoryOverviewEvidenceIndex,
+  memoryOverviewEvidenceFingerprint
 } from '../main/ets/memory/MemoryOverview';
 import {
   MEMORY_OVERVIEW_CACHE_SCHEMA_VERSION,
@@ -76,6 +79,9 @@ class OverviewRuntime implements PhoneLocalMemoryRuntimePort {
   updatePersonaTags: string[] = [];
   failAtWriteCall: number = -1;
   writeCalls: number = 0;
+  mutateBeforeConditionalWrite: boolean = false;
+  mutateAtConditionalWriteCall: number = -1;
+  conditionalWriteCalls: number = 0;
 
   constructor(source: OverviewSource) {
     this.source = source;
@@ -124,6 +130,20 @@ class OverviewRuntime implements PhoneLocalMemoryRuntimePort {
     return Promise.resolve(this.successBatch());
   }
 
+  updateIfSnapshotCurrent(update: PhoneLocalMemoryUpdate, sourceTurnId: string, personaTag: string,
+    expected: PhoneLocalMemorySnapshot, guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    this.applyConditionalRace(expected.memoryId);
+    if (!this.snapshotMatches(expected)) return Promise.resolve(this.conflictBatch());
+    return this.update([update], sourceTurnId, personaTag, guard);
+  }
+
+  forgetIfSnapshotCurrent(memoryId: string, expected: PhoneLocalMemorySnapshot,
+    guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    this.applyConditionalRace(expected.memoryId);
+    if (!this.snapshotMatches(expected)) return Promise.resolve(this.conflictBatch());
+    return this.forget([memoryId], guard);
+  }
+
   getProjectionStats(_basedOnMemoryMutationAt: number): Promise<PhoneLocalMemoryProjectionStats> {
     const stats: PhoneLocalMemoryProjectionStats = { changedCount: 0, oldestPendingUpdatedAt: null };
     return Promise.resolve(stats);
@@ -137,6 +157,29 @@ class OverviewRuntime implements PhoneLocalMemoryRuntimePort {
     return (guard !== undefined && !guard.isActive()) || this.writeCalls === this.failAtWriteCall;
   }
 
+  private applyConditionalRace(memoryId: string): void {
+    this.conditionalWriteCalls += 1;
+    if (!this.mutateBeforeConditionalWrite &&
+      this.conditionalWriteCalls !== this.mutateAtConditionalWriteCall) return;
+    this.mutateBeforeConditionalWrite = false;
+    for (let position = 0; position < this.source.snapshots.length; position += 1) {
+      if (this.source.snapshots[position].memoryId !== memoryId) continue;
+      this.source.snapshots[position].fact = '竞态写入的新值';
+      this.source.snapshots[position].updatedAt += 1;
+    }
+  }
+
+  private snapshotMatches(expected: PhoneLocalMemorySnapshot): boolean {
+    for (let position = 0; position < this.source.snapshots.length; position += 1) {
+      const actual = this.source.snapshots[position];
+      if (actual.memoryId !== expected.memoryId) continue;
+      return actual.fact === expected.fact && actual.personaTag === expected.personaTag &&
+        actual.authority === expected.authority && actual.createdAt === expected.createdAt &&
+        actual.updatedAt === expected.updatedAt;
+    }
+    return false;
+  }
+
   private successBatch(): MemoryBatchResult {
     const records: MemoryWriteResult[] = [{ inputIndex: 0, status: 'success' }];
     return { status: 'success', records, succeededCount: 1, failedCount: 0, warnings: [] };
@@ -148,6 +191,14 @@ class OverviewRuntime implements PhoneLocalMemoryRuntimePort {
       status: 'error', records, succeededCount: 0, failedCount: 1, warnings: [],
       error: { code: 'test_write_failed', message: 'Test write failed.', retryable: true }
     };
+  }
+
+  private conflictBatch(): MemoryBatchResult {
+    const error: MemoryError = {
+      code: 'memory_write_conflict', message: 'Memory changed.', retryable: false
+    };
+    const records: MemoryWriteResult[] = [{ inputIndex: 0, status: 'error', error }];
+    return { status: 'error', records, succeededCount: 0, failedCount: 1, warnings: [], error };
   }
 }
 
@@ -282,11 +333,22 @@ class ThrowingOverviewCache implements MemoryOverviewCacheStorePort {
   }
 }
 
+class UnclearableOverviewCache extends OverviewCache {
+  clear(): void {
+    this.clearCalls += 1;
+    throw new Error('clear failed');
+  }
+}
+
 function snapshot(memoryId: string, fact: string, personaTag: string = 'global',
   updatedAt: number = 100): PhoneLocalMemorySnapshot {
   return {
     memoryId, fact, personaTag, authority: 'leader', createdAt: 50, updatedAt
   };
+}
+
+function evidenceFingerprint(snapshots: PhoneLocalMemorySnapshot[]): string {
+  return memoryOverviewEvidenceFingerprint(buildMemoryOverviewEvidenceIndex(snapshots));
 }
 
 function presentationPlan(): MemoryCorrectionPlan {
@@ -385,6 +447,53 @@ export default function longTermMemoryOverviewCoordinatorTest(): void {
       expect(taskPort.overviewCalls).assertEqual(2);
     });
 
+    it('regenerates when the same memory ID has different content or timestamps', 0, async () => {
+      const source = new OverviewSource();
+      source.snapshots = [snapshot('memory-1', '喜欢咖啡', 'global', 100)];
+      const runtime = new OverviewRuntime(source);
+      const taskPort = new OverviewTaskPort();
+      const cache = new OverviewCache();
+      const firstCoordinator = new LongTermMemoryOverviewCoordinator({
+        source, runtime, taskPort, cacheStore: cache
+      });
+      await firstCoordinator.generateOverview();
+      source.snapshots[0].fact = '喜欢茶';
+      source.snapshots[0].updatedAt = 101;
+      const reopened = new LongTermMemoryOverviewCoordinator({ source, runtime, taskPort, cacheStore: cache });
+
+      const immediate = reopened.cachedOverviewResult();
+      const hydrated = await reopened.generateOverview();
+
+      expect(immediate?.cacheHit).assertTrue();
+      expect(hydrated.cacheHit).assertFalse();
+      expect(hydrated.modelCallCount).assertEqual(1);
+      expect(hydrated.overview?.claims[0].body).assertEqual('喜欢茶');
+      expect(cache.clearCalls).assertEqual(1);
+      expect(taskPort.overviewCalls).assertEqual(2);
+    });
+
+    it('does not reuse a stale cache when best-effort clear fails', 0, async () => {
+      const source = new OverviewSource();
+      source.snapshots = [snapshot('memory-1', '喜欢咖啡', 'global', 100)];
+      const runtime = new OverviewRuntime(source);
+      const taskPort = new OverviewTaskPort();
+      const cache = new UnclearableOverviewCache();
+      const firstCoordinator = new LongTermMemoryOverviewCoordinator({
+        source, runtime, taskPort, cacheStore: cache
+      });
+      await firstCoordinator.generateOverview();
+      source.snapshots[0].personaTag = 'changed-tag';
+      source.snapshots[0].updatedAt = 101;
+      const reopened = new LongTermMemoryOverviewCoordinator({ source, runtime, taskPort, cacheStore: cache });
+
+      const hydrated = await reopened.generateOverview();
+
+      expect(hydrated.cacheHit).assertFalse();
+      expect(hydrated.modelCallCount).assertEqual(1);
+      expect(cache.clearCalls).assertEqual(1);
+      expect(taskPort.overviewCalls).assertEqual(2);
+    });
+
     it('rejects cached overviews with forged or missing evidence', 0, async () => {
       const source = new OverviewSource();
       source.snapshots = [
@@ -399,6 +508,7 @@ export default function longTermMemoryOverviewCoordinatorTest(): void {
         promptVersion: MEMORY_OVERVIEW_PROMPT_VERSION,
         outputSchemaVersion: MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION,
         generatedAt: 1,
+        evidenceFingerprint: evidenceFingerprint(source.snapshots),
         overview: {
           title: '伪造缓存', summary: '缺少来源',
           claims: [{ heading: '偏好', body: '正文', evidenceMemoryIds: ['memory-1', 'forged'] }]
@@ -414,6 +524,7 @@ export default function longTermMemoryOverviewCoordinatorTest(): void {
         promptVersion: MEMORY_OVERVIEW_PROMPT_VERSION,
         outputSchemaVersion: MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION,
         generatedAt: 2,
+        evidenceFingerprint: evidenceFingerprint(source.snapshots),
         overview: {
           title: '不完整缓存', summary: '缺少来源',
           claims: [{ heading: '偏好', body: '正文', evidenceMemoryIds: ['memory-1'] }]
@@ -491,6 +602,63 @@ export default function longTermMemoryOverviewCoordinatorTest(): void {
       expect(result.message.indexOf('未写入') >= 0).assertTrue();
       expect(result.message.indexOf('重新进入页面') >= 0).assertTrue();
       expect(runtime.writeCalls).assertEqual(0);
+    });
+
+    it('does not overwrite a value that changes after preflight but before the conditional write', 0, async () => {
+      const source = new OverviewSource();
+      source.snapshots = [snapshot('memory-1', '喜欢咖啡', 'global', 100)];
+      const runtime = new OverviewRuntime(source);
+      runtime.mutateBeforeConditionalWrite = true;
+      const taskPort = new OverviewTaskPort();
+      const coordinator = new LongTermMemoryOverviewCoordinator({ source, runtime, taskPort });
+      await coordinator.generateOverview();
+
+      const result = await coordinator.applyPlan(
+        updatePlan('memory-1', '喜欢咖啡', '喜欢茶', 'global', 100)
+      );
+
+      expect(source.getCalls).assertEqual(1);
+      expect(result.status).assertEqual('conflict');
+      expect(result.succeededWriteCount).assertEqual(0);
+      expect(source.snapshots[0].fact).assertEqual('竞态写入的新值');
+      expect(runtime.updateCalls).assertEqual(0);
+    });
+
+    it('returns partial and stops later writes when a subsequent conditional delete conflicts', 0, async () => {
+      const source = new OverviewSource();
+      source.snapshots = [
+        snapshot('memory-1', '喜欢咖啡', 'global', 100),
+        snapshot('memory-2', '喜欢旅行', 'global', 200)
+      ];
+      const runtime = new OverviewRuntime(source);
+      runtime.mutateAtConditionalWriteCall = 2;
+      const taskPort = new OverviewTaskPort();
+      const coordinator = new LongTermMemoryOverviewCoordinator({ source, runtime, taskPort });
+      await coordinator.generateOverview();
+      const plan: MemoryCorrectionPlan = {
+        status: 'ready', clarificationQuestion: '',
+        operations: [
+          {
+            type: 'update', evidenceIndex: 'M1', memoryId: 'memory-1', expectedUpdatedAt: 100,
+            personaTag: 'global', beforeFact: '喜欢咖啡', afterFact: '喜欢茶', reason: '更正'
+          },
+          {
+            type: 'delete', evidenceIndex: 'M2', memoryId: 'memory-2', expectedUpdatedAt: 200,
+            personaTag: 'global', beforeFact: '喜欢旅行', reason: '删除'
+          }
+        ],
+        diffs: [], writeOperationCount: 2
+      };
+
+      const result = await coordinator.applyPlan(plan);
+
+      expect(result.status).assertEqual('partial');
+      expect(result.succeededWriteCount).assertEqual(1);
+      expect(result.failedWriteCount).assertEqual(1);
+      expect(result.message.indexOf('因记忆变化未写入')).assertLarger(-1);
+      expect(source.snapshots[0].fact).assertEqual('喜欢茶');
+      expect(source.snapshots[1].fact).assertEqual('竞态写入的新值');
+      expect(runtime.forgetCalls).assertEqual(0);
     });
 
     it('preserves the original persona tag and regenerates after a confirmed update', 0, async () => {

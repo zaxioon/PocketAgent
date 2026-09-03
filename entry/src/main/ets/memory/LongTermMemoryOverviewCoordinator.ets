@@ -18,6 +18,7 @@ import {
   MEMORY_OVERVIEW_PROMPT_VERSION,
   MEMORY_OVERVIEW_SYSTEM_PROMPT,
   buildMemoryOverviewEvidenceIndex,
+  memoryOverviewEvidenceFingerprint,
   memoryCorrectionPrompt,
   memoryOverviewPrompt,
   parseMemoryCorrectionPlanModelOutput,
@@ -32,6 +33,7 @@ import {
   MemoryOverviewCacheEntry,
   MemoryOverviewCacheStorePort
 } from './MemoryOverviewCacheStore';
+import { PHONE_LOCAL_MEMORY_WRITE_CONFLICT_CODE } from './PhoneLocalMemoryProvider';
 import {
   PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
   PhoneLocalMemoryOverviewSourcePort,
@@ -192,6 +194,14 @@ function successfulSingleWrite(result: MemoryBatchResult): boolean {
   return result.status === 'success' && result.succeededCount === 1 && result.failedCount === 0;
 }
 
+function memoryBatchHasWriteConflict(result: MemoryBatchResult): boolean {
+  if (result.error?.code === PHONE_LOCAL_MEMORY_WRITE_CONFLICT_CODE) return true;
+  for (let position = 0; position < result.records.length; position += 1) {
+    if (result.records[position].error?.code === PHONE_LOCAL_MEMORY_WRITE_CONFLICT_CODE) return true;
+  }
+  return false;
+}
+
 function copyOverviewWithPresentationOperations(overview: MemoryOverview,
   operations: MemoryCorrectionOperation[]): MemoryOverview | null {
   const claims: MemoryOverviewClaim[] = overview.claims.map(
@@ -340,6 +350,7 @@ export class LongTermMemoryOverviewCoordinator {
     this.clearCacheBestEffort();
     let succeededWriteCount = 0;
     let failedWriteCount = 0;
+    let atomicConflict = false;
     const guard = new OverviewMemoryCommitGuard((): boolean => this.active(generation));
     for (let position = 0; position < plan.operations.length; position += 1) {
       if (!this.active(generation)) return this.inactiveApplyResult();
@@ -348,9 +359,18 @@ export class LongTermMemoryOverviewCoordinator {
       if (successfulSingleWrite(result)) {
         succeededWriteCount += 1;
       } else {
+        atomicConflict = memoryBatchHasWriteConflict(result);
         failedWriteCount = plan.writeOperationCount - succeededWriteCount;
         break;
       }
+    }
+    if (atomicConflict && succeededWriteCount === 0) {
+      return {
+        status: 'conflict', overview: this.currentOverview,
+        evidenceIndex: this.currentEvidenceIndex,
+        message: '长期记忆已发生变化，本次方案未写入。请重新进入页面后重试。',
+        succeededWriteCount: 0, failedWriteCount, modelCallCount: 0
+      };
     }
     if (failedWriteCount === 0) {
       const refreshed = await this.generateOverviewForGeneration(generation);
@@ -378,9 +398,12 @@ export class LongTermMemoryOverviewCoordinator {
       overview: refreshed.overview,
       evidenceIndex: refreshed.evidenceIndex,
       message: succeededWriteCount > 0 ?
-        (refreshFailed ?
-          '部分长期记忆已修改，其余操作失败，且概览暂时无法更新；下次打开时将重新生成概览。' :
-          '部分长期记忆已修改，其余操作失败；概览已按当前数据重新生成。') :
+        (atomicConflict ? (refreshFailed ?
+          '部分长期记忆已修改，后续因记忆变化未写入，且概览暂时无法更新；下次打开时将重新生成概览。' :
+          '部分长期记忆已修改，后续因记忆变化未写入；概览已按当前数据重新生成。') :
+          (refreshFailed ?
+            '部分长期记忆已修改，其余操作失败，且概览暂时无法更新；下次打开时将重新生成概览。' :
+            '部分长期记忆已修改，其余操作失败；概览已按当前数据重新生成。')) :
         (refreshFailed ?
           '长期记忆修改失败，且概览暂时无法更新；下次打开时将重新生成概览。' :
           '长期记忆修改失败，概览已按当前数据重新生成。'),
@@ -441,7 +464,9 @@ export class LongTermMemoryOverviewCoordinator {
         message: '长期记忆数据暂时无法整理，请重试。', modelCallCount: 0, cacheHit: false
       };
     }
-    if (cached !== null && this.validOverviewForIndex(cached.overview, index)) {
+    const evidenceFingerprint = memoryOverviewEvidenceFingerprint(index);
+    if (cached !== null && cached.evidenceFingerprint === evidenceFingerprint &&
+      this.validOverviewForIndex(cached.overview, index)) {
       if (!this.active(generation)) return this.inactiveGenerationResult();
       this.currentOverview = cached.overview;
       this.currentEvidenceIndex = index;
@@ -469,7 +494,7 @@ export class LongTermMemoryOverviewCoordinator {
         modelCallCount: outcome.modelCallCount, cacheHit: false
       };
     }
-    this.saveCacheBestEffort(outcome.value);
+    this.saveCacheBestEffort(outcome.value, evidenceFingerprint);
     if (!this.active(generation)) return this.inactiveGenerationResult();
     this.currentOverview = outcome.value;
     this.currentEvidenceIndex = index;
@@ -492,7 +517,7 @@ export class LongTermMemoryOverviewCoordinator {
     }
   }
 
-  private saveCacheBestEffort(overview: MemoryOverview): void {
+  private saveCacheBestEffort(overview: MemoryOverview, evidenceFingerprint: string): void {
     if (this.cacheStore === null) return;
     try {
       this.cacheStore.save({
@@ -500,6 +525,7 @@ export class LongTermMemoryOverviewCoordinator {
         promptVersion: MEMORY_OVERVIEW_PROMPT_VERSION,
         outputSchemaVersion: MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION,
         generatedAt: this.now(),
+        evidenceFingerprint,
         overview
       });
     } catch (_error) {
@@ -577,14 +603,22 @@ export class LongTermMemoryOverviewCoordinator {
       this.writeSequence.toString();
     if (operation.type === 'update') {
       const update = operation as MemoryCorrectionUpdateOperation;
-      return await this.runtime.update(
-        [{ memoryId: update.memoryId, fact: update.afterFact }],
-        sourceTurnId, update.personaTag, guard
+      const expected = this.expectedSnapshotForTarget(update);
+      if (expected === null || this.runtime.updateIfSnapshotCurrent === undefined) {
+        return this.conditionalMutationUnavailable();
+      }
+      return await this.runtime.updateIfSnapshotCurrent(
+        { memoryId: update.memoryId, fact: update.afterFact },
+        sourceTurnId, update.personaTag, expected, guard
       );
     }
     if (operation.type === 'delete') {
       const deletion = operation as MemoryCorrectionDeleteOperation;
-      return await this.runtime.forget([deletion.memoryId], guard);
+      const expected = this.expectedSnapshotForTarget(deletion);
+      if (expected === null || this.runtime.forgetIfSnapshotCurrent === undefined) {
+        return this.conditionalMutationUnavailable();
+      }
+      return await this.runtime.forgetIfSnapshotCurrent(deletion.memoryId, expected, guard);
     }
     if (operation.type === 'add') {
       const addition = operation as MemoryCorrectionAddOperation;
@@ -604,6 +638,38 @@ export class LongTermMemoryOverviewCoordinator {
       failedCount: 1,
       warnings: [],
       error
+    };
+  }
+
+  private expectedSnapshotForTarget(
+    target: MemoryCorrectionUpdateOperation | MemoryCorrectionDeleteOperation
+  ): PhoneLocalMemorySnapshot | null {
+    for (let position = 0; position < this.currentEvidenceIndex.entries.length; position += 1) {
+      const entry = this.currentEvidenceIndex.entries[position];
+      if (entry.memoryId !== target.memoryId || entry.evidenceIndex !== target.evidenceIndex) continue;
+      if (entry.updatedAt !== target.expectedUpdatedAt || entry.fact !== target.beforeFact ||
+        entry.personaTag !== target.personaTag) return null;
+      return {
+        memoryId: entry.memoryId,
+        fact: entry.fact,
+        personaTag: entry.personaTag,
+        authority: entry.authority,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt
+      };
+    }
+    return null;
+  }
+
+  private conditionalMutationUnavailable(): MemoryBatchResult {
+    const error: MemoryError = {
+      code: 'memory_conditional_write_unavailable',
+      message: 'Conditional long-term memory mutation is unavailable.',
+      retryable: true
+    };
+    return {
+      status: 'error', records: [{ inputIndex: 0, status: 'error', error }],
+      succeededCount: 0, failedCount: 1, warnings: [], error
     };
   }
 

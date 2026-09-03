@@ -24,6 +24,7 @@ import {
 } from './PhoneLocalMemoryProvider';
 import {
   ArkDataPhoneLocalMemoryStore,
+  PhoneLocalMemoryExpectedRecord,
   PhoneLocalMemoryProjectionFact,
   PhoneLocalMemoryProjectionStats,
   PhoneLocalMemoryStore
@@ -118,6 +119,10 @@ export interface PhoneLocalMemoryRuntimePort extends PhoneLocalMemoryProjectionS
   update(updates: PhoneLocalMemoryUpdate[], sourceTurnId: string,
     personaTag: string, guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
   forget(memoryIds: string[], guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
+  updateIfSnapshotCurrent?(update: PhoneLocalMemoryUpdate, sourceTurnId: string, personaTag: string,
+    expected: PhoneLocalMemorySnapshot, guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
+  forgetIfSnapshotCurrent?(memoryId: string, expected: PhoneLocalMemorySnapshot,
+    guard?: MemoryCommitGuard): Promise<MemoryBatchResult>;
 }
 
 export interface PhoneLocalMemoryUpdate {
@@ -170,6 +175,34 @@ function successfulRecordBatch(records: MemoryRecord[]): MemoryBatchResult {
   }
   return {
     status: 'success', records: results, succeededCount: records.length, failedCount: 0, warnings: []
+  };
+}
+
+function singleWriteBatch(result: MemoryWriteResult): MemoryBatchResult {
+  const success = result.status === 'success';
+  const batch: MemoryBatchResult = {
+    status: success ? 'success' : 'error',
+    records: [result],
+    succeededCount: success ? 1 : 0,
+    failedCount: success ? 0 : 1,
+    warnings: []
+  };
+  if (!success) {
+    batch.error = result.error ?? runtimeMemoryError(
+      'memory_write_failed', 'Long-term memory could not be changed.', true
+    );
+  }
+  return batch;
+}
+
+function expectedRecord(snapshot: PhoneLocalMemorySnapshot): PhoneLocalMemoryExpectedRecord {
+  return {
+    memoryId: snapshot.memoryId,
+    fact: snapshot.fact,
+    personaTag: snapshot.personaTag,
+    authority: snapshot.authority,
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt
   };
 }
 
@@ -432,6 +465,62 @@ export class PhoneLocalMemoryRuntime implements PhoneLocalMemoryRuntimePort, Pho
     if (normalizedMemoryId.length === 0) return null;
     const record = await (await this.memoryStore()).get(this.ownerId, normalizedMemoryId);
     return record === null ? null : this.snapshotFromRecord(record);
+  }
+
+  async updateIfSnapshotCurrent(update: PhoneLocalMemoryUpdate, sourceTurnId: string,
+    personaTag: string, expected: PhoneLocalMemorySnapshot,
+    guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    if (update.memoryId.trim().length === 0 || update.memoryId.trim() !== expected.memoryId.trim()) {
+      return unavailableBatch(1, runtimeMemoryError(
+        'memory_update_invalid', 'Conditional memory update requires one exact record snapshot.', false
+      ));
+    }
+    try {
+      const result = await (await this.provider()).updateIfCurrent({
+        ownerId: this.ownerId,
+        memoryId: update.memoryId,
+        fact: update.fact,
+        personaTag: personaTag.length > 0 ? personaTag : PHONE_LOCAL_MEMORY_GLOBAL_SCENE_ID,
+        authority: 'leader',
+        sourceTurnId
+      }, expectedRecord(expected), guard);
+      const batch = singleWriteBatch(result);
+      if (result.status === 'success' && result.record !== undefined) {
+        this.notifyMutation({
+          operation: 'update', committedAt: result.record.updatedAt, memoryIds: [result.record.memoryId]
+        });
+      }
+      return batch;
+    } catch (error) {
+      this.log('memory_runtime_unavailable', 'updateIfSnapshotCurrent', error);
+      return unavailableBatch(1, runtimeMemoryError(
+        'memory_runtime_unavailable', 'Long-term memory is unavailable on this device.', true
+      ));
+    }
+  }
+
+  async forgetIfSnapshotCurrent(memoryId: string, expected: PhoneLocalMemorySnapshot,
+    guard?: MemoryCommitGuard): Promise<MemoryBatchResult> {
+    if (memoryId.trim().length === 0 || memoryId.trim() !== expected.memoryId.trim()) {
+      return unavailableBatch(1, runtimeMemoryError(
+        'memory_forget_invalid', 'Conditional memory deletion requires one exact record snapshot.', false
+      ));
+    }
+    try {
+      const result = await (await this.provider()).forgetIfCurrent(
+        this.ownerId, memoryId, expectedRecord(expected), guard
+      );
+      const batch = singleWriteBatch(result);
+      if (result.status === 'success' && result.record !== undefined) {
+        this.notifyMutation({ operation: 'forget', committedAt: Date.now(), memoryIds: [result.record.memoryId] });
+      }
+      return batch;
+    } catch (error) {
+      this.log('memory_runtime_unavailable', 'forgetIfSnapshotCurrent', error);
+      return unavailableBatch(1, runtimeMemoryError(
+        'memory_runtime_unavailable', 'Long-term memory is unavailable on this device.', true
+      ));
+    }
   }
 
   async replacePublicPersonaFacts(facts: string[], sourceTurnId: string,

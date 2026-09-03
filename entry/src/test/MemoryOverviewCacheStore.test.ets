@@ -42,6 +42,7 @@ export default function memoryOverviewCacheStoreTest(): void {
         promptVersion: MEMORY_OVERVIEW_PROMPT_VERSION,
         outputSchemaVersion: MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION,
         generatedAt: 123,
+        evidenceFingerprint: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         overview: {
           title: '长期记忆', summary: '概览',
           claims: [{ heading: '偏好', body: '喜欢咖啡', evidenceMemoryIds: ['memory-1'] }]
@@ -54,6 +55,7 @@ export default function memoryOverviewCacheStoreTest(): void {
       expect(raw.indexOf('updatedAt')).assertEqual(-1);
       expect(raw.indexOf('personaTag')).assertEqual(-1);
       expect(raw.indexOf('authority')).assertEqual(-1);
+      expect(raw.indexOf('0123456789abcdef')).assertLarger(-1);
       native.putSync(MEMORY_OVERVIEW_CACHE_KEY, '{');
       expect(new MemoryOverviewCacheStore(native as Object as preferences.Preferences).load()).assertNull();
     });
@@ -65,6 +67,7 @@ export default function memoryOverviewCacheStoreTest(): void {
         promptVersion: 'old-prompt',
         outputSchemaVersion: MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION,
         generatedAt: 123,
+        evidenceFingerprint: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         overview: {
           title: '长期记忆', summary: '概览',
           claims: [{ heading: '偏好', body: '喜欢咖啡', evidenceMemoryIds: ['memory-1'] }]
@@ -75,6 +78,17 @@ export default function memoryOverviewCacheStoreTest(): void {
       expect(store.load()).assertNull();
       store.clear();
       expect(native.getSync(MEMORY_OVERVIEW_CACHE_KEY, '')).assertEqual('');
+    });
+
+    it('invalidates the previous cache schema that had no evidence fingerprint', 0, () => {
+      const native = new MemoryPreferences();
+      native.putSync(MEMORY_OVERVIEW_CACHE_KEY,
+        '{"schemaVersion":1,"promptVersion":"' + MEMORY_OVERVIEW_PROMPT_VERSION + '",' +
+        '"outputSchemaVersion":"' + MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION + '","generatedAt":123,' +
+        '"overview":{"title":"旧概览","summary":"没有来源版本","claims":[' +
+        '{"heading":"偏好","body":"旧内容","evidenceMemoryIds":["memory-1"]}]}}');
+      const store = new MemoryOverviewCacheStore(native as Object as preferences.Preferences);
+      expect(store.load()).assertNull();
     });
 
     it('derives distinct account-scoped stores for late owner mutation callbacks', 0, () => {

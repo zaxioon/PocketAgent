@@ -10,7 +10,7 @@ import {
 
 export const MEMORY_OVERVIEW_CACHE_STORE_NAME: string = 'aiphone_memory_overview_cache';
 export const MEMORY_OVERVIEW_CACHE_KEY: string = 'overview.v1';
-export const MEMORY_OVERVIEW_CACHE_SCHEMA_VERSION: number = 1;
+export const MEMORY_OVERVIEW_CACHE_SCHEMA_VERSION: number = 2;
 
 export function memoryOverviewCacheStoreNameForOwner(ownerId: string): string {
   const normalizedOwnerId = ownerId.trim();
@@ -27,6 +27,7 @@ export interface MemoryOverviewCacheEntry {
   promptVersion: string;
   outputSchemaVersion: string;
   generatedAt: number;
+  evidenceFingerprint: string;
   overview: MemoryOverview;
 }
 
@@ -38,6 +39,10 @@ export interface MemoryOverviewCacheStorePort {
 
 function validText(value: string, maxChars: number): boolean {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maxChars;
+}
+
+function validEvidenceFingerprint(value: string): boolean {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
 
 function copyClaim(claim: MemoryOverviewClaim): MemoryOverviewClaim {
@@ -87,7 +92,8 @@ export function sanitizeMemoryOverviewCacheEntry(
     value.schemaVersion !== MEMORY_OVERVIEW_CACHE_SCHEMA_VERSION ||
     value.promptVersion !== MEMORY_OVERVIEW_PROMPT_VERSION ||
     value.outputSchemaVersion !== MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION ||
-    typeof value.generatedAt !== 'number' || !isFinite(value.generatedAt) || value.generatedAt < 0) return null;
+    typeof value.generatedAt !== 'number' || !isFinite(value.generatedAt) || value.generatedAt < 0 ||
+    !validEvidenceFingerprint(value.evidenceFingerprint)) return null;
   const overview = safeOverview(value.overview);
   if (overview === null) return null;
   return {
@@ -95,6 +101,7 @@ export function sanitizeMemoryOverviewCacheEntry(
     promptVersion: MEMORY_OVERVIEW_PROMPT_VERSION,
     outputSchemaVersion: MEMORY_OVERVIEW_OUTPUT_SCHEMA_VERSION,
     generatedAt: Math.floor(value.generatedAt),
+    evidenceFingerprint: value.evidenceFingerprint,
     overview
   };
 }
@@ -105,6 +112,7 @@ function copyEntry(value: MemoryOverviewCacheEntry): MemoryOverviewCacheEntry {
     promptVersion: value.promptVersion,
     outputSchemaVersion: value.outputSchemaVersion,
     generatedAt: value.generatedAt,
+    evidenceFingerprint: value.evidenceFingerprint,
     overview: copyOverview(value.overview)
   };
 }

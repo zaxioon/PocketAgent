@@ -2,6 +2,7 @@ import { describe, expect, it } from '@ohos/hypium';
 import {
   buildMemoryOverviewEvidenceIndex,
   memoryCorrectionPrompt,
+  memoryOverviewEvidenceFingerprint,
   memoryOverviewPrompt,
   MemoryOverview,
   MemoryOverviewEvidenceIndex,
@@ -51,6 +52,24 @@ export default function memoryOverviewTest() {
       expect(overview.claims[0].evidenceMemoryIds.length).assertEqual(2);
       expect(overview.claims[0].evidenceMemoryIds[0]).assertEqual('memory-a');
       expect(overview.claims[0].evidenceMemoryIds[1]).assertEqual('memory-b');
+    });
+
+    it('fingerprints all evidence fields deterministically without storing raw facts in the version', 0, () => {
+      const first = overviewIndex();
+      const reversed = buildMemoryOverviewEvidenceIndex([
+        overviewSnapshot('memory-b', '用户通常周末去博物馆', 20, 'public_persona'),
+        overviewSnapshot('memory-a', '用户偏好安静的咖啡店', 10)
+      ]);
+      const firstFingerprint = memoryOverviewEvidenceFingerprint(first);
+      const reversedFingerprint = memoryOverviewEvidenceFingerprint(reversed);
+      expect(firstFingerprint).assertEqual(reversedFingerprint);
+      expect(firstFingerprint.length).assertEqual(64);
+      expect(firstFingerprint.indexOf('咖啡店')).assertEqual(-1);
+      first.entries[0].fact = '用户偏好热闹的咖啡店';
+      expect(memoryOverviewEvidenceFingerprint(first) === firstFingerprint).assertFalse();
+      first.entries[0].fact = '用户偏好安静的咖啡店';
+      first.entries[0].authority = 'seed';
+      expect(memoryOverviewEvidenceFingerprint(first) === firstFingerprint).assertFalse();
     });
 
     it('rejects forged, out-of-range, and duplicate evidence indexes', 0, () => {
