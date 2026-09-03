@@ -10,14 +10,23 @@ import {
   COLOR_ACCENT_SOFT,
   COLOR_CARD,
   COLOR_CARD_EDGE,
+  COLOR_CARD_RAISED,
+  COLOR_CARD_SHADOW,
   COLOR_ERROR,
   COLOR_ERROR_SOFT,
+  COLOR_FIELD,
   COLOR_INK,
+  COLOR_LINE,
   COLOR_MUTED,
+  COLOR_PAGE,
   COLOR_PANEL,
   COLOR_TEXT
 } from '../style/A2uiHomeTheme';
 import { A2UI_MOTION_CURVE } from '../style/A2uiHomeMotion';
+import {
+  MANAGEMENT_CARD_SHADOW_OFFSET_Y,
+  MANAGEMENT_CARD_SHADOW_RADIUS
+} from './ManagementPageVisualStyle';
 
 const PAGE_PADDING: number = 16;
 const CARD_RADIUS: number = 18;
@@ -132,9 +141,11 @@ export struct LongTermMemoryPage {
     }
     .width('100%')
     .padding({ top: 56, bottom: 56 })
-    .backgroundColor(COLOR_CARD)
+    .backgroundColor(COLOR_CARD_RAISED)
     .borderRadius(CARD_RADIUS)
     .border({ width: 1, color: COLOR_CARD_EDGE })
+    .shadow({ radius: MANAGEMENT_CARD_SHADOW_RADIUS, color: COLOR_CARD_SHADOW,
+      offsetX: 0, offsetY: MANAGEMENT_CARD_SHADOW_OFFSET_Y })
   }
 
   @Builder
@@ -166,9 +177,11 @@ export struct LongTermMemoryPage {
     }
     .width('100%')
     .padding({ left: 22, right: 22, top: 34, bottom: 34 })
-    .backgroundColor(error ? COLOR_ERROR_SOFT : COLOR_CARD)
+    .backgroundColor(error ? COLOR_ERROR_SOFT : COLOR_CARD_RAISED)
     .borderRadius(CARD_RADIUS)
     .border({ width: 1, color: COLOR_CARD_EDGE })
+    .shadow({ radius: MANAGEMENT_CARD_SHADOW_RADIUS, color: COLOR_CARD_SHADOW,
+      offsetX: 0, offsetY: MANAGEMENT_CARD_SHADOW_OFFSET_Y })
   }
 
   @Builder
@@ -209,7 +222,7 @@ export struct LongTermMemoryPage {
         ForEach(longTermMemoryOverviewDisplaySections(overview),
           (section: LongTermMemoryOverviewDisplaySection, sectionIndex: number) => {
             Divider()
-              .color(COLOR_CARD_EDGE)
+              .color(COLOR_LINE)
               .margin({ top: 16, bottom: 14 })
             this.OverviewSection(section)
           }, (_section: LongTermMemoryOverviewDisplaySection, sectionIndex: number): string =>
@@ -218,8 +231,11 @@ export struct LongTermMemoryPage {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       .padding(17)
-      .backgroundColor(COLOR_ACCENT_SOFT)
+      .backgroundColor(COLOR_CARD_RAISED)
       .borderRadius(CARD_RADIUS)
+      .border({ width: 1, color: COLOR_CARD_EDGE })
+      .shadow({ radius: MANAGEMENT_CARD_SHADOW_RADIUS, color: COLOR_CARD_SHADOW,
+        offsetX: 0, offsetY: MANAGEMENT_CARD_SHADOW_OFFSET_Y })
 
       Column() {
         Text('哪里需要修改？')
@@ -239,8 +255,9 @@ export struct LongTermMemoryPage {
           .fontSize(14)
           .fontColor(COLOR_TEXT)
           .placeholderColor(COLOR_MUTED)
-          .backgroundColor(COLOR_PANEL)
+          .backgroundColor(COLOR_FIELD)
           .borderRadius(12)
+          .border({ width: 1, color: COLOR_CARD_EDGE })
           .padding(12)
           .margin({ top: 12 })
           .onChange((value: string) => {
@@ -262,9 +279,11 @@ export struct LongTermMemoryPage {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       .padding(16)
-      .backgroundColor(COLOR_CARD)
+      .backgroundColor(COLOR_CARD_RAISED)
       .borderRadius(CARD_RADIUS)
       .border({ width: 1, color: COLOR_CARD_EDGE })
+      .shadow({ radius: MANAGEMENT_CARD_SHADOW_RADIUS, color: COLOR_CARD_SHADOW,
+        offsetX: 0, offsetY: MANAGEMENT_CARD_SHADOW_OFFSET_Y })
     }
     .width('100%')
   }
@@ -291,6 +310,7 @@ export struct LongTermMemoryPage {
         .padding(17)
         .backgroundColor(COLOR_ACCENT_SOFT)
         .borderRadius(CARD_RADIUS)
+        .border({ width: 1, color: COLOR_CARD_EDGE })
       } else {
         if (memoryCorrectionPlanTouchesPublicPersona(plan)) {
           Text('这些修改包含社交账号画像导入的记忆；重新导入社交画像可能覆盖这项修改。')
@@ -340,7 +360,7 @@ export struct LongTermMemoryPage {
           .width('100%')
           .alignItems(HorizontalAlign.Start)
           .padding(15)
-          .backgroundColor(COLOR_CARD)
+          .backgroundColor(COLOR_CARD_RAISED)
           .borderRadius(CARD_RADIUS)
           .border({ width: 1, color: COLOR_CARD_EDGE })
         }, (_diff: MemoryCorrectionDiff, diffIndex: number): string => diffIndex.toString())
@@ -429,6 +449,6 @@ export struct LongTermMemoryPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(COLOR_PANEL)
+    .backgroundColor(COLOR_PAGE)
   }
 }

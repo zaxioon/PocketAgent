@@ -6,6 +6,11 @@ import {
   normalizedUserDisplayName,
   userDisplayNameSaveAction
 } from '../main/ets/pages/A2uiHome/components/UserManagementPage';
+import {
+  MANAGEMENT_CARD_SHADOW_OFFSET_Y,
+  MANAGEMENT_CARD_SHADOW_RADIUS,
+  MANAGEMENT_DISCLOSURE_ARROW_ROTATION
+} from '../main/ets/pages/A2uiHome/components/ManagementPageVisualStyle';
 
 export default function userManagementPageTest(): void {
   describe('UserManagementPage', () => {
@@ -28,6 +33,12 @@ export default function userManagementPageTest(): void {
     it('exports the long-term memory overview entry copy', 0, () => {
       expect(LONG_TERM_MEMORY_ENTRY_TITLE).assertEqual('长期记忆');
       expect(LONG_TERM_MEMORY_ENTRY_SUBTITLE).assertEqual('查看概览并修正 Appless 记住的内容');
+    });
+
+    it('shares the raised-card depth and right-arrow direction across management pages', 0, () => {
+      expect(MANAGEMENT_CARD_SHADOW_RADIUS).assertEqual(16);
+      expect(MANAGEMENT_CARD_SHADOW_OFFSET_Y).assertEqual(6);
+      expect(MANAGEMENT_DISCLOSURE_ARROW_ROTATION).assertEqual(180);
     });
   });
 }
